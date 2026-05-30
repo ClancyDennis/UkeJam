@@ -65,6 +65,8 @@ pub struct ChordReading {
     pub cleanliness: f32,
     /// 12-bin chroma (C..B), normalized — for the chromagram display.
     pub chroma: [f32; 12],
+    /// Log-spaced magnitude spectrum (normalized 0..1) for the FFT display.
+    pub spectrum: Vec<f32>,
     /// Notes expected by the target chord but not heard.
     pub missing: Vec<String>,
     /// Notes heard but not in the target chord.
@@ -76,6 +78,7 @@ pub struct ChordReading {
 struct Shared {
     mode: Mode,
     target: Option<Vec<usize>>, // target chord's pitch classes, for the diff
+    gate: f32,                  // RMS silence gate (set by mic calibration)
 }
 
 /// Tracks the capture thread. The cpal `Stream` is `!Send` on macOS, so it is
@@ -94,6 +97,7 @@ impl Default for AudioState {
             shared: Arc::new(Mutex::new(Shared {
                 mode: Mode::Tuner,
                 target: None,
+                gate: RMS_GATE,
             })),
         }
     }
@@ -143,6 +147,11 @@ impl AudioState {
     /// Set the target chord (its pitch classes) for the missing/extra diff.
     pub fn set_target(&self, pcs: Option<Vec<usize>>) {
         self.shared.lock().unwrap().target = pcs;
+    }
+
+    /// Set the RMS silence gate (from mic calibration).
+    pub fn set_gate(&self, gate: f32) {
+        self.shared.lock().unwrap().gate = gate.max(0.0);
     }
 
     pub fn stop(&self) {
@@ -243,16 +252,16 @@ fn drain_and_emit(
         }
         b[b.len() - FFT_SIZE..].to_vec()
     };
-    let (mode, target) = {
+    let (mode, target, gate) = {
         let s = shared.lock().unwrap();
-        (s.mode, s.target.clone())
+        (s.mode, s.target.clone(), s.gate)
     };
     match mode {
         Mode::Tuner => {
-            let _ = app.emit("tuner", analyzer.analyze_tuner(&window));
+            let _ = app.emit("tuner", analyzer.analyze_tuner(&window, gate));
         }
         Mode::Chord => {
-            let _ = app.emit("chord", analyzer.analyze_chord(&window, target.as_deref()));
+            let _ = app.emit("chord", analyzer.analyze_chord(&window, target.as_deref(), gate));
         }
     }
 }
@@ -263,7 +272,12 @@ struct Analyzer {
     fft: Arc<dyn rustfft::Fft<f32>>,
     hann: Vec<f32>,
     book: ChordBook,
+    /// Exponentially-smoothed chroma, so a quiet note (e.g. Am's C string)
+    /// accumulates across frames instead of being judged on one instant.
+    smooth: Mutex<[f32; 12]>,
 }
+
+const CHROMA_SMOOTH: f32 = 0.4; // EMA weight for the newest frame
 
 impl Analyzer {
     fn new(sample_rate: f32) -> Self {
@@ -280,6 +294,7 @@ impl Analyzer {
             fft,
             hann,
             book: ChordBook::build(),
+            smooth: Mutex::new([0.0; 12]),
         }
     }
 
@@ -324,20 +339,69 @@ impl Analyzer {
         chroma
     }
 
-    fn analyze_chord(&self, samples: &[f32], target: Option<&[usize]>) -> ChordReading {
+    /// Bin the spectrum into `n` log-spaced bands over the chroma range,
+    /// normalized 0..1 — for the horizontal FFT display.
+    fn log_spectrum(&self, mag: &[f32], n: usize) -> Vec<f32> {
+        let bin_hz = self.sample_rate / FFT_SIZE as f32;
+        let (fmin, fmax) = (70.0f32, 2000.0f32);
+        let ratio = (fmax / fmin).powf(1.0 / n as f32);
+        let mut out = vec![0.0f32; n];
+        for k in 0..n {
+            let lo_f = fmin * ratio.powi(k as i32);
+            let hi_f = fmin * ratio.powi(k as i32 + 1);
+            let lo = (lo_f / bin_hz).floor() as usize;
+            let hi = ((hi_f / bin_hz).ceil() as usize).min(mag.len());
+            let mut peak = 0.0f32;
+            for i in lo..hi {
+                if mag[i] > peak {
+                    peak = mag[i];
+                }
+            }
+            out[k] = peak;
+        }
+        let max = out.iter().cloned().fold(0.0f32, f32::max);
+        if max > 0.0 {
+            for x in out.iter_mut() {
+                *x /= max;
+            }
+        }
+        out
+    }
+
+    fn analyze_chord(&self, samples: &[f32], target: Option<&[usize]>, gate: f32) -> ChordReading {
         let (mag, rms) = self.spectrum(samples);
-        if rms < RMS_GATE {
+        if rms < gate {
+            *self.smooth.lock().unwrap() = [0.0; 12]; // reset on silence
             return ChordReading {
                 active: false,
                 detected: String::new(),
                 cleanliness: 0.0,
                 chroma: [0.0; 12],
+                spectrum: vec![0.0; 96],
                 missing: vec![],
                 extra: vec![],
                 rms,
             };
         }
-        let chroma = self.chroma(&mag);
+        let raw = self.chroma(&mag);
+
+        // Exponential moving average so a quiet third (e.g. Am's C) builds up
+        // over the strum rather than flickering to a power chord on one frame.
+        let chroma = {
+            let mut s = self.smooth.lock().unwrap();
+            for k in 0..12 {
+                s[k] = CHROMA_SMOOTH * raw[k] + (1.0 - CHROMA_SMOOTH) * s[k];
+            }
+            let norm = (s.iter().map(|x| x * x).sum::<f32>()).sqrt();
+            let mut c = *s;
+            if norm > 0.0 {
+                for x in c.iter_mut() {
+                    *x /= norm;
+                }
+            }
+            c
+        };
+
         let (idx, score) = self.book.best(&chroma);
         let (missing, extra) = match target {
             Some(t) => diff(&chroma, t, PRESENCE),
@@ -348,20 +412,21 @@ impl Analyzer {
             detected: self.book.labels[idx].clone(),
             cleanliness: score,
             chroma,
+            spectrum: self.log_spectrum(&mag, 96),
             missing,
             extra,
             rms,
         }
     }
 
-    fn analyze_tuner(&self, samples: &[f32]) -> TunerReading {
+    fn analyze_tuner(&self, samples: &[f32], gate: f32) -> TunerReading {
         // RMS for the silence gate / level meter.
         let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
         let rms = (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>()
             / samples.len() as f32)
             .sqrt();
 
-        if rms < RMS_GATE {
+        if rms < gate {
             return TunerReading {
                 active: false,
                 freq: 0.0,

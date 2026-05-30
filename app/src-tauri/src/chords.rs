@@ -15,7 +15,8 @@ pub const NOTE_NAMES: [&str; 12] = [
 const QUALITIES: &[(&str, &[usize], f32)] = &[
     ("", &[0, 4, 7], 1.00),      // major
     ("m", &[0, 3, 7], 1.00),     // minor
-    ("5", &[0, 7], 0.90),        // power chord (penalized: usually a quiet-3rd triad)
+    ("5", &[0, 7], 0.84),        // power chord (penalized hard: usually a triad
+                                 // whose 3rd just rings quietly, e.g. Am's C)
     ("sus2", &[0, 2, 7], 0.97),
     ("sus4", &[0, 5, 7], 0.97),
     ("7", &[0, 4, 7, 10], 0.96),

@@ -1,5 +1,6 @@
 mod audio;
 mod chords;
+mod enhance;
 
 use audio::{AudioState, Mode};
 use tauri::{AppHandle, State};
@@ -35,8 +36,22 @@ fn set_target(chord: Option<String>, state: State<AudioState>) {
 }
 
 #[tauri::command]
+fn set_gate(gate: f32, state: State<AudioState>) {
+    state.set_gate(gate);
+}
+
+#[tauri::command]
 fn stop_audio(state: State<AudioState>) {
     state.stop();
+}
+
+/// Normalize a messy pasted tab into clean ChordPro via the LLM proxy.
+/// Runs on a blocking thread so the UI stays responsive.
+#[tauri::command]
+async fn enhance_tab(raw: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || enhance::enhance_tab(&raw))
+        .await
+        .map_err(|e| format!("task join: {e}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -50,7 +65,9 @@ pub fn run() {
             start_chords,
             set_mode,
             set_target,
-            stop_audio
+            set_gate,
+            stop_audio,
+            enhance_tab
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

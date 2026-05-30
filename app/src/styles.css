@@ -1,16 +1,22 @@
 :root {
   --bg: #060a0c;
+  --bg-1: #0a0f12;
   --bg-panel: #0a0f12;
   --bg-panel-2: #0c1316;
   --line: #16242a;
+  --line-teal: rgba(25, 227, 196, 0.3);
   --teal: #19e3c4;
+  --teal-2: #2fd6c4;
   --teal-dim: #0f8a78;
   --gold: #f5c451;
+  --gold-2: #ffcf6b;
   --gold-dim: #8a6f2a;
   --amber: #ff9d4d;
   --text: #cfe8e6;
   --text-dim: #5d7b78;
+  --text-faint: rgba(207, 232, 230, 0.34);
   --red: #ff5d6c;
+  --panel-bg: linear-gradient(180deg, rgba(12, 20, 23, 0.82), rgba(8, 13, 15, 0.82));
   font-family: "Space Grotesk", system-ui, sans-serif;
 }
 
@@ -18,6 +24,11 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* hidden attribute must win over the view's display:grid */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -29,19 +40,114 @@ body {
 }
 
 body {
+  position: relative;
+  background:
+    radial-gradient(120% 80% at 18% 6%, rgba(25, 227, 196, 0.06), transparent 52%),
+    radial-gradient(120% 90% at 88% 98%, rgba(245, 196, 81, 0.035), transparent 55%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-1) 55%, var(--bg) 100%);
+}
+
+/* ---------- Atmosphere layers (decorative, behind .app) ---------- */
+/* faint hairline measurement grid for "lab instrument" feel */
+.labgrid {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.55;
   background-image:
-    radial-gradient(circle at 50% 0%, rgba(25, 227, 196, 0.06), transparent 60%),
-    linear-gradient(rgba(22, 36, 42, 0.4) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(22, 36, 42, 0.4) 1px, transparent 1px);
-  background-size: 100% 100%, 40px 40px, 40px 40px;
+    linear-gradient(rgba(25, 227, 196, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(25, 227, 196, 0.025) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(120% 100% at 50% 38%, #000 30%, transparent 85%);
+  mask-image: radial-gradient(120% 100% at 50% 38%, #000 30%, transparent 85%);
+}
+
+/* soft teal radial bloom near the top */
+.bg-bloom {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(60% 42% at 50% -4%, rgba(25, 227, 196, 0.10), transparent 70%);
+}
+
+/* fine film grain for depth */
+.grain {
+  pointer-events: none;
+  position: fixed;
+  inset: -50%;
+  z-index: 50;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* gentle vignette */
+.vignette {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  box-shadow: inset 0 0 240px 64px rgba(0, 0, 0, 0.72);
 }
 
 .app {
+  position: relative;
+  z-index: 10;
   height: 100vh;
   display: flex;
   flex-direction: column;
   padding: 18px 22px;
   gap: 16px;
+}
+
+/* ---------- Entrance reveal ---------- */
+@keyframes ukRise {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.topbar,
+.panel {
+  opacity: 0;
+  transform: translateY(16px);
+  animation: ukRise 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.topbar {
+  animation-delay: 0.02s;
+  transform: translateY(-14px);
+}
+
+.panel {
+  animation-delay: 0.16s;
+}
+/* gentle stagger across panels within a view */
+.panel:nth-of-type(2) {
+  animation-delay: 0.24s;
+}
+.panel:nth-of-type(3) {
+  animation-delay: 0.32s;
+}
+.fft-row .panel {
+  animation-delay: 0.34s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar,
+  .panel {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001s !important;
+    transition-duration: 0.001s !important;
+  }
 }
 
 /* ---------- Top bar ---------- */
@@ -65,7 +171,42 @@ body {
   font-size: 26px;
   letter-spacing: 1px;
   color: var(--teal);
-  text-shadow: 0 0 18px rgba(25, 227, 196, 0.45);
+  text-shadow: 0 0 8px rgba(25, 227, 196, 0.8), 0 0 22px rgba(25, 227, 196, 0.35);
+}
+
+.logo .jam {
+  color: var(--gold);
+  text-shadow: 0 0 8px rgba(245, 196, 81, 0.8), 0 0 22px rgba(245, 196, 81, 0.35);
+}
+
+.logo .brand-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+  background: var(--teal);
+  box-shadow: 0 0 8px var(--teal);
+  animation: brandPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes brandPulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--teal);
+  }
+  50% {
+    opacity: 0.4;
+    box-shadow: 0 0 3px var(--teal);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo .brand-dot {
+    animation: none;
+  }
 }
 
 .tagline {
@@ -75,39 +216,67 @@ body {
   letter-spacing: 1px;
 }
 
-.modes {
+/* secondary utility buttons (Tune / Setup) + connection status */
+.utils {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
 }
 
-.mode-btn {
+.util-btn {
   font-family: "Chakra Petch", sans-serif;
   font-size: 13px;
   letter-spacing: 0.5px;
-  padding: 9px 18px;
-  background: transparent;
+  padding: 8px 16px;
+  background: rgba(10, 15, 18, 0.5);
   color: var(--text-dim);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 9px;
   cursor: pointer;
   transition: all 0.18s ease;
 }
 
-.mode-btn:hover:not(:disabled) {
+.util-btn:hover {
   color: var(--teal);
   border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.06);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.18), inset 0 0 10px rgba(25, 227, 196, 0.05);
+  transform: translateY(-1px);
 }
 
-.mode-btn.active {
-  color: var(--gold);
-  border-color: var(--gold-dim);
-  background: rgba(245, 196, 81, 0.07);
-  box-shadow: 0 0 16px rgba(245, 196, 81, 0.15);
+.util-btn:active {
+  transform: translateY(0);
 }
 
-.mode-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
+.util-icon {
+  margin-right: 5px;
+  opacity: 0.85;
+}
+
+/* back-to-play affordance on secondary screens */
+.back-btn {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  padding: 4px 12px;
+  margin-right: 12px;
+  background: rgba(25, 227, 196, 0.08);
+  color: var(--teal);
+  border: 1px solid var(--teal-dim);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-transform: none;
+}
+
+.back-btn:hover {
+  background: rgba(25, 227, 196, 0.18);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.22);
+  transform: translateY(-1px);
+}
+
+.back-btn:active {
+  transform: translateY(0);
 }
 
 .conn {
@@ -116,7 +285,13 @@ body {
   gap: 8px;
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;
+  letter-spacing: 0.5px;
   color: var(--text-dim);
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(10, 15, 18, 0.5);
+  transition: all 0.25s ease;
 }
 
 .conn .dot {
@@ -130,10 +305,30 @@ body {
 .conn.live .dot {
   background: var(--teal);
   box-shadow: 0 0 12px var(--teal);
+  animation: connPulse 2s ease-in-out infinite;
 }
 
 .conn.live {
   color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.06);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.18);
+}
+
+@keyframes connPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 12px var(--teal);
+  }
+  50% {
+    box-shadow: 0 0 4px var(--teal);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn.live .dot {
+    animation: none;
+  }
 }
 
 /* ---------- Layout ---------- */
@@ -146,29 +341,64 @@ body {
 }
 
 .panel {
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
+  background: var(--panel-bg);
+  border: 1.2px solid var(--line-teal);
   border-radius: 14px;
-  padding: 22px 26px;
+  padding: 20px 24px;
   position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  box-shadow: 0 0 24px rgba(25, 227, 196, 0.06), inset 0 0 30px rgba(25, 227, 196, 0.025);
+}
+
+/* subtle inner top glow line */
+.panel::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(25, 227, 196, 0.28), transparent);
+  pointer-events: none;
+}
+
+/* corner-tick accent on every panel for cohesive lab feel */
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 9px;
+  height: 9px;
+  border-top: 1.4px solid rgba(25, 227, 196, 0.5);
+  border-left: 1.4px solid rgba(25, 227, 196, 0.5);
+  pointer-events: none;
 }
 
 .panel-title {
-  font-family: "Chakra Petch", sans-serif;
-  font-size: 14px;
-  letter-spacing: 1px;
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 3px;
   text-transform: uppercase;
-  color: var(--text);
-  margin-bottom: 8px;
+  color: var(--teal);
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.4);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .panel-title .tag {
   font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 500;
   text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-dim);
-  margin-left: 8px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+  text-shadow: none;
+  margin-left: auto;
 }
 
 .meter-panel {
@@ -277,26 +507,35 @@ body {
   margin-top: 18px;
   align-self: center;
   font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
   font-size: 14px;
   letter-spacing: 1px;
   padding: 12px 28px;
   background: rgba(25, 227, 196, 0.08);
   color: var(--teal);
-  border: 1px solid var(--teal-dim);
+  border: 1.2px solid var(--teal-dim);
   border-radius: 10px;
   cursor: pointer;
+  box-shadow: inset 0 0 14px rgba(25, 227, 196, 0.06);
   transition: all 0.18s ease;
 }
 
 .listen-btn:hover {
   background: rgba(25, 227, 196, 0.16);
-  box-shadow: 0 0 20px rgba(25, 227, 196, 0.25);
+  border-color: var(--teal);
+  box-shadow: 0 0 22px rgba(25, 227, 196, 0.28), inset 0 0 14px rgba(25, 227, 196, 0.1);
+  transform: translateY(-1px);
+}
+
+.listen-btn:active {
+  transform: translateY(0);
 }
 
 .listen-btn.on {
   color: var(--red);
   border-color: var(--red);
   background: rgba(255, 93, 108, 0.08);
+  box-shadow: 0 0 22px rgba(255, 93, 108, 0.25), inset 0 0 14px rgba(255, 93, 108, 0.08);
 }
 
 /* ---------- Strings ---------- */
@@ -316,6 +555,11 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   transition: all 0.18s ease;
+}
+
+.string-row:hover {
+  border-color: var(--teal-dim);
+  transform: translateX(2px);
 }
 
 .string-row.active {
@@ -365,49 +609,247 @@ body {
 .play-view {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(280px, 1fr) 1.5fr;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 16px;
   min-height: 0;
 }
 
-.chord-panel {
+/* two stacks side by side: [detected/fingering] | [song/chromagram] */
+.col-center {
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(200px, 0.85fr) 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+.center-left,
+.center-right {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+/* detected chord: compact hero card, fingering grows to fill below */
+.center-left .chord-panel {
+  flex: 0 0 auto;
+}
+.center-left .finger-panel {
+  flex: 1 1 auto;
+}
+
+/* song strip + lyrics: grows to share space, chromagram stays compact below */
+.center-right .song-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.center-right .chroma-panel {
+  flex: 0 0 auto;
+}
+
+.fft-row {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.finger-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
+.fretboard {
+  width: 100%;
+  max-width: 150px;
+  height: auto;
+  margin-top: 10px;
+}
+
+/* ---------- LEFT: cleanliness gauge ---------- */
+.clean-panel {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.gauge-wrap {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.gauge-canvas {
+  width: 240px;
+  height: 240px;
+  display: block;
+}
+
+.gauge-readout {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.gauge-val {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 52px;
+  line-height: 1;
+  color: var(--teal);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgba(25, 227, 196, 0.6);
+  transition: color 0.4s, text-shadow 0.4s;
+}
+
+.gauge-val .pct {
+  font-size: 22px;
+  opacity: 0.6;
+}
+
+.gauge-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--teal);
+  margin-top: 4px;
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.5);
+  transition: color 0.4s;
+}
+
+.gauge-sub {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.coach {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.3px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  min-height: 40px;
+  width: 100%;
+  margin-top: auto;
+  border-left: 2px solid var(--gold);
+  background: rgba(245, 196, 81, 0.06);
+  color: var(--gold);
+  transition: all 0.4s;
+}
+
+.coach.good {
+  border-left-color: var(--teal);
+  background: rgba(25, 227, 196, 0.06);
+  color: var(--teal);
+}
+
+.coach .miss {
+  color: var(--gold);
+}
+
+.coach .ok {
+  color: var(--teal);
+}
+
+.coach b {
+  font-weight: 700;
+}
+
+.clean-panel .listen-btn {
+  margin-top: 14px;
+  width: 100%;
+  align-self: stretch;
+  text-align: center;
+}
+
+/* ---------- CENTER: detected chord ---------- */
+.chord-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-top: 30px;
+}
+
+/* the detected-chord readout is the hero */
+.chord-readout {
+  flex: 0 0 auto;
+}
+
+.now-tag {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 5px;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(245, 196, 81, 0.6);
+  text-transform: uppercase;
+}
+
 .chord-readout {
   text-align: center;
-  margin-top: 8px;
 }
 
 .chord-name {
   font-family: "Chakra Petch", sans-serif;
   font-weight: 700;
   font-size: 110px;
-  line-height: 1;
-  color: var(--text-dim);
-  transition: all 0.12s ease;
+  line-height: 0.9;
+  color: #fff;
+  text-shadow: 0 0 16px var(--teal), 0 0 44px rgba(25, 227, 196, 0.4);
+  transition: text-shadow 0.4s;
 }
 
 .chord-name.clean {
-  color: var(--teal);
-  text-shadow: 0 0 44px rgba(25, 227, 196, 0.5);
+  text-shadow: 0 0 16px var(--teal), 0 0 44px rgba(25, 227, 196, 0.55),
+    0 0 90px rgba(25, 227, 196, 0.25);
 }
 
 .chord-name.dirty {
-  color: var(--gold);
-  text-shadow: 0 0 36px rgba(245, 196, 81, 0.4);
+  text-shadow: 0 0 16px var(--gold), 0 0 44px rgba(245, 196, 81, 0.5);
+}
+
+.chord-sub {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 6px;
+  color: var(--teal);
+  text-transform: uppercase;
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.4);
+  margin-top: 6px;
 }
 
 .target-row {
-  margin-top: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
   color: var(--text-dim);
 }
 
@@ -422,115 +864,524 @@ body {
   cursor: pointer;
 }
 
-.gauge-wrap {
-  position: relative;
-  margin-top: 18px;
-}
-
-#gauge {
-  width: 360px;
-  height: 220px;
-  display: block;
-}
-
-.gauge-readout {
-  position: absolute;
-  bottom: 24px;
-  left: 0;
-  right: 0;
-  text-align: center;
-}
-
-.gauge-val {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 44px;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.gauge-val .pct {
-  font-size: 20px;
-  color: var(--text-dim);
-}
-
-.gauge-status {
-  font-family: "Chakra Petch", sans-serif;
-  font-size: 14px;
-  letter-spacing: 1px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  margin-top: 2px;
-}
-
-.coach {
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 14px;
-  color: var(--text-dim);
-  text-align: center;
-  min-height: 40px;
-  margin-top: 14px;
-  max-width: 380px;
-  line-height: 1.5;
-}
-
-.coach .miss {
-  color: var(--gold);
-}
-
-.coach .ok {
-  color: var(--teal);
-}
-
-/* chromagram */
-.chroma {
+/* ---------- chromagram (horizontal bars, mockup style) ---------- */
+.chroma-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 16px;
+}
+
+.chroma {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 96px;
+  padding-top: 8px;
 }
 
 .chroma-bar {
+  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 6px;
+  height: 100%;
+}
+
+.chroma-bar .track {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  min-height: 0;
+}
+
+.chroma-bar .fill {
+  width: 100%;
+  height: 4%;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, var(--teal), var(--teal-dim));
+  box-shadow: 0 0 8px rgba(25, 227, 196, 0.4);
+  transition: height 0.1s linear;
+}
+
+.chroma-bar.target .fill {
+  background: linear-gradient(180deg, var(--gold), var(--gold-dim));
+  box-shadow: 0 0 10px rgba(245, 196, 81, 0.55);
 }
 
 .chroma-bar .pc {
   font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 10px;
   color: var(--text-dim);
-  width: 28px;
 }
 
-.chroma-bar .track {
+.chroma-bar.target .pc {
+  color: var(--gold);
+  text-shadow: 0 0 8px rgba(245, 196, 81, 0.5);
+}
+
+/* ---------- FULL-WIDTH FFT spectrum ---------- */
+.fft-panel {
+  padding: 14px 18px 12px;
+}
+
+.fft-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 150px;
+}
+
+.fft-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ---------- Library view ---------- */
+.library-view {
   flex: 1;
-  height: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+.lib-add-panel,
+.lib-list-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.lib-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.lib-input {
+  flex: 1;
   background: var(--bg-panel-2);
-  border-radius: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  padding: 9px 12px;
+}
+
+.lib-input:focus {
+  outline: none;
+  border-color: var(--teal-dim);
+  box-shadow: 0 0 18px rgba(25, 227, 196, 0.18), inset 0 0 12px rgba(25, 227, 196, 0.04);
+}
+
+.lib-input::placeholder {
+  color: var(--text-dim);
+}
+
+.paste-box {
+  flex: 1;
+  min-height: 0;
+  margin-top: 10px;
+  resize: none;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 12px 14px;
+}
+
+.paste-box:focus {
+  outline: none;
+  border-color: var(--teal-dim);
+  box-shadow: 0 0 20px rgba(25, 227, 196, 0.18), inset 0 0 14px rgba(25, 227, 196, 0.04);
+}
+
+.lib-add-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.lib-add-row .listen-btn {
+  margin-top: 0;
+}
+
+.ai-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  color: var(--gold-dim);
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(10, 15, 18, 0.5);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.18s ease;
+}
+
+.ai-toggle:hover {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+}
+
+/* lit-up gold state when AI enhance is enabled */
+.ai-toggle:has(input:checked) {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+  background: rgba(245, 196, 81, 0.08);
+  box-shadow: 0 0 16px rgba(245, 196, 81, 0.2), inset 0 0 10px rgba(245, 196, 81, 0.05);
+  text-shadow: 0 0 10px rgba(245, 196, 81, 0.4);
+}
+
+.ai-toggle input {
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.lib-add-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.lib-add-status.done {
+  color: var(--teal);
+}
+
+.song-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.song-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.song-row:hover {
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.05);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.12);
+  transform: translateX(2px);
+}
+
+.song-row .s-title {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 16px;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+
+.song-row .s-artist {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.song-row .s-meta {
+  margin-left: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.song-row .s-edit,
+.song-row .s-del {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 15px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.song-row .s-edit:hover {
+  color: var(--teal);
+  background: rgba(25, 227, 196, 0.1);
+}
+
+.song-row .s-del:hover {
+  color: var(--red);
+  background: rgba(255, 93, 108, 0.1);
+}
+
+.song-list-empty {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 30px;
+}
+
+/* ---------- Loaded-song chord strip (in Play) ---------- */
+.song-bar {
+  margin-top: 12px;
+  width: 100%;
+  min-height: 48px;
+  max-height: 150px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex: 0 0 auto;
   overflow: hidden;
 }
 
-.chroma-bar .fill {
-  height: 100%;
-  width: 0%;
-  background: var(--teal-dim);
-  border-radius: 7px;
-  transition: width 0.08s linear;
+.song-bar-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
-.chroma-bar.target .fill {
+.song-bar-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: center;
+  align-items: center;
+  max-width: 100%;
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.strip-chord {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  background: var(--bg-panel-2);
+  transition: all 0.16s ease;
+}
+
+.strip-chord:hover {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  box-shadow: 0 0 12px rgba(25, 227, 196, 0.18);
+  transform: translateY(-1px);
+}
+
+.strip-chord.done {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+}
+
+.strip-chord.current,
+.strip-chord.current:hover {
+  color: var(--gold);
+  border-color: var(--gold);
+  background: rgba(245, 196, 81, 0.1);
+  box-shadow: 0 0 14px rgba(245, 196, 81, 0.3);
+  transform: scale(1.12);
+}
+
+.strip-section {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  width: 100%;
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* bar/measure separator between chords in the strip */
+.bar-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 22px;
+  background: var(--line);
+  margin: 0 3px;
+}
+
+/* keep the chord strip compact when lyrics are shown beneath it (minimap) */
+.song-panel .song-bar {
+  flex: 0 0 auto;
+  max-height: 96px;
+}
+
+/* ---------- Lyrics view (chord cues above syllables) ---------- */
+.lyrics-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding: 8px 4px 6px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lyric-section {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 10px 0 2px;
+}
+.lyric-section:first-child {
+  margin-top: 0;
+}
+
+.lyric-line {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.9;
+  color: var(--text-faint);
+  transition: color 0.25s;
+}
+/* the line containing the current target chord is full brightness */
+.lyric-line.now {
+  color: var(--text);
+}
+/* a chord-only / intro line (no lyric words) */
+.lyric-line.instrumental {
+  line-height: 1.4;
+}
+
+/* each chord cue + its syllable share a token wrapper so the cue can sit
+   above the word without disturbing line flow */
+.lyric-tok {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+  white-space: pre;
+}
+.lyric-tok .chord-cue {
+  position: absolute;
+  left: 0;
+  top: -0.85em;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--teal);
+  text-shadow: 0 0 8px rgba(25, 227, 196, 0.55);
+  white-space: nowrap;
+  transition: color 0.25s, text-shadow 0.25s;
+}
+.lyric-tok:hover .chord-cue {
+  color: var(--teal-2);
+}
+
+/* the currently-targeted chord lights gold (cue + word) */
+.lyric-tok.lit .chord-cue {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.8);
+}
+.lyric-tok .syll {
+  position: relative;
+  transition: color 0.25s, text-shadow 0.25s;
+}
+.lyric-tok.lit .syll {
+  color: var(--gold-2);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.7);
+}
+.lyric-tok.lit .syll::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
   background: var(--gold);
-  box-shadow: 0 0 10px rgba(245, 196, 81, 0.5);
+  box-shadow: 0 0 8px var(--gold);
+  border-radius: 3px;
+}
+/* chord-only token (no word) on an instrumental line */
+.lyric-tok.bare {
+  display: inline-block;
+  min-width: 2.2em;
+  height: 1.1em;
+}
+
+/* ---------- Setup / calibration view ---------- */
+.setup-view {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 0;
+}
+
+.setup-panel {
+  max-width: 520px;
+  width: 100%;
+  margin-top: 40px;
+}
+
+.setup-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 8px;
+  text-align: center;
+}
+
+.setup-copy {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 420px;
+}
+
+.setup-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.setup-status.done {
+  color: var(--teal);
 }
 
 /* ---------- Corner label ---------- */
 .corner-label {
   position: fixed;
-  bottom: 10px;
+  z-index: 60;
+  bottom: 12px;
   right: 14px;
   font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  color: var(--text-dim);
-  opacity: 0.6;
-  letter-spacing: 0.5px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: rgba(25, 227, 196, 0.7);
+  border: 1px solid rgba(25, 227, 196, 0.22);
+  border-radius: 6px;
+  padding: 6px 9px;
+  background: rgba(8, 13, 15, 0.6);
+  text-shadow: 0 0 6px rgba(25, 227, 196, 0.35);
 }

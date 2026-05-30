@@ -15,28 +15,41 @@
   </head>
 
   <body>
+    <!-- decorative atmosphere layers (additive, behind .app) -->
+    <div class="labgrid" aria-hidden="true"></div>
+    <div class="bg-bloom" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+
     <div class="app">
       <!-- Top bar -->
       <header class="topbar">
         <div class="brand">
-          <span class="logo">ukejam</span>
+          <span class="logo">uke<span class="jam">jam</span><span class="brand-dot" aria-hidden="true"></span></span>
           <span class="tagline">baritone · D G B E</span>
         </div>
-        <nav class="modes">
-          <button class="mode-btn" data-mode="cal-mic" disabled>Cal Mic</button>
-          <button class="mode-btn active" data-mode="tuner">Cal Instrument</button>
-          <button class="mode-btn" data-mode="play">Play</button>
+        <nav class="utils">
+          <button class="util-btn" data-mode="library" title="Your songs">
+            <span class="util-icon">♬</span> Songs
+          </button>
+          <button class="util-btn" data-mode="tuner" title="Tune your instrument">
+            <span class="util-icon">♪</span> Tune
+          </button>
+          <button class="util-btn" data-mode="cal-mic" title="Calibrate microphone">
+            <span class="util-icon">⚙</span> Setup
+          </button>
+          <div class="conn">
+            <span class="dot" id="conn-dot"></span>
+            <span id="conn-text">idle</span>
+          </div>
         </nav>
-        <div class="conn">
-          <span class="dot" id="conn-dot"></span>
-          <span id="conn-text">idle</span>
-        </div>
       </header>
 
-      <!-- Tuner view -->
-      <main class="tuner-view" id="tuner-view">
+      <!-- Tuner view (secondary utility screen) -->
+      <main class="tuner-view" id="tuner-view" hidden>
         <div class="panel meter-panel">
           <div class="panel-title">
+            <button class="back-btn" data-mode="play">← Play</button>
             Instrument Tuner <span class="tag">nearest string · cents</span>
           </div>
 
@@ -69,49 +82,128 @@
         </div>
       </main>
 
-      <!-- Play / chord-detection view -->
-      <main class="play-view" id="play-view" hidden>
-        <div class="panel chord-panel">
+      <!-- Play / chord-detection view (default home screen) -->
+      <main class="play-view" id="play-view">
+        <!-- LEFT: cleanliness gauge + coach + transport -->
+        <div class="panel clean-panel">
           <div class="panel-title">
-            Chord <span class="tag">live detection</span>
+            Chord Cleanliness <span class="tag">cos-sim match</span>
           </div>
-          <div class="chord-readout">
-            <div class="chord-name" id="chord-name">—</div>
-            <div class="target-row">
-              <span class="target-lbl">target</span>
-              <select id="target-select">
-                <option value="">free play</option>
-                <option value="G">G</option>
-                <option value="C">C</option>
-                <option value="D">D</option>
-                <option value="Em">Em</option>
-                <option value="Am">Am</option>
-                <option value="A">A</option>
-                <option value="E">E</option>
-                <option value="D7">D7</option>
-              </select>
-            </div>
-          </div>
-
           <div class="gauge-wrap">
-            <canvas id="gauge" width="360" height="220"></canvas>
+            <canvas id="gauge" class="gauge-canvas" width="420" height="420"></canvas>
             <div class="gauge-readout">
               <div class="gauge-val" id="clean-val">0<span class="pct">%</span></div>
-              <div class="gauge-status" id="clean-status">listening</div>
+              <div class="gauge-status" id="clean-status">idle</div>
+              <div class="gauge-sub" id="clean-target">free play</div>
             </div>
           </div>
-
           <div class="coach" id="coach"></div>
           <button class="listen-btn" id="listen-btn-2">Start listening</button>
         </div>
 
-        <div class="panel chroma-panel">
-          <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
-          <div class="chroma" id="chroma"></div>
+        <!-- CENTER: two stacks — detected+fingering | song+chromagram -->
+        <div class="col-center">
+          <!-- left stack: detected chord above fingering -->
+          <div class="center-left">
+            <div class="panel chord-panel">
+              <div class="now-tag">— DETECTED —</div>
+              <div class="chord-readout">
+                <div class="chord-name" id="chord-name">—</div>
+                <div class="chord-sub">Playing</div>
+              </div>
+            </div>
+            <div class="panel finger-panel">
+              <div class="panel-title">Fingering <span class="tag" id="finger-tag">baritone</span></div>
+              <svg id="fretboard" class="fretboard" viewBox="0 0 150 200" aria-label="chord fingering"></svg>
+            </div>
+          </div>
+
+          <!-- right stack: song chord strip above chromagram -->
+          <div class="center-right">
+            <div class="panel song-panel">
+              <div class="panel-title">Song <span class="tag" id="song-tag">chord progression</span></div>
+              <div class="song-bar" id="song-bar">
+                <div class="song-bar-empty" id="song-bar-empty">
+                  <button class="back-btn" data-mode="library">♬ Choose a song</button>
+                  <span>or just play — free detection</span>
+                </div>
+                <div class="song-bar-strip" id="song-strip" hidden></div>
+              </div>
+              <div class="lyrics-view" id="lyrics-view" hidden></div>
+            </div>
+            <div class="panel chroma-panel">
+              <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
+              <div class="chroma" id="chroma"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FULL-WIDTH: live FFT spectrum -->
+        <div class="fft-row">
+          <div class="panel fft-panel">
+            <div class="panel-title">
+              Live FFT Spectrum
+              <span class="tag" id="fft-tag">log axis · 80 Hz – 2 kHz</span>
+            </div>
+            <div class="fft-canvas-wrap">
+              <canvas id="fft" class="fft-canvas"></canvas>
+            </div>
+          </div>
         </div>
       </main>
 
-      <div class="corner-label" id="corner-label">ukejam / Tuner · native</div>
+      <!-- Setup / calibration view (secondary utility screen) -->
+      <main class="setup-view" id="setup-view" hidden>
+        <div class="panel setup-panel">
+          <div class="panel-title">
+            <button class="back-btn" data-mode="play">← Play</button>
+            Microphone Setup <span class="tag">calibration</span>
+          </div>
+          <div class="setup-body">
+            <p class="setup-copy">
+              Calibrate to your room so quiet passages aren't mistaken for
+              playing. Stay silent for a moment while it measures the
+              background noise. This is saved and reused across sessions.
+            </p>
+            <button class="listen-btn" id="calibrate-btn">Calibrate microphone</button>
+            <div class="setup-status" id="setup-status">not yet calibrated this session</div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Library view (paste tabs + saved songs) -->
+      <main class="library-view" id="library-view" hidden>
+        <div class="panel lib-add-panel">
+          <div class="panel-title">
+            <button class="back-btn" data-mode="play">← Play</button>
+            Add a song <span class="tag">paste a tab or chords</span>
+          </div>
+          <div class="lib-fields">
+            <input id="song-title" class="lib-input" type="text" placeholder="Song title" />
+            <input id="song-artist" class="lib-input" type="text" placeholder="Artist (optional)" />
+          </div>
+          <textarea
+            id="paste-box"
+            class="paste-box"
+            placeholder="Paste a chord chart or tab here…&#10;&#10;[Am]I was scared of [G]dentists and the [C]dark&#10;&#10;…or chords-above-lyrics, or [Verse] sections. Tablature staves are ignored.&#10;(A {title:} / {artist:} line in the text fills the fields above automatically.)"
+          ></textarea>
+          <div class="lib-add-row">
+            <button class="listen-btn" id="add-song-btn">Add to library</button>
+            <label class="ai-toggle" title="Clean up the tab with AI before saving">
+              <input type="checkbox" id="ai-enhance" checked />
+              <span>✨ AI enhance</span>
+            </label>
+            <span class="lib-add-status" id="lib-add-status"></span>
+          </div>
+        </div>
+
+        <div class="panel lib-list-panel">
+          <div class="panel-title">Your songs <span class="tag" id="lib-count">0</span></div>
+          <div class="song-list" id="song-list"></div>
+        </div>
+      </main>
+
+      <div class="corner-label" id="corner-label">ukejam / Chords · native</div>
     </div>
   </body>
 </html>
