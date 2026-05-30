@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ukejam // GARAGE RIOT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Bebas+Neue&family=Special+Elite&family=Courier+Prime:wght@400;700&family=Stardos+Stencil:wght@400;700&family=Permanent+Marker&family=Rock+Salt&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0a0a;
+    --paper:#e9e6dd;
+    --paper2:#f3f1e8;
+    --red:#e7261f;
+    --yellow:#f7e600;
+    --hi:#fff200;
+    --blue:#1f4fe7;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{ height:100%; }
+  body{
+    background:#1a1a1a;
+    font-family:'Courier Prime',monospace;
+    color:var(--ink);
+    overflow-x:hidden;
+    -webkit-font-smoothing:none;
+  }
+
+  /* ====== PAGE / PHOTOCOPY PAPER ====== */
+  .sheet{
+    position:relative;
+    width:100%;
+    min-height:100vh;
+    margin:0 auto;
+    background:
+      /* photocopier streaks */
+      repeating-linear-gradient(90deg, rgba(0,0,0,0.045) 0 2px, transparent 2px 7px),
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.02) 0 1px, transparent 1px 4px),
+      radial-gradient(ellipse at 70% 18%, rgba(0,0,0,0.10), transparent 55%),
+      radial-gradient(ellipse at 12% 85%, rgba(0,0,0,0.13), transparent 50%),
+      linear-gradient(135deg,var(--paper2),var(--paper) 60%, #ddd9cc);
+    box-shadow:0 0 120px rgba(0,0,0,0.8) inset, 0 0 60px #000;
+    overflow:hidden;
+    padding:18px 26px 60px;
+  }
+  /* dark blown-out toner edges */
+  .sheet::before{
+    content:"";
+    position:absolute; inset:0;
+    background:
+      radial-gradient(circle at 0% 0%, rgba(0,0,0,0.35), transparent 22%),
+      radial-gradient(circle at 100% 100%, rgba(0,0,0,0.30), transparent 25%),
+      radial-gradient(circle at 100% 0%, rgba(0,0,0,0.22), transparent 18%);
+    mix-blend-mode:multiply;
+    pointer-events:none;
+    z-index:1;
+  }
+
+  /* ====== GRAIN / XEROX NOISE OVERLAY ====== */
+  .grain{
+    position:fixed; inset:-50%;
+    z-index:9000;
+    pointer-events:none;
+    opacity:0.16;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size:200px 200px;
+    mix-blend-mode:multiply;
+    animation:grainmove 0.6s steps(2) infinite;
+  }
+  @keyframes grainmove{
+    0%{transform:translate(0,0)}
+    50%{transform:translate(-12px,8px)}
+    100%{transform:translate(6px,-10px)}
+  }
+  /* halftone dots layer */
+  .halftone{
+    position:fixed; inset:0; z-index:8999; pointer-events:none;
+    opacity:0.10; mix-blend-mode:multiply;
+    background-image:radial-gradient(#000 28%, transparent 30%);
+    background-size:5px 5px;
+  }
+
+  /* ====== LAYOUT GRID ====== */
+  .stage{
+    position:relative; z-index:5;
+    max-width:1380px; margin:0 auto;
+    display:grid;
+    grid-template-columns: 1.35fr 1fr;
+    grid-template-rows:auto auto auto;
+    gap:18px 26px;
+    align-items:start;
+  }
+  .full{ grid-column:1 / -1; }
+
+  /* ====== SLAP-DOWN ANIMATION ====== */
+  .slap{ animation:slap .45s cubic-bezier(.2,1.6,.4,1) both; }
+  @keyframes slap{
+    0%{ transform:scale(2.4) rotate(var(--rot,0deg)); opacity:0; filter:blur(3px); }
+    60%{ opacity:1; }
+    100%{ transform:scale(1) rotate(var(--rot,0deg)); opacity:1; filter:blur(0); }
+  }
+
+  /* ====== TAPE STRIP ====== */
+  .tape{
+    position:absolute;
+    width:120px; height:34px;
+    background:rgba(225,220,150,0.55);
+    border-left:1px dashed rgba(0,0,0,0.25);
+    border-right:1px dashed rgba(0,0,0,0.25);
+    box-shadow:0 2px 5px rgba(0,0,0,0.3);
+    transform:rotate(-6deg);
+    z-index:20;
+    mix-blend-mode:multiply;
+  }
+  .tape.tr{ right:-18px; top:-14px; transform:rotate(8deg); }
+  .tape.tl{ left:-18px; top:-14px; transform:rotate(-9deg); }
+
+  /* ====== HEADER / GIG FLYER ====== */
+  .flyer{
+    position:relative;
+    background:var(--ink);
+    color:var(--paper);
+    padding:14px 20px 18px;
+    transform:rotate(-1deg);
+    box-shadow:8px 8px 0 rgba(0,0,0,0.55);
+    border:3px solid #000;
+  }
+  .flyer .kicker{
+    font-family:'Special Elite',monospace;
+    letter-spacing:4px; font-size:12px;
+    text-transform:uppercase; color:var(--hi);
+    border-bottom:2px dotted #555; padding-bottom:4px; margin-bottom:6px;
+  }
+  .flyer h1{
+    font-family:'Anton',sans-serif;
+    font-size:clamp(34px,5.2vw,68px);
+    line-height:.86; text-transform:uppercase;
+    letter-spacing:-1px;
+    -webkit-text-stroke:1px #000;
+    color:var(--paper);
+    text-shadow:4px 4px 0 var(--red);
+    transform:skewX(-4deg);
+  }
+  .flyer h1 .lit{ background:var(--red); color:#fff; padding:0 6px; transform:rotate(1deg); display:inline-block; }
+  .flyer .by{
+    margin-top:6px;
+    font-family:'Permanent Marker',cursive;
+    font-size:20px; color:var(--hi);
+    transform:rotate(-1.5deg); display:inline-block;
+  }
+  .flyer .by b{ color:#fff; background:var(--red); padding:0 6px; }
+
+  /* progress = gaffer tape strip */
+  .progwrap{
+    margin-top:14px; position:relative; height:30px;
+    background:repeating-linear-gradient(45deg,#222 0 8px,#000 8px 16px);
+    border:2px solid #000;
+    transform:rotate(.5deg);
+  }
+  .progfill{
+    position:absolute; left:0; top:0; bottom:0; width:38%;
+    background:
+      repeating-linear-gradient(45deg, rgba(0,0,0,.25) 0 6px, transparent 6px 12px),
+      var(--red);
+    box-shadow:3px 0 0 #000;
+    border-right:4px solid #000;
+  }
+  .progfill::after{
+    content:"01:18 / 03:31";
+    position:absolute; right:-110px; top:3px;
+    font-family:'Courier Prime'; font-size:12px; color:var(--paper);
+    background:#000; padding:2px 5px; transform:rotate(-2deg);
+  }
+  .torn{
+    position:absolute; top:-10px; right:30px;
+    font-family:'Rock Salt',cursive; font-size:11px; color:var(--paper);
+    transform:rotate(4deg);
+  }
+
+  /* ====== CURRENT CHORD HUGE ====== */
+  .nowbox{
+    position:relative;
+    background:var(--paper2);
+    border:4px solid #000;
+    box-shadow:10px 10px 0 rgba(0,0,0,.5);
+    padding:10px 14px 18px;
+    transform:rotate(-1.3deg);
+    display:flex; flex-direction:column; align-items:center;
+    grid-row: span 2;
+  }
+  .nowbox .lbl{
+    align-self:flex-start;
+    font-family:'Stardos Stencil',monospace; font-weight:700;
+    font-size:13px; letter-spacing:3px;
+    background:#000; color:var(--hi); padding:2px 8px;
+    transform:rotate(-2deg);
+  }
+  .megachord{
+    position:relative;
+    font-family:'Stardos Stencil',sans-serif; font-weight:700;
+    font-size:clamp(120px,17vw,230px);
+    line-height:.8;
+    color:#000;
+    margin:4px 0;
+    text-shadow:
+      2px 2px 0 var(--red),
+      -2px -2px 0 var(--red);
+    -webkit-text-stroke:2px #000;
+  }
+  /* spray box around chord */
+  .spraybox{
+    position:absolute; inset:6% 8%;
+    border:6px solid var(--red);
+    transform:rotate(-2deg);
+    filter:url(#rough);
+    opacity:.9;
+    pointer-events:none;
+  }
+  .nowbox .sub{
+    font-family:'Permanent Marker',cursive; font-size:18px;
+    color:var(--red); transform:rotate(-1deg);
+  }
+
+  /* ====== STAMPS ====== */
+  .stamp{
+    position:absolute;
+    font-family:'Stardos Stencil',sans-serif; font-weight:700;
+    text-transform:uppercase;
+    border:5px double currentColor;
+    padding:6px 14px;
+    letter-spacing:2px;
+    opacity:.86;
+    filter:url(#rough);
+    z-index:40;
+    mix-blend-mode:multiply;
+    pointer-events:none;
+  }
+  .stamp.nailed{
+    color:var(--red); font-size:34px;
+    top:6%; right:-26px; transform:rotate(11deg);
+    animation:stampin .35s cubic-bezier(.2,1.8,.3,1) .9s both;
+  }
+  @keyframes stampin{ 0%{transform:scale(2.6) rotate(11deg);opacity:0} 100%{transform:scale(1) rotate(11deg);opacity:.86} }
+
+  /* WRONG scrawl */
+  .wrong{
+    position:absolute; bottom:8px; left:-30px;
+    transform:rotate(-7deg);
+    z-index:41; pointer-events:none;
+  }
+  .wrong .big{
+    font-family:'Rock Salt',cursive; color:var(--red);
+    font-size:26px; line-height:1; text-shadow:1px 1px 0 #000;
+  }
+  .wrong .det{
+    font-family:'Permanent Marker',cursive; color:var(--red);
+    font-size:15px; transform:rotate(2deg); margin-top:3px;
+  }
+  .wrong .arrow{ font-size:30px; color:var(--red); display:inline-block; transform:rotate(20deg); }
+
+  /* ====== UPCOMING CHORDS / TICKET STUBS ====== */
+  .upnext{
+    position:relative;
+    background:var(--paper);
+    border:3px solid #000;
+    box-shadow:6px 6px 0 rgba(0,0,0,.45);
+    padding:14px 16px 18px;
+    transform:rotate(.8deg);
+  }
+  .upnext .tag{
+    position:absolute; top:-14px; left:14px;
+    font-family:'Bebas Neue',sans-serif; font-size:18px; letter-spacing:2px;
+    background:var(--blue); color:#fff; padding:2px 10px;
+    transform:rotate(-3deg); border:2px solid #000;
+  }
+  .stubs{ display:flex; gap:10px; margin-top:8px; flex-wrap:wrap; }
+  .stub{
+    position:relative;
+    background:var(--paper2);
+    border:2px dashed #000;
+    width:74px; height:96px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    box-shadow:3px 4px 0 rgba(0,0,0,.4);
+    cursor:pointer;
+    transition:transform .12s ease;
+  }
+  .stub:nth-child(1){ transform:rotate(-5deg); }
+  .stub:nth-child(2){ transform:rotate(3deg); }
+  .stub:nth-child(3){ transform:rotate(-2deg); }
+  .stub:nth-child(4){ transform:rotate(4deg); }
+  .stub:nth-child(5){ transform:rotate(-3deg); }
+  .stub:hover{ transform:rotate(0deg) scale(1.08) translateY(-4px); }
+  .stub .num{ font-family:'Special Elite'; font-size:10px; color:#666; position:absolute; top:4px; left:6px; }
+  .stub .ch{ font-family:'Anton'; font-size:42px; color:#000; line-height:1; }
+  .stub .beat{ font-family:'Courier Prime'; font-size:10px; color:#444; }
+  .stub.cur{ background:#fff; }
+  .stub.cur::after{
+    content:""; position:absolute; inset:-8px;
+    border:4px solid var(--red); border-radius:48% 52% 50% 50%/ 52% 48% 52% 48%;
+    transform:rotate(-4deg); filter:url(#rough);
+  }
+  .stub .punch{
+    position:absolute; right:6px; top:50%;
+    width:10px; height:10px; border-radius:50%;
+    background:var(--paper); box-shadow:0 0 0 2px #000 inset;
+  }
+
+  /* ====== FINGERING DIAGRAM (graph paper / napkin) ====== */
+  .fretcard{
+    position:relative;
+    background:
+      repeating-linear-gradient(0deg, rgba(40,80,160,.18) 0 1px, transparent 1px 16px),
+      repeating-linear-gradient(90deg, rgba(40,80,160,.18) 0 1px, transparent 1px 16px),
+      #fbfaf2;
+    border:2px solid #000;
+    box-shadow:7px 7px 0 rgba(0,0,0,.4);
+    padding:18px 16px 16px;
+    transform:rotate(1.6deg);
+  }
+  .fretcard .hd{
+    font-family:'Permanent Marker',cursive; font-size:22px; color:#000;
+    text-align:center; margin-bottom:6px;
+  }
+  .fretcard .hd small{ font-family:'Courier Prime'; font-size:12px; color:#444; display:block; }
+  .diagram{ display:flex; justify-content:center; }
+  .chordbox{ position:relative; }
+  .chordbox svg{ display:block; }
+  .fretcard .tuning{
+    text-align:center; font-family:'Courier Prime'; font-size:13px; color:#222;
+    margin-top:4px; letter-spacing:6px;
+  }
+  .fretcard .scribble{
+    position:absolute; bottom:-6px; right:8px;
+    font-family:'Rock Salt'; font-size:11px; color:var(--red);
+    transform:rotate(-5deg);
+  }
+
+  /* ====== LYRICS STRIP ====== */
+  .lyricstrip{
+    position:relative;
+    background:#fdfcf4;
+    padding:16px 22px;
+    box-shadow:0 6px 14px rgba(0,0,0,.4);
+    transform:rotate(-.6deg);
+    /* torn edges */
+    clip-path:polygon(0 6%,3% 0,12% 5%,24% 1%,40% 6%,56% 1%,72% 6%,88% 1%,97% 5%,100% 8%,100% 92%,96% 100%,82% 95%,66% 100%,48% 95%,32% 100%,18% 95%,7% 100%,0 93%);
+    border-top:1px solid #cfcabb;
+  }
+  .lyricstrip .lh{
+    font-family:'Special Elite'; font-size:11px; letter-spacing:3px;
+    color:#888; text-transform:uppercase; margin-bottom:8px;
+  }
+  .lyricstrip .line{
+    font-family:'Special Elite',monospace; font-size:18px;
+    color:#1a1a1a; line-height:1.7; position:relative; padding:1px 2px;
+    display:inline-block;
+  }
+  .lyricstrip .line.done{ color:#999; text-decoration:line-through; text-decoration-color:rgba(0,0,0,.4); }
+  .lyricstrip .row{ }
+  .lyricstrip .line.now{
+    color:#000;
+    background:linear-gradient(100deg, transparent 2%, var(--hi) 4%, var(--hi) 96%, transparent 98%);
+    transform:rotate(-.6deg);
+    font-weight:700;
+    box-decoration-break:clone;
+  }
+  .lyricstrip .chordcue{
+    font-family:'Anton'; font-size:13px; color:var(--red);
+    vertical-align:super; margin:0 3px; transform:rotate(-3deg); display:inline-block;
+  }
+
+  /* ====== SCORE / TALLY ====== */
+  .scorewrap{
+    position:relative; display:flex; gap:16px; align-items:stretch; flex-wrap:wrap;
+  }
+  .tallybox{
+    flex:1; min-width:200px;
+    background:var(--ink); color:var(--paper);
+    border:3px solid #000; padding:12px 16px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.5);
+    transform:rotate(-1deg);
+    position:relative;
+  }
+  .tallybox .t{ font-family:'Bebas Neue'; letter-spacing:3px; font-size:16px; color:var(--hi); }
+  .tally{ font-family:'Rock Salt'; font-size:40px; color:#fff; letter-spacing:2px; line-height:1.1; }
+  .tally .slash{ color:var(--red); }
+  .tallybox .pct{ font-family:'Anton'; font-size:14px; color:var(--hi); }
+
+  .combobox{
+    flex:1; min-width:200px;
+    background:var(--paper2);
+    border:3px solid #000; padding:10px 14px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.45);
+    transform:rotate(1.2deg);
+    text-align:center;
+    position:relative; overflow:hidden;
+  }
+  .combobox .t{ font-family:'Stardos Stencil'; font-weight:700; letter-spacing:4px; font-size:13px; color:#000; }
+  .combonum{
+    font-family:'Anton'; font-size:78px; line-height:.85; color:#000;
+    -webkit-text-stroke:2px #000;
+    text-shadow:3px 3px 0 var(--red);
+  }
+  .combonum::before{ content:"x"; font-size:34px; color:var(--red); vertical-align:super; }
+  .combobox .spray{
+    position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(circle at 50% 60%, rgba(231,38,31,.12), transparent 60%);
+  }
+
+  /* verdict stamp */
+  .verdict{
+    position:absolute; right:-14px; bottom:-10px;
+    font-family:'Stardos Stencil',sans-serif; font-weight:700;
+    font-size:30px; color:var(--blue);
+    border:4px solid var(--blue); padding:4px 12px;
+    transform:rotate(-9deg); opacity:.85; filter:url(#rough);
+    background:rgba(255,255,255,.2);
+  }
+
+  /* ====== TRANSPORT ====== */
+  .transport{
+    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+    justify-content:center;
+    padding:6px 0;
+  }
+  .btn{
+    font-family:'Stardos Stencil',sans-serif; font-weight:700;
+    font-size:15px; letter-spacing:2px; text-transform:uppercase;
+    background:var(--paper2); color:#000;
+    border:3px solid #000;
+    padding:12px 18px;
+    box-shadow:5px 5px 0 #000;
+    cursor:pointer;
+    transition:transform .1s ease, box-shadow .1s ease;
+    transform:rotate(var(--r,0deg));
+  }
+  .btn:nth-child(1){ --r:-3deg; }
+  .btn:nth-child(2){ --r:2deg; background:var(--red); color:#fff; }
+  .btn:nth-child(3){ --r:-2deg; }
+  .btn:nth-child(4){ --r:3deg; background:#000; color:var(--hi); }
+  .btn:hover{ transform:rotate(0deg) translate(-2px,-2px); box-shadow:8px 8px 0 #000; }
+  .btn:active{ transform:translate(3px,3px); box-shadow:1px 1px 0 #000; }
+  .tempo{
+    font-family:'Courier Prime'; font-size:13px; color:#000;
+    background:var(--hi); border:2px dashed #000; padding:8px 12px;
+    transform:rotate(-1.5deg);
+  }
+  .tempo b{ font-family:'Anton'; font-size:18px; }
+
+  /* ====== STICKERS / SCRIBBLES floating ====== */
+  .sticker{
+    position:absolute; z-index:50;
+    font-family:'Permanent Marker',cursive;
+    pointer-events:none;
+  }
+  .st1{ top:120px; right:8px; transform:rotate(14deg); font-size:18px; color:var(--blue);
+        background:var(--hi); padding:4px 8px; border:2px solid #000; box-shadow:3px 3px 0 #000; }
+  .st2{ bottom:90px; left:-6px; transform:rotate(-12deg); font-size:16px; color:#fff;
+        background:#000; padding:5px 9px; border:2px solid var(--red); }
+  .scribarrow{ position:absolute; font-size:40px; color:var(--red); z-index:45; pointer-events:none; }
+
+  /* corner label */
+  .mockuplabel{
+    position:fixed; bottom:8px; left:8px; z-index:9500;
+    font-family:'Courier Prime'; font-size:10px; letter-spacing:1px;
+    color:#fff; background:#000; padding:3px 7px;
+    border:1px solid var(--red); transform:rotate(-2deg);
+    opacity:.85;
+  }
+
+  /* rubber stamp ukejam logo */
+  .logo{
+    position:absolute; top:14px; right:18px; z-index:60;
+    font-family:'Stardos Stencil',sans-serif; font-weight:700;
+    font-size:26px; color:var(--red);
+    border:3px solid var(--red); padding:4px 10px;
+    transform:rotate(7deg); opacity:.8; filter:url(#rough);
+    mix-blend-mode:multiply;
+  }
+  .logo small{ display:block; font-family:'Courier Prime'; font-size:9px; letter-spacing:3px; color:#000; }
+
+  @media (max-width:900px){
+    .stage{ grid-template-columns:1fr; }
+    .nowbox{ grid-row:auto; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SVG filter for rough/photocopy edges -->
+<svg width="0" height="0" style="position:absolute">
+  <filter id="rough">
+    <feTurbulence type="fractalNoise" baseFrequency="0.04 0.06" numOctaves="3" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="6"/>
+  </filter>
+</svg>
+
+<div class="grain"></div>
+<div class="halftone"></div>
+
+<div class="sheet">
+
+  <div class="logo slap" style="--rot:7deg">UKEJAM<small>PLAY-ALONG</small></div>
+
+  <div class="stage">
+
+    <!-- ===== HEADER FLYER ===== -->
+    <header class="flyer full slap" style="--rot:-1deg">
+      <span class="tape tl"></span>
+      <div class="kicker">★ TONITE ONLY ★ ALL AGES ★ $5 AT THE DOOR ★ B.Y.O. UKE ★</div>
+      <h1>SMELLS LIKE<br><span class="lit">TEEN SPIRIT</span></h1>
+      <div class="by">w/ <b>NIRVANA</b> &nbsp;— riff #4, here we go</div>
+      <div class="progwrap">
+        <div class="progfill"></div>
+        <div class="torn">~ verse 2 ~</div>
+      </div>
+    </header>
+
+    <!-- ===== NOW PLAYING HUGE CHORD ===== -->
+    <section class="nowbox slap" style="--rot:-1.3deg">
+      <span class="tape tr"></span>
+      <span class="lbl">NOW &gt;&gt;</span>
+      <div class="megachord">E
+        <span class="spraybox"></span>
+      </div>
+      <div class="sub">~ hold it... HIT IT ~</div>
+
+      <!-- NAILED IT stamp -->
+      <div class="stamp nailed">NAILED IT!</div>
+
+      <!-- WRONG scrawl example -->
+      <div class="wrong">
+        <div class="big">WRONG!!</div>
+        <div class="det"><span class="arrow">↗</span> missing the G#</div>
+      </div>
+    </section>
+
+    <!-- ===== UPCOMING CHORDS / STUBS ===== -->
+    <section class="upnext slap" style="--rot:.8deg">
+      <span class="tag">COMING UP →</span>
+      <div class="stubs">
+        <div class="stub cur"><span class="num">01</span><span class="ch">E</span><span class="beat">now</span><span class="punch"></span></div>
+        <div class="stub"><span class="num">02</span><span class="ch">A</span><span class="beat">+2 beats</span><span class="punch"></span></div>
+        <div class="stub"><span class="num">03</span><span class="ch">G</span><span class="beat">+4</span><span class="punch"></span></div>
+        <div class="stub"><span class="num">04</span><span class="ch">C</span><span class="beat">+6</span><span class="punch"></span></div>
+        <div class="stub"><span class="num">05</span><span class="ch">E</span><span class="beat">+8</span><span class="punch"></span></div>
+      </div>
+      <div class="sticker st1" style="position:absolute">loop it!!</div>
+    </section>
+
+    <!-- ===== FINGERING DIAGRAM ===== -->
+    <section class="fretcard slap" style="--rot:1.6deg">
+      <span class="tape" style="left:50%;margin-left:-60px;top:-14px;transform:rotate(3deg)"></span>
+      <div class="hd">E major <small>(baritone uke // open shape)</small></div>
+      <div class="diagram">
+        <div class="chordbox">
+          <svg width="150" height="180" viewBox="0 0 150 180">
+            <!-- nut -->
+            <rect x="20" y="22" width="110" height="7" fill="#000"/>
+            <!-- frets -->
+            <line x1="20" y1="58" x2="130" y2="58" stroke="#000" stroke-width="2"/>
+            <line x1="20" y1="94" x2="130" y2="94" stroke="#000" stroke-width="2"/>
+            <line x1="20" y1="130" x2="130" y2="130" stroke="#000" stroke-width="2"/>
+            <line x1="20" y1="166" x2="130" y2="166" stroke="#000" stroke-width="2"/>
+            <!-- strings D G B E -->
+            <line x1="20" y1="22" x2="20" y2="166" stroke="#000" stroke-width="2"/>
+            <line x1="56.6" y1="22" x2="56.6" y2="166" stroke="#000" stroke-width="2"/>
+            <line x1="93.3" y1="22" x2="93.3" y2="166" stroke="#000" stroke-width="2"/>
+            <line x1="130" y1="22" x2="130" y2="166" stroke="#000" stroke-width="2"/>
+            <!-- open / muted markers above nut -->
+            <text x="20" y="16" font-family="Courier Prime" font-size="12" text-anchor="middle" fill="#000">o</text>
+            <text x="56.6" y="16" font-family="Courier Prime" font-size="12" text-anchor="middle" fill="#000">o</text>
+            <text x="93.3" y="16" font-family="Courier Prime" font-size="12" text-anchor="middle" fill="#000">o</text>
+            <text x="130" y="16" font-family="Courier Prime" font-size="12" text-anchor="middle" fill="#000">o</text>
+            <!-- finger dots: E shape - G string 1st fret, others open-ish; sketch style -->
+            <g fill="#e7261f" stroke="#000" stroke-width="2" filter="url(#rough)">
+              <circle cx="56.6" cy="40" r="11"/>
+              <circle cx="93.3" cy="76" r="11"/>
+            </g>
+            <text x="56.6" y="45" font-family="Anton" font-size="13" text-anchor="middle" fill="#fff">1</text>
+            <text x="93.3" y="81" font-family="Anton" font-size="13" text-anchor="middle" fill="#fff">2</text>
+            <!-- fret number -->
+            <text x="142" y="44" font-family="Permanent Marker" font-size="13" fill="#000">1</text>
+            <text x="142" y="80" font-family="Permanent Marker" font-size="13" fill="#000">2</text>
+          </svg>
+        </div>
+      </div>
+      <div class="tuning">D &nbsp; G &nbsp; B &nbsp; E</div>
+      <div class="scribble">put yr fingers HERE →</div>
+    </section>
+
+    <!-- ===== LYRICS STRIP ===== -->
+    <section class="lyricstrip full slap" style="--rot:-.6deg">
+      <div class="lh">// LYRIC SHEET — torn from the photocopy //</div>
+      <div class="row"><span class="line done">load up on guns, bring your friends</span></div><br>
+      <div class="row"><span class="line done">it's fun to lose and to pretend</span></div><br>
+      <div class="row"><span class="chordcue">E</span><span class="line now">she's over-bored and self-assured</span> <span class="chordcue">A</span></div><br>
+      <div class="row"><span class="line">oh no, I know a dirty word</span></div>
+    </section>
+
+    <!-- ===== SCORE / TALLY / COMBO ===== -->
+    <section class="scorewrap full slap" style="--rot:0deg">
+      <div class="tallybox">
+        <div class="t">★ SCORE / THIS RUN</div>
+        <div class="tally">||||&nbsp;||||&nbsp;||<span class="slash">/</span> &nbsp; <span style="font-family:'Anton';font-size:30px;color:#fff">12</span></div>
+        <div class="pct">87% CLEAN — keep it sloppy</div>
+        <div class="verdict">RAD</div>
+      </div>
+
+      <div class="combobox">
+        <div class="spray"></div>
+        <div class="t">COMBO STREAK</div>
+        <div class="combonum">7</div>
+        <div style="font-family:'Permanent Marker';color:var(--red);font-size:14px;transform:rotate(-2deg)">don't blow it now</div>
+      </div>
+
+      <div class="tallybox" style="transform:rotate(.8deg)">
+        <div class="t">★ TRANSPORT</div>
+        <div class="transport">
+          <button class="btn">⏮ RESTART</button>
+          <button class="btn" id="playbtn">▶ PLAY</button>
+          <button class="btn">⏸ PAUSE</button>
+          <button class="btn">↻ LOOP</button>
+          <span class="tempo">TEMPO <b>117</b> BPM</span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="sticker st2" style="position:absolute">DIY OR DIE</div>
+
+</div>
+
+<div class="mockuplabel">MOCKUP — ukejam / Garage Riot</div>
+
+<script>
+  // staggered slap-down on load
+  document.addEventListener('DOMContentLoaded', function(){
+    var els = Array.prototype.slice.call(document.querySelectorAll('.slap'));
+    els.forEach(function(el, i){
+      el.style.animationDelay = (i * 0.11) + 's';
+    });
+
+    // play/pause toggle (visual only)
+    var pb = document.getElementById('playbtn');
+    if(pb){
+      pb.addEventListener('click', function(){
+        if(pb.textContent.indexOf('PLAY') > -1){ pb.textContent = '◼ STOP'; }
+        else { pb.textContent = '▶ PLAY'; }
+      });
+    }
+
+    // jiggle stubs on hover already via CSS; add random re-stamp on stub click
+    document.querySelectorAll('.stub').forEach(function(s){
+      s.addEventListener('click', function(){
+        document.querySelectorAll('.stub').forEach(function(x){ x.classList.remove('cur'); });
+        s.classList.add('cur');
+        var ch = s.querySelector('.ch').textContent;
+        document.querySelector('.megachord').childNodes[0].nodeValue = ch;
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

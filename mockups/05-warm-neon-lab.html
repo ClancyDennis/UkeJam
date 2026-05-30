@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ukejam — Warm Neon Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg-0:#060a0c;
+    --bg-1:#0a0f12;
+    --bg-2:#0c1417;
+    --teal:#19e3c4;
+    --teal-2:#2fd6c4;
+    --teal-dim:#0e8d7c;
+    --gold:#f5c451;
+    --gold-2:#ffcf6b;
+    --gold-dim:#9c7a2c;
+    --amber:#ff9d4d;
+    --ink:#dff7f1;
+    --ink-dim:rgba(223,247,241,.55);
+    --ink-faint:rgba(223,247,241,.32);
+    --line-teal:rgba(25,227,196,.30);
+    --panel-bg:linear-gradient(180deg, rgba(12,20,23,.78), rgba(8,13,15,.78));
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+
+  body{
+    font-family:'Space Grotesk',system-ui,sans-serif;
+    background:
+      radial-gradient(120% 80% at 18% 8%, rgba(25,227,196,.07), transparent 52%),
+      radial-gradient(120% 90% at 88% 96%, rgba(245,196,81,.05), transparent 55%),
+      linear-gradient(180deg,var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-0) 100%);
+    color:var(--ink);
+    overflow:hidden;
+    position:relative;
+    min-height:100vh;
+  }
+
+  /* fine grain + vignette for depth (subtle, not retro) */
+  .grain{
+    pointer-events:none; position:fixed; inset:-50%; z-index:91;
+    opacity:.035;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .vignette{
+    pointer-events:none; position:fixed; inset:0; z-index:89;
+    box-shadow:inset 0 0 260px 70px rgba(0,0,0,.78);
+  }
+  /* faint hairline measurement grid for "lab instrument" feel */
+  .labgrid{
+    pointer-events:none; position:fixed; inset:0; z-index:1; opacity:.5;
+    background-image:
+      linear-gradient(rgba(25,227,196,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(25,227,196,.025) 1px, transparent 1px);
+    background-size:46px 46px;
+    mask-image:radial-gradient(120% 100% at 50% 40%, #000 30%, transparent 85%);
+    -webkit-mask-image:radial-gradient(120% 100% at 50% 40%, #000 30%, transparent 85%);
+  }
+
+  /* ===== App shell ===== */
+  .app{
+    position:relative; z-index:10;
+    height:100vh; width:100%;
+    display:flex; flex-direction:column;
+    padding:16px 24px 16px;
+    gap:14px;
+  }
+
+  /* ===== Top bar ===== */
+  .topbar{
+    display:flex; align-items:center; gap:24px;
+    opacity:0; transform:translateY(-16px);
+    animation:dropIn .6s .05s cubic-bezier(.2,.8,.2,1) forwards;
+  }
+  .brand{
+    font-family:'Chakra Petch',sans-serif; font-weight:700;
+    font-size:25px; line-height:1; letter-spacing:1px; white-space:nowrap;
+    color:var(--teal);
+    text-shadow:0 0 8px rgba(25,227,196,.8), 0 0 22px rgba(25,227,196,.35);
+  }
+  .brand .jam{ color:var(--gold); text-shadow:0 0 8px rgba(245,196,81,.8),0 0 22px rgba(245,196,81,.35); }
+  .brand .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--teal); margin-left:2px; box-shadow:0 0 8px var(--teal); vertical-align:middle; animation:livePulse 2.4s ease-in-out infinite; }
+
+  .song{ display:flex; flex-direction:column; gap:3px; min-width:210px; }
+  .song .title{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:19px; letter-spacing:.5px;
+    color:var(--ink);
+    text-shadow:0 0 16px rgba(25,227,196,.25);
+  }
+  .song .artist{ font-size:11px; letter-spacing:3px; text-transform:uppercase; color:rgba(25,227,196,.78); font-weight:500; }
+
+  .chordstrip{ display:flex; gap:7px; align-items:center; }
+  .chordstrip .lbl{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:var(--ink-faint); text-transform:uppercase; margin-right:2px; }
+  .chip{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:12px;
+    padding:3px 9px; border-radius:7px; letter-spacing:.5px;
+    border:1px solid var(--line-teal); color:rgba(25,227,196,.85);
+    background:rgba(25,227,196,.04);
+  }
+  .chip.active{ color:var(--bg-0); background:var(--gold); border-color:var(--gold); box-shadow:0 0 14px rgba(245,196,81,.6); }
+
+  .progress-wrap{ flex:1; display:flex; flex-direction:column; gap:5px; min-width:160px; }
+  .progress-meta{ display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; color:var(--ink-dim); }
+  .progress{
+    height:5px; border-radius:20px;
+    background:rgba(25,227,196,.07);
+    border:1px solid rgba(25,227,196,.18);
+    overflow:visible; position:relative;
+  }
+  .progress .fill{
+    height:100%; width:34%;
+    background:linear-gradient(90deg,var(--teal-dim),var(--teal));
+    box-shadow:0 0 12px var(--teal);
+    border-radius:20px; position:relative;
+  }
+  .progress .head{
+    position:absolute; right:-3px; top:50%; transform:translateY(-50%);
+    width:9px; height:9px; border-radius:50%;
+    background:#fff; box-shadow:0 0 10px 2px var(--teal);
+  }
+
+  /* transport controls */
+  .transport{ display:flex; gap:9px; align-items:center; }
+  .btn{
+    --c:var(--teal);
+    width:42px; height:42px; border-radius:11px;
+    display:grid; place-items:center;
+    background:rgba(10,15,18,.7);
+    border:1.4px solid var(--c);
+    color:var(--c); cursor:pointer;
+    box-shadow:0 0 12px rgba(25,227,196,.22), inset 0 0 10px rgba(25,227,196,.06);
+    transition:transform .15s ease, box-shadow .2s ease, background .2s ease;
+  }
+  .btn svg{ width:18px; height:18px; fill:currentColor; filter:drop-shadow(0 0 4px currentColor); }
+  .btn:hover{ transform:translateY(-2px); box-shadow:0 0 20px var(--c), inset 0 0 14px rgba(25,227,196,.18); background:rgba(25,227,196,.07); }
+  .btn:active{ transform:translateY(0) scale(.96); }
+  .btn.play{ --c:var(--gold); box-shadow:0 0 16px rgba(245,196,81,.4), inset 0 0 12px rgba(245,196,81,.1); }
+  .btn.tempo{ width:auto; padding:0 14px; gap:6px; font-family:'JetBrains Mono',monospace; font-weight:600; font-size:13px; letter-spacing:.5px; }
+  .btn.tempo small{ font-size:9px; opacity:.6; }
+
+  /* ===== Stage layout ===== */
+  .stage{
+    flex:1; display:grid;
+    grid-template-columns:1fr 1.5fr 1fr;
+    grid-template-rows:1fr auto;
+    gap:14px; min-height:0;
+  }
+
+  /* panel base */
+  .panel{
+    border:1.2px solid var(--line-teal);
+    border-radius:14px;
+    background:var(--panel-bg);
+    box-shadow:0 0 24px rgba(25,227,196,.06), inset 0 0 30px rgba(25,227,196,.025);
+    padding:14px 15px;
+    position:relative; overflow:hidden;
+  }
+  .panel::before{
+    /* corner tick marks */
+    content:""; position:absolute; top:7px; left:7px; width:9px; height:9px;
+    border-top:1.4px solid rgba(25,227,196,.5); border-left:1.4px solid rgba(25,227,196,.5);
+  }
+  .panel-title{
+    font-family:'JetBrains Mono',monospace; font-weight:600; font-size:10px; letter-spacing:3px; text-transform:uppercase;
+    color:var(--teal); margin-bottom:10px;
+    text-shadow:0 0 10px rgba(25,227,196,.5);
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel-title .tag{ margin-left:auto; font-size:9px; letter-spacing:1px; color:var(--ink-faint); text-shadow:none; }
+
+  /* ===== column wrappers / reveal ===== */
+  .col-left{ grid-column:1; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:translateX(-26px); animation:slideInL .6s .2s cubic-bezier(.2,.8,.2,1) forwards; }
+  .col-center{ grid-column:2; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:scale(.97); animation:fadeScale .65s .12s cubic-bezier(.2,.8,.2,1) forwards; }
+  .col-right{ grid-column:3; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:translateX(26px); animation:slideInR .6s .25s cubic-bezier(.2,.8,.2,1) forwards; }
+  .fft-row{ grid-column:1 / -1; grid-row:2;
+    opacity:0; transform:translateY(20px); animation:slideUp .65s .34s cubic-bezier(.2,.8,.2,1) forwards; }
+
+  /* ===== HERO 1: CLEANLINESS METER (left top, big) ===== */
+  .clean-panel{ flex:0 0 auto; display:flex; flex-direction:column; }
+  .gauge-wrap{ position:relative; width:100%; display:flex; justify-content:center; align-items:center; }
+  .gauge-canvas{ width:210px; height:210px; }
+  .gauge-readout{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-46%);
+    text-align:center; pointer-events:none;
+  }
+  .gauge-val{
+    font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:50px; line-height:1;
+    color:var(--teal); font-variant-numeric:tabular-nums;
+    text-shadow:0 0 18px rgba(25,227,196,.7), 0 0 40px rgba(25,227,196,.3);
+    transition:color .4s, text-shadow .4s;
+  }
+  .gauge-val .pct{ font-size:22px; opacity:.6; }
+  .gauge-status{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:4px; text-transform:uppercase;
+    color:var(--teal); margin-top:4px; text-shadow:0 0 10px rgba(25,227,196,.6);
+    transition:color .4s;
+  }
+  .gauge-sub{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:var(--ink-faint); margin-top:3px; }
+
+  /* note breakdown */
+  .breakdown{ margin-top:6px; display:flex; flex-direction:column; gap:8px; }
+  .target-notes{ display:flex; gap:8px; justify-content:center; }
+  .note-tok{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:15px;
+    width:52px; padding:7px 0; text-align:center; border-radius:9px;
+    border:1.2px solid var(--line-teal); color:var(--ink-dim);
+    position:relative; transition:all .35s;
+  }
+  .note-tok .nm{ font-size:9px; font-family:'JetBrains Mono',monospace; opacity:.55; display:block; letter-spacing:1px; }
+  .note-tok.present{ color:var(--teal); border-color:var(--teal); background:rgba(25,227,196,.07); box-shadow:0 0 14px rgba(25,227,196,.25); }
+  .note-tok.present .nm{ color:var(--teal); opacity:.8; }
+  .note-tok.missing{ color:var(--gold); border-color:rgba(245,196,81,.5); border-style:dashed; opacity:.85; animation:missBlink 1.6s ease-in-out infinite; }
+  .note-tok .mark{ position:absolute; top:-7px; right:-7px; width:17px; height:17px; border-radius:50%; display:grid; place-items:center; font-size:10px; font-family:'JetBrains Mono'; }
+  .note-tok.present .mark{ background:var(--teal); color:var(--bg-0); box-shadow:0 0 8px var(--teal); }
+  .note-tok.missing .mark{ background:var(--gold); color:var(--bg-0); box-shadow:0 0 8px var(--gold); }
+  @keyframes missBlink{ 0%,100%{ opacity:.55; } 50%{ opacity:1; } }
+
+  .coach{
+    font-family:'JetBrains Mono',monospace; font-size:11px; line-height:1.5; letter-spacing:.3px;
+    padding:9px 11px; border-radius:9px; min-height:38px;
+    border-left:2px solid var(--gold);
+    background:rgba(245,196,81,.06); color:var(--gold-2);
+    transition:all .4s;
+  }
+  .coach.good{ border-left-color:var(--teal); background:rgba(25,227,196,.06); color:var(--teal); }
+  .coach b{ font-weight:700; }
+
+  /* ===== CHROMAGRAM (left bottom) ===== */
+  .chroma-panel{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+  .chroma-wrap{ flex:1; display:flex; align-items:flex-end; gap:5px; padding-top:6px; min-height:78px; }
+  .chroma-bin{ flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; height:100%; justify-content:flex-end; }
+  .chroma-bar{
+    width:100%; border-radius:4px 4px 2px 2px;
+    background:linear-gradient(180deg,var(--teal),var(--teal-dim));
+    box-shadow:0 0 8px rgba(25,227,196,.4);
+    min-height:3px; transition:height .12s linear;
+  }
+  .chroma-bin.target .chroma-bar{
+    background:linear-gradient(180deg,var(--gold-2),var(--gold-dim));
+    box-shadow:0 0 10px rgba(245,196,81,.6);
+  }
+  .chroma-lbl{ font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--ink-faint); }
+  .chroma-bin.target .chroma-lbl{ color:var(--gold); text-shadow:0 0 8px rgba(245,196,81,.5); }
+
+  /* ===== CENTER: highway + current chord ===== */
+  .highway-panel{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; padding:0; }
+  .highway-canvas-wrap{ position:relative; flex:1; min-height:0; }
+  .highway-canvas{ width:100%; height:100%; display:block; }
+  .now-tag{
+    position:absolute; top:11px; left:50%; transform:translateX(-50%);
+    font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:5px; color:var(--gold);
+    text-shadow:0 0 10px rgba(245,196,81,.7); text-transform:uppercase; z-index:4;
+  }
+  .current-chord{
+    position:absolute; left:50%; bottom:18px; transform:translateX(-50%);
+    text-align:center; z-index:5; pointer-events:none;
+  }
+  .current-chord .big{
+    font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:96px; line-height:.9;
+    color:#fff;
+    text-shadow:0 0 16px var(--teal), 0 0 44px rgba(25,227,196,.55), 0 0 90px rgba(25,227,196,.25);
+    transition:text-shadow .4s;
+  }
+  .current-chord .lbl{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:6px; color:var(--teal); text-transform:uppercase; text-shadow:0 0 10px var(--teal); }
+
+  /* lyrics panel center bottom */
+  .lyrics-panel{ flex:0 0 auto; }
+  .lyric-line{ font-size:21px; font-weight:500; line-height:1.4; color:var(--ink-faint); }
+  .lyric-line.now{ color:var(--ink); }
+  .lyric-line.next{ font-size:15px; color:var(--ink-faint); margin-top:6px; }
+  .syll{ position:relative; padding:0 1px; transition:color .25s, text-shadow .25s; }
+  .syll.lit{ color:var(--gold-2); text-shadow:0 0 12px rgba(245,196,81,.7); }
+  .syll.lit::after{ content:""; position:absolute; left:0; right:0; bottom:-3px; height:2px; background:var(--gold); box-shadow:0 0 8px var(--gold); border-radius:3px; }
+  .chord-cue{ font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:11px; color:var(--teal); text-shadow:0 0 8px var(--teal); vertical-align:super; margin:0 2px; }
+
+  /* ===== RIGHT: fingering + metrics ===== */
+  .finger-panel{ flex:0 0 auto; display:flex; flex-direction:column; align-items:center; }
+  .finger-name{ font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:30px; color:var(--gold); text-shadow:0 0 14px rgba(245,196,81,.6); line-height:1; margin-bottom:1px; }
+  .finger-tuning{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:rgba(25,227,196,.7); text-transform:uppercase; margin-bottom:8px; }
+  .fret-svg{ width:100%; max-width:172px; filter:drop-shadow(0 0 8px rgba(25,227,196,.2)); }
+  .string-lbls{ display:flex; justify-content:space-between; width:100%; max-width:172px; margin-top:5px; padding:0 14px; }
+  .string-lbls span{ font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; color:var(--ink-dim); width:20px; text-align:center; }
+
+  .metrics-panel{ flex:1 1 auto; display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .metric{ display:flex; flex-direction:column; gap:5px; }
+  .metric-head{ display:flex; justify-content:space-between; align-items:baseline; }
+  .metric-head .k{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--ink-dim); }
+  .metric-head .v{ font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600; color:var(--teal); text-shadow:0 0 10px rgba(25,227,196,.5); font-variant-numeric:tabular-nums; }
+  .mbar{ height:6px; border-radius:6px; background:rgba(255,255,255,.05); border:1px solid rgba(25,227,196,.14); overflow:hidden; }
+  .mbar .mf{ height:100%; border-radius:6px; background:linear-gradient(90deg,var(--teal-dim),var(--teal)); box-shadow:0 0 10px var(--teal); transition:width .25s; }
+  .mbar .mf.gold{ background:linear-gradient(90deg,var(--gold-dim),var(--gold)); box-shadow:0 0 10px var(--gold); }
+
+  .peaks-list{ margin-top:2px; display:flex; flex-direction:column; gap:4px; }
+  .peak-row{ display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:11px; }
+  .peak-row .dot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+  .peak-row .dot.t{ background:var(--gold); box-shadow:0 0 7px var(--gold); }
+  .peak-row .dot.h{ background:var(--teal); box-shadow:0 0 7px var(--teal); }
+  .peak-row .pn{ color:var(--ink); min-width:30px; }
+  .peak-row .pf{ color:var(--ink-dim); margin-left:auto; }
+
+  /* ===== HERO 2: FFT SPECTRUM (bottom full-width) ===== */
+  .fft-panel{ position:relative; padding:12px 16px 10px; }
+  .fft-canvas-wrap{ position:relative; width:100%; height:150px; }
+  .fft-canvas{ width:100%; height:100%; display:block; }
+
+  /* corner mockup label */
+  .mock-label{
+    position:fixed; left:14px; bottom:12px; z-index:95;
+    font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:1px;
+    color:rgba(25,227,196,.7);
+    border:1px solid rgba(25,227,196,.28); border-radius:6px;
+    padding:6px 9px; background:rgba(8,13,15,.6);
+    text-shadow:0 0 6px rgba(25,227,196,.4);
+  }
+
+  @keyframes dropIn{ to{ opacity:1; transform:translateY(0);} }
+  @keyframes slideInL{ to{ opacity:1; transform:translateX(0);} }
+  @keyframes slideInR{ to{ opacity:1; transform:translateX(0);} }
+  @keyframes slideUp{ to{ opacity:1; transform:translateY(0);} }
+  @keyframes fadeScale{ to{ opacity:1; transform:scale(1);} }
+  @keyframes livePulse{ 0%,100%{ opacity:1; box-shadow:0 0 8px var(--teal);} 50%{ opacity:.4; box-shadow:0 0 3px var(--teal);} }
+
+  /* responsive guard */
+  @media (max-width:1240px){
+    .stage{ grid-template-columns:1fr 1.3fr 1fr; }
+    .current-chord .big{ font-size:78px; }
+    .gauge-canvas{ width:184px; height:184px; }
+  }
+  @media (max-width:980px){
+    .stage{ grid-template-columns:1fr 1fr; grid-template-rows:auto auto auto; }
+    .col-left{ grid-column:1; grid-row:1; }
+    .col-center{ grid-column:2; grid-row:1; }
+    .col-right{ grid-column:1 / -1; grid-row:2; flex-direction:row; flex-wrap:wrap; }
+    .col-right > *{ flex:1; }
+    .fft-row{ grid-row:3; }
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{ animation-duration:.001s !important; animation-iteration-count:1 !important; transition-duration:.001s !important; }
+    .brand .dot{ animation:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="labgrid"></div>
+
+  <div class="app">
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="brand">uke<span class="jam">jam</span><span class="dot"></span></div>
+      <div class="song">
+        <div class="title">Banana Pancakes</div>
+        <div class="artist">Jack Johnson</div>
+      </div>
+      <div class="chordstrip">
+        <span class="lbl">Chords</span>
+        <span class="chip active">G</span>
+        <span class="chip">C</span>
+        <span class="chip">D</span>
+        <span class="chip">Em</span>
+        <span class="chip">Am</span>
+        <span class="chip">D7</span>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-meta"><span id="t-elapsed">01:08</span><span>VERSE 1</span><span>03:12</span></div>
+        <div class="progress"><div class="fill" id="prog-fill"><div class="head"></div></div></div>
+      </div>
+      <div class="transport">
+        <button class="btn" id="btn-restart" title="Restart" aria-label="Restart">
+          <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+        </button>
+        <button class="btn play" id="btn-play" title="Pause" aria-label="Pause">
+          <svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+        </button>
+        <button class="btn tempo" id="btn-tempo" title="Tempo">
+          <span id="bpm-val">98</span><small>BPM</small>
+        </button>
+      </div>
+    </header>
+
+    <!-- STAGE -->
+    <div class="stage">
+      <!-- LEFT: HERO cleanliness + chromagram -->
+      <div class="col-left">
+        <div class="panel clean-panel">
+          <div class="panel-title">Chord Cleanliness <span class="tag">cos-sim match</span></div>
+          <div class="gauge-wrap">
+            <canvas class="gauge-canvas" id="gauge" width="420" height="420"></canvas>
+            <div class="gauge-readout">
+              <div class="gauge-val" id="clean-val">96<span class="pct">%</span></div>
+              <div class="gauge-status" id="clean-status">Clean</div>
+              <div class="gauge-sub" id="clean-target">target · G major</div>
+            </div>
+          </div>
+          <div class="breakdown">
+            <div class="target-notes" id="target-notes">
+              <div class="note-tok present" data-pc="7"><span>G</span><span class="nm">G3</span><span class="mark">✓</span></div>
+              <div class="note-tok present" data-pc="11"><span>B</span><span class="nm">B3</span><span class="mark">✓</span></div>
+              <div class="note-tok present" data-pc="2"><span>D</span><span class="nm">D4</span><span class="mark">✓</span></div>
+            </div>
+            <div class="coach good" id="coach">All three voices present and balanced. Hold it steady.</div>
+          </div>
+        </div>
+
+        <div class="panel chroma-panel">
+          <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
+          <div class="chroma-wrap" id="chroma"></div>
+        </div>
+      </div>
+
+      <!-- CENTER: highway + current chord + lyrics -->
+      <div class="col-center">
+        <div class="panel highway-panel">
+          <div class="now-tag">— NOW —</div>
+          <div class="highway-canvas-wrap">
+            <canvas class="highway-canvas" id="highway"></canvas>
+            <div class="current-chord">
+              <div class="big" id="cur-chord">G</div>
+              <div class="lbl">Playing</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel lyrics-panel">
+          <div class="panel-title">Lyrics <span class="tag">verse 1</span></div>
+          <div class="lyric-line now" id="lyric-now">
+            <span class="chord-cue">G</span><span class="syll">Can't</span>
+            <span class="syll">you</span>
+            <span class="syll lit">see</span>
+            <span class="syll">that</span>
+            <span class="chord-cue">C</span><span class="syll">it's</span>
+            <span class="syll">just</span>
+            <span class="syll">rain</span><span class="syll">ing</span>
+          </div>
+          <div class="lyric-line next">
+            <span class="chord-cue">D</span>there ain't no need to <span class="chord-cue">Em</span>go outside
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: fingering + spectrum metrics -->
+      <div class="col-right">
+        <div class="panel finger-panel">
+          <div class="panel-title">Fingering <span class="tag">baritone</span></div>
+          <div class="finger-name">G</div>
+          <div class="finger-tuning">tuning · D G B E</div>
+          <svg class="fret-svg" viewBox="0 0 160 196" aria-label="G chord fingering">
+            <defs>
+              <filter id="fg" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+            </defs>
+            <text x="20" y="34" fill="#19e3c4" font-family="JetBrains Mono" font-size="10" text-anchor="middle">1</text>
+            <!-- nut -->
+            <rect x="28" y="24" width="104" height="4" rx="2" fill="#19e3c4" opacity=".9" filter="url(#fg)"/>
+            <!-- frets -->
+            <g stroke="#19e3c4" stroke-width="1.6" opacity=".55">
+              <line x1="28" y1="64" x2="132" y2="64"/>
+              <line x1="28" y1="104" x2="132" y2="104"/>
+              <line x1="28" y1="144" x2="132" y2="144"/>
+              <line x1="28" y1="184" x2="132" y2="184"/>
+            </g>
+            <!-- strings D G B E -->
+            <g stroke="#19e3c4" stroke-width="1.6" opacity=".75" filter="url(#fg)">
+              <line x1="28" y1="24" x2="28" y2="184"/>
+              <line x1="62.6" y1="24" x2="62.6" y2="184"/>
+              <line x1="97.3" y1="24" x2="97.3" y2="184"/>
+              <line x1="132" y1="24" x2="132" y2="184"/>
+            </g>
+            <!-- G major shape on baritone (DGBE): D open, G open, B fret2, E fret3 -->
+            <!-- open string markers (D, G) -->
+            <circle cx="28" cy="16" r="5" fill="none" stroke="#19e3c4" stroke-width="1.6" filter="url(#fg)"/>
+            <circle cx="62.6" cy="16" r="5" fill="none" stroke="#19e3c4" stroke-width="1.6" filter="url(#fg)"/>
+            <!-- fretted: B string fret2 (finger 1), E string fret3 (finger 2) -->
+            <circle cx="97.3" cy="84" r="9" fill="#f5c451" filter="url(#fg)"/>
+            <circle cx="132" cy="124" r="9" fill="#f5c451" filter="url(#fg)"/>
+            <g fill="#0a0f12" font-family="Chakra Petch" font-size="11" font-weight="700" text-anchor="middle">
+              <text x="97.3" y="88">1</text>
+              <text x="132" y="128">2</text>
+            </g>
+          </svg>
+          <div class="string-lbls"><span>D</span><span>G</span><span>B</span><span>E</span></div>
+        </div>
+
+        <div class="panel metrics-panel">
+          <div class="panel-title">Analyzer <span class="tag">live</span></div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">In-tune</span><span class="v" id="m-intune">97.4%</span></div>
+            <div class="mbar"><div class="mf" id="mf-intune" style="width:97%"></div></div>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">Onset crispness</span><span class="v gold-v" id="m-onset" style="color:var(--gold)">88%</span></div>
+            <div class="mbar"><div class="mf gold" id="mf-onset" style="width:88%"></div></div>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">Detected peaks</span><span class="v" id="m-peakcount">3</span></div>
+          </div>
+          <div class="peaks-list" id="peaks-list">
+            <div class="peak-row"><span class="dot t"></span><span class="pn">G3</span><span>fundamental</span><span class="pf">196 Hz</span></div>
+            <div class="peak-row"><span class="dot t"></span><span class="pn">B3</span><span>fundamental</span><span class="pf">247 Hz</span></div>
+            <div class="peak-row"><span class="dot t"></span><span class="pn">D4</span><span>fundamental</span><span class="pf">294 Hz</span></div>
+            <div class="peak-row"><span class="dot h"></span><span class="pn">G4</span><span>2nd harmonic</span><span class="pf">392 Hz</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HERO 2: FFT spectrum, full width bottom -->
+      <div class="fft-row">
+        <div class="panel fft-panel">
+          <div class="panel-title">Live FFT Spectrum <span class="tag" id="fft-tag">44.1 kHz · 4096-pt · log axis · 80 Hz – 2 kHz</span></div>
+          <div class="fft-canvas-wrap">
+            <canvas class="fft-canvas" id="fft"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grain"></div>
+  <div class="vignette"></div>
+  <div class="mock-label">MOCKUP — ukejam / Warm Neon Lab</div>
+
+  <script>
+  (function(){
+    "use strict";
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // ---------- color helpers ----------
+    const TEAL = [25,227,196], GOLD = [245,196,81], AMBER=[255,157,77];
+    const rgba = (c,a)=>`rgba(${c[0]},${c[1]},${c[2]},${a})`;
+    const lerp = (a,b,t)=>a+(b-a)*t;
+    const lerpC = (a,b,t)=>[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];
+    const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+
+    // ---------- shared performance state ----------
+    // The whole UI is driven by a single fake "performance clock".
+    const PCS = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    // note name -> frequency for octaves we care about
+    function noteFreq(midi){ return 440 * Math.pow(2,(midi-69)/12); }
+    // build a note from pitch-class + octave
+    function mk(pc, oct){ const midi = (oct+1)*12 + pc; return { pc, name: PCS[pc]+oct, midi, f: noteFreq(midi) }; }
+
+    // Chord library: pitch classes + voiced fundamentals (baritone-ish range)
+    const CHORDS = {
+      'G':  { name:'G major',  pcs:[7,11,2],  voices:[mk(7,3),mk(11,3),mk(2,4)] },
+      'C':  { name:'C major',  pcs:[0,4,7],   voices:[mk(0,3),mk(4,3),mk(7,3),mk(0,4)] },
+      'D':  { name:'D major',  pcs:[2,6,9],   voices:[mk(2,3),mk(6,3),mk(9,3),mk(2,4)] },
+      'Em': { name:'E minor',  pcs:[4,7,11],  voices:[mk(4,3),mk(7,3),mk(11,3),mk(4,4)] },
+      'Am': { name:'A minor',  pcs:[9,0,4],   voices:[mk(9,2),mk(0,3),mk(4,3),mk(9,3)] },
+      'D7': { name:'D7',       pcs:[2,6,9,0], voices:[mk(2,3),mk(6,3),mk(9,3),mk(0,4)] },
+    };
+    // song progression (fake)
+    const PROG = ['G','C','G','D','Em','C','D7','G'];
+    let progIdx = 0;
+    let curKey = 'G';
+
+    // per-chord performance "scenario": occasionally introduces a missing/extra note
+    let scenario = makeScenario('G');
+    function makeScenario(key){
+      const ch = CHORDS[key];
+      // sometimes a string is muted/missing, sometimes an extra note rings
+      const r = Math.random();
+      let missing = null, extra = null;
+      if (r < 0.28){ // a note is weak/missing -> drives down cleanliness
+        missing = ch.pcs[Math.floor(Math.random()*ch.pcs.length)];
+      } else if (r < 0.42){ // an extra note rings
+        // pick a pitch class not in chord
+        let cand; do { cand = Math.floor(Math.random()*12); } while(ch.pcs.includes(cand));
+        extra = cand;
+      }
+      return { key, missing, extra,
+        // cleanliness target value: clean ~0.94-0.99, missing ~0.62-0.78, extra ~0.74-0.86
+        targetClean: missing!=null ? (0.62+Math.random()*0.16)
+                    : extra!=null ? (0.74+Math.random()*0.12)
+                    : (0.93+Math.random()*0.06)
+      };
+    }
+
+    // smoothly drifting cleanliness toward target, then re-target as player "corrects"
+    let cleanVal = 0.78;        // current displayed (0..1)
+    let cleanTarget = scenario.targetClean;
+    let correctTimer = 0;
+
+    // ---------- DOM refs ----------
+    const $ = s=>document.querySelector(s);
+    const gaugeC = $('#gauge'), gx = gaugeC.getContext('2d');
+    const fftC = $('#fft'), fx = fftC.getContext('2d');
+    const hwC = $('#highway'), hx = hwC.getContext('2d');
+    const cleanValEl = $('#clean-val'), cleanStatusEl = $('#clean-status'), cleanTargetEl = $('#clean-target');
+    const coachEl = $('#coach'), targetNotesEl = $('#target-notes');
+    const curChordEl = $('#cur-chord'), fingerNameEl = document.querySelector('.finger-name');
+    const chromaEl = $('#chroma');
+    const peaksListEl = $('#peaks-list'), peakCountEl = $('#m-peakcount');
+    const intuneEl = $('#m-intune'), mfIntune = $('#mf-intune');
+    const onsetEl = $('#m-onset'), mfOnset = $('#mf-onset');
+    const progFill = $('#prog-fill');
+
+    // ---------- chromagram build ----------
+    const chromaBins = [];
+    for (let i=0;i<12;i++){
+      const bin = document.createElement('div'); bin.className='chroma-bin';
+      const bar = document.createElement('div'); bar.className='chroma-bar';
+      const lbl = document.createElement('div'); lbl.className='chroma-lbl'; lbl.textContent = PCS[i];
+      bin.appendChild(bar); bin.appendChild(lbl);
+      chromaEl.appendChild(bin);
+      chromaBins.push({bin,bar,lbl, val:0});
+    }
+    const chromaVals = new Array(12).fill(0);
+
+    // ---------- HiDPI canvas sizing ----------
+    function fitCanvas(c){
+      const dpr = Math.min(window.devicePixelRatio||1, 2);
+      const r = c.getBoundingClientRect();
+      c.width = Math.max(2,Math.round(r.width*dpr));
+      c.height = Math.max(2,Math.round(r.height*dpr));
+      const ctx = c.getContext('2d');
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      return { w:r.width, h:r.height };
+    }
+    let fftDim = fitCanvas(fftC), hwDim = fitCanvas(hwC);
+    // gauge canvas has fixed backing size via attributes; draw in CSS px coords scaled
+    function fitGauge(){
+      const dpr = Math.min(window.devicePixelRatio||1, 2);
+      const r = gaugeC.getBoundingClientRect();
+      gaugeC.width = Math.round(r.width*dpr); gaugeC.height = Math.round(r.height*dpr);
+      gx.setTransform(dpr,0,0,dpr,0,0);
+      return { w:r.width, h:r.height };
+    }
+    let gDim = fitGauge();
+    window.addEventListener('resize', ()=>{ fftDim=fitCanvas(fftC); hwDim=fitCanvas(hwC); gDim=fitGauge(); });
+
+    // ============================================================
+    // FFT SPECTRUM (fake but plausible)
+    // ============================================================
+    const FMIN=80, FMAX=2000;
+    const logF = f => Math.log(f/FMIN)/Math.log(FMAX/FMIN); // 0..1 across axis
+    const NBINS = 220;
+    // bin center freqs (log spaced)
+    const binF = [];
+    for(let i=0;i<NBINS;i++){ binF.push(FMIN*Math.pow(FMAX/FMIN, i/(NBINS-1))); }
+    const spec = new Float32Array(NBINS);   // displayed (smoothed)
+    const specTarget = new Float32Array(NBINS);
+
+    // noise floor field that wanders for liveliness
+    const floorPhase = new Float32Array(NBINS).map(()=>Math.random()*Math.PI*2);
+
+    // build target spectrum from current chord voices + harmonics + missing/extra
+    function buildSpectrum(t){
+      specTarget.fill(0);
+      const ch = CHORDS[curKey];
+      const partials = [];
+      // chord voices -> fundamentals + harmonics
+      ch.voices.forEach((v,vi)=>{
+        const isMissing = scenario.missing!=null && v.pc===scenario.missing;
+        const baseAmp = isMissing ? 0.10 : (0.78 - vi*0.05);
+        for(let h=1;h<=5;h++){
+          const f = v.f*h;
+          if(f<FMIN||f>FMAX) continue;
+          // harmonic rolloff + slight chord-strum amplitude wobble
+          const amp = baseAmp * Math.pow(0.55, h-1) * (0.85+0.15*Math.sin(t*0.0017+vi*1.3+h));
+          partials.push({f, a:isMissing?amp*0.5:amp, gold:!isMissing});
+        }
+      });
+      // extra ringing note (not in chord) -> show as teal (not target) but present
+      if(scenario.extra!=null){
+        const ef = noteFreq(50+scenario.extra); // around octave 3
+        for(let h=1;h<=3;h++){ const f=ef*h; if(f>=FMIN&&f<=FMAX) partials.push({f,a:0.42*Math.pow(0.5,h-1)*(0.7+0.3*Math.sin(t*0.002+h)),gold:false}); }
+      }
+      // splat each partial as a narrow peak into bins
+      partials.forEach(p=>{
+        const center = logF(p.f);
+        const width = 0.012; // in normalized axis units
+        for(let i=0;i<NBINS;i++){
+          const x = i/(NBINS-1);
+          const d = (x-center)/width;
+          const g = Math.exp(-d*d);
+          if(g>0.004){
+            specTarget[i] = Math.max(specTarget[i], p.a*g);
+            // track whether bin is dominated by a gold (target) partial
+          }
+        }
+      });
+      // broadband noise floor + body resonance bump
+      for(let i=0;i<NBINS;i++){
+        const x=i/(NBINS-1);
+        const body = 0.10*Math.exp(-Math.pow((x-0.18)/0.16,2)); // soundboard resonance ~120Hz region
+        const noise = 0.02 + 0.018*(0.5+0.5*Math.sin(t*0.004+floorPhase[i]));
+        specTarget[i] = clamp(specTarget[i] + body*0.5 + noise, 0, 1);
+      }
+    }
+
+    // which bins are "target" (gold) — recomputed from chord voice fundamentals & harmonics
+    function isGoldBin(i){
+      const x = binF[i];
+      const ch = CHORDS[curKey];
+      for(const v of ch.voices){
+        if(scenario.missing!=null && v.pc===scenario.missing) continue;
+        for(let h=1;h<=3;h++){
+          const f=v.f*h; if(Math.abs(Math.log(x/f))<0.018) return true;
+        }
+      }
+      return false;
+    }
+    const goldBins = new Uint8Array(NBINS);
+    function recomputeGold(){ for(let i=0;i<NBINS;i++) goldBins[i]=isGoldBin(i)?1:0; }
+
+    // labeled peaks (computed each chord change) for FFT annotations
+    let fftLabels = [];
+    function computeLabels(){
+      const ch = CHORDS[curKey];
+      fftLabels = ch.voices.slice(0,3).map(v=>({ f:v.f, name:v.name, gold: !(scenario.missing!=null&&v.pc===scenario.missing) }));
+    }
+
+    function drawFFT(t){
+      const {w,h}=fftDim; const padL=4, padR=4, padB=18, padT=6;
+      const plotW = w-padL-padR, plotH = h-padT-padB;
+      fx.clearRect(0,0,w,h);
+
+      // axis baseline
+      fx.strokeStyle = rgba(TEAL,0.14); fx.lineWidth=1;
+      fx.beginPath(); fx.moveTo(padL, h-padB); fx.lineTo(w-padR, h-padB); fx.stroke();
+
+      // frequency gridlines + labels (log)
+      const ticks=[80,120,196,247,294,440,659,1000,1500,2000];
+      fx.font='10px "JetBrains Mono", monospace'; fx.textAlign='center';
+      ticks.forEach(fr=>{
+        const x = padL + logF(fr)*plotW;
+        fx.strokeStyle=rgba(TEAL,0.06); fx.beginPath(); fx.moveTo(x,padT); fx.lineTo(x,h-padB); fx.stroke();
+        fx.fillStyle=rgba(TEAL,0.4);
+        fx.fillText(fr>=1000?(fr/1000)+'k':fr, x, h-5);
+      });
+
+      // smooth spec toward target
+      for(let i=0;i<NBINS;i++){ spec[i] += (specTarget[i]-spec[i])*0.18; }
+
+      // build the curve as filled bars/area
+      const barW = plotW/NBINS;
+      // area fill under curve
+      fx.beginPath();
+      fx.moveTo(padL, h-padB);
+      for(let i=0;i<NBINS;i++){
+        const x=padL+i*barW+barW/2;
+        const y=(h-padB)-spec[i]*plotH;
+        fx.lineTo(x,y);
+      }
+      fx.lineTo(w-padR, h-padB); fx.closePath();
+      const grad = fx.createLinearGradient(0,padT,0,h-padB);
+      grad.addColorStop(0, rgba(TEAL,0.22)); grad.addColorStop(1, rgba(TEAL,0.02));
+      fx.fillStyle=grad; fx.fill();
+
+      // glowing line, segment color teal/gold
+      fx.lineWidth=1.6; fx.lineJoin='round';
+      for(let i=0;i<NBINS-1;i++){
+        const x1=padL+i*barW+barW/2, y1=(h-padB)-spec[i]*plotH;
+        const x2=padL+(i+1)*barW+barW/2, y2=(h-padB)-spec[i+1]*plotH;
+        const gold = goldBins[i]||goldBins[i+1];
+        const tall = spec[i]>0.22||spec[i+1]>0.22;
+        fx.strokeStyle = gold? rgba(GOLD, tall?0.95:0.6) : rgba(TEAL, tall?0.9:0.5);
+        fx.shadowColor = gold? rgba(GOLD,0.9): rgba(TEAL,0.8);
+        fx.shadowBlur = (gold? 10:7)*(tall?1.4:0.7);
+        fx.beginPath(); fx.moveTo(x1,y1); fx.lineTo(x2,y2); fx.stroke();
+      }
+      fx.shadowBlur=0;
+
+      // peak markers / note labels
+      fx.textAlign='center';
+      fftLabels.forEach(l=>{
+        const x=padL+logF(l.f)*plotW;
+        // find local height
+        let bi=0,best=1e9; for(let i=0;i<NBINS;i++){const d=Math.abs(binF[i]-l.f); if(d<best){best=d;bi=i;}}
+        const y=(h-padB)-spec[bi]*plotH;
+        const col = l.gold?GOLD:TEAL;
+        // marker dot
+        fx.fillStyle=rgba(col,1); fx.shadowColor=rgba(col,0.9); fx.shadowBlur=10;
+        fx.beginPath(); fx.arc(x,y,3,0,Math.PI*2); fx.fill(); fx.shadowBlur=0;
+        // label
+        fx.fillStyle=rgba(col,0.95);
+        fx.font='600 11px "JetBrains Mono", monospace';
+        fx.fillText(l.name+' '+Math.round(l.f)+'Hz', x, Math.max(padT+11,y-9));
+      });
+    }
+
+    // ============================================================
+    // CLEANLINESS GAUGE (radial arc)
+    // ============================================================
+    const A0 = Math.PI*0.75, A1 = Math.PI*2.25; // 270deg sweep from lower-left
+    function drawGauge(t){
+      const {w,h}=gDim; const cx=w/2, cy=h/2, R=Math.min(w,h)*0.40;
+      gx.clearRect(0,0,w,h);
+
+      // value color: teal when clean, toward gold/amber when not
+      const v = cleanVal;
+      const colT = v>0.88? 0 : v>0.7? lerp(0,1,(0.88-v)/0.18) : 1;
+      const col = lerpC(TEAL, GOLD, colT);
+      const colDanger = v<0.7? lerpC(GOLD, AMBER, clamp((0.7-v)/0.2,0,1)) : col;
+      const arcCol = v<0.7? colDanger : col;
+
+      // tick ring (instrument feel)
+      gx.save();
+      for(let i=0;i<=40;i++){
+        const a = A0 + (A1-A0)*(i/40);
+        const major = i%5===0;
+        const r1 = R+10, r2 = R+(major?20:15);
+        gx.strokeStyle = rgba(TEAL, major?0.32:0.14); gx.lineWidth=major?1.4:1;
+        gx.beginPath();
+        gx.moveTo(cx+Math.cos(a)*r1, cy+Math.sin(a)*r1);
+        gx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2);
+        gx.stroke();
+      }
+      gx.restore();
+
+      // background track
+      gx.lineCap='round';
+      gx.strokeStyle=rgba(TEAL,0.10); gx.lineWidth=11;
+      gx.beginPath(); gx.arc(cx,cy,R,A0,A1); gx.stroke();
+
+      // value arc with glow
+      const a = A0 + (A1-A0)*clamp(v,0,1);
+      gx.shadowColor=rgba(arcCol,0.85); gx.shadowBlur=22;
+      gx.strokeStyle=rgba(arcCol,0.95); gx.lineWidth=11;
+      gx.beginPath(); gx.arc(cx,cy,R,A0,a); gx.stroke();
+      gx.shadowBlur=0;
+
+      // moving tip dot
+      const tx=cx+Math.cos(a)*R, ty=cy+Math.sin(a)*R;
+      gx.fillStyle='#fff'; gx.shadowColor=rgba(arcCol,1); gx.shadowBlur=16;
+      gx.beginPath(); gx.arc(tx,ty,5,0,Math.PI*2); gx.fill(); gx.shadowBlur=0;
+
+      // subtle inner threshold mark at 90%
+      const ah=A0+(A1-A0)*0.90;
+      gx.strokeStyle=rgba(GOLD,0.45); gx.lineWidth=1.5;
+      gx.beginPath();
+      gx.moveTo(cx+Math.cos(ah)*(R-8), cy+Math.sin(ah)*(R-8));
+      gx.lineTo(cx+Math.cos(ah)*(R+6), cy+Math.sin(ah)*(R+6));
+      gx.stroke();
+
+      // push color into the HTML readout
+      cleanValEl.style.color = rgba(arcCol,1);
+      cleanValEl.style.textShadow = `0 0 18px ${rgba(arcCol,0.7)}, 0 0 40px ${rgba(arcCol,0.3)}`;
+      cleanStatusEl.style.color = rgba(arcCol,1);
+      cleanStatusEl.style.textShadow = `0 0 10px ${rgba(arcCol,0.6)}`;
+    }
+
+    // ============================================================
+    // HIGHWAY (chord tokens sliding toward NOW line)
+    // ============================================================
+    // tokens carry chord + position (0 at NOW line, grows upward as further away)
+    let hwTokens = [];
+    function seedHighway(){
+      hwTokens = [];
+      // upcoming chords from progression (a few ahead), starting at NOW
+      for(let i=0;i<5;i++){
+        const key = PROG[(progIdx+i)%PROG.length];
+        hwTokens.push({ key, pos:i, } ); // pos in "beats" from now
+      }
+    }
+    seedHighway();
+    let beatPhase=0; // 0..1 within current beat
+
+    function drawHighway(t, dBeat){
+      const {w,h}=hwDim; hx.clearRect(0,0,w,h);
+      const nowY = h*0.66;          // NOW line position
+      const topY = h*0.06;
+      const cxc = w/2;
+
+      // track: thin neon vertical line + subtle perspective converging guides
+      hx.strokeStyle=rgba(TEAL,0.18); hx.lineWidth=1;
+      // central guide
+      hx.beginPath(); hx.moveTo(cxc, topY); hx.lineTo(cxc, nowY); hx.stroke();
+      // side rails fanning toward NOW
+      const railTop = w*0.10, railBot = w*0.34;
+      [-1,1].forEach(s=>{
+        hx.strokeStyle=rgba(TEAL,0.12);
+        hx.beginPath();
+        hx.moveTo(cxc+s*railTop, topY);
+        hx.lineTo(cxc+s*railBot, nowY);
+        hx.stroke();
+      });
+      // faint beat tick lines moving down
+      hx.strokeStyle=rgba(TEAL,0.05);
+      for(let b=0;b<6;b++){
+        const fb = b - beatPhase;
+        const yy = nowY - (fb/4.8)*(nowY-topY);
+        if(yy<topY||yy>nowY) continue;
+        hx.beginPath(); hx.moveTo(cxc-railBot*0.9, yy); hx.lineTo(cxc+railBot*0.9, yy); hx.globalAlpha=0.5*(1-(yy-topY)/(nowY-topY)+0.2); hx.stroke(); hx.globalAlpha=1;
+      }
+
+      // NOW line (gold, bright)
+      hx.shadowColor=rgba(GOLD,0.8); hx.shadowBlur=16;
+      hx.strokeStyle=rgba(GOLD,0.95); hx.lineWidth=2;
+      hx.beginPath(); hx.moveTo(w*0.14, nowY); hx.lineTo(w*0.86, nowY); hx.stroke();
+      hx.shadowBlur=0;
+      // NOW line end caps
+      [0.14,0.86].forEach(fx2=>{
+        hx.fillStyle=rgba(GOLD,0.9); hx.shadowColor=rgba(GOLD,0.8); hx.shadowBlur=8;
+        hx.beginPath(); hx.arc(w*fx2, nowY, 3.5, 0, Math.PI*2); hx.fill(); hx.shadowBlur=0;
+      });
+
+      // tokens
+      hwTokens.forEach((tok,i)=>{
+        const fb = tok.pos - beatPhase;            // beats from now (0 == at line)
+        if(fb<-0.6) return;
+        const prog = clamp(fb/4.6,0,1);            // 0 near, 1 far
+        const y = nowY - prog*(nowY-topY);
+        const scale = lerp(1.0, 0.42, prog);
+        const alpha = lerp(1.0, 0.22, prog);
+        const isNow = fb < 0.5;
+        const col = isNow?GOLD:TEAL;
+        const sz = 34*scale;
+        hx.save();
+        hx.globalAlpha=alpha;
+        // token capsule outline
+        const tw=46*scale, th=34*scale;
+        roundRect(hx, cxc-tw/2, y-th/2, tw, th, 9*scale);
+        hx.strokeStyle=rgba(col, isNow?0.95:0.6); hx.lineWidth=1.6*scale;
+        hx.shadowColor=rgba(col,0.8); hx.shadowBlur=isNow?16:8*scale;
+        hx.stroke();
+        hx.fillStyle=rgba(col,0.06); hx.fill();
+        hx.shadowBlur=0;
+        // chord text
+        hx.fillStyle=isNow?rgba(GOLD,1):rgba(TEAL,0.92);
+        hx.font=`700 ${sz}px "Chakra Petch", sans-serif`;
+        hx.textAlign='center'; hx.textBaseline='middle';
+        hx.shadowColor=rgba(col,0.7); hx.shadowBlur=isNow?12:6;
+        hx.fillText(tok.key, cxc, y+1);
+        hx.shadowBlur=0;
+        hx.restore();
+      });
+    }
+    function roundRect(ctx,x,y,w,h,r){
+      ctx.beginPath();
+      ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+      ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+    }
+
+    // ============================================================
+    // Chord change orchestration
+    // ============================================================
+    function setChord(key){
+      curKey = key;
+      const ch = CHORDS[key];
+      scenario = makeScenario(key);
+      cleanTarget = scenario.targetClean;
+      correctTimer = 0;
+      recomputeGold();
+      computeLabels();
+      // current chord + fingering name
+      curChordEl.textContent = key;
+      fingerNameEl.textContent = key;
+      cleanTargetEl.textContent = 'target · '+ch.name;
+      // current chord glow color reflects clean later (in tick)
+      // breakdown note tokens
+      renderBreakdown();
+      // peaks list
+      renderPeaks();
+      // chord strip active highlight
+      document.querySelectorAll('.chordstrip .chip').forEach(c=>{
+        c.classList.toggle('active', c.textContent===key);
+      });
+      // lyric chord cues (just toggle nearest)
+    }
+
+    function renderBreakdown(){
+      const ch = CHORDS[curKey];
+      targetNotesEl.innerHTML='';
+      ch.pcs.forEach((pc,idx)=>{
+        const present = !(scenario.missing!=null && pc===scenario.missing);
+        const d=document.createElement('div');
+        d.className='note-tok '+(present?'present':'missing');
+        d.dataset.pc=pc;
+        const oct = ch.voices.find(v=>v.pc===pc);
+        d.innerHTML = `<span>${PCS[pc]}</span><span class="nm">${oct?oct.name:''}</span><span class="mark">${present?'✓':'!'}</span>`;
+        targetNotesEl.appendChild(d);
+      });
+      // extra note token (flagged)
+      if(scenario.extra!=null){
+        const d=document.createElement('div');
+        d.className='note-tok missing';
+        d.innerHTML=`<span>${PCS[scenario.extra]}</span><span class="nm">extra</span><span class="mark">+</span>`;
+        targetNotesEl.appendChild(d);
+      }
+    }
+
+    const COACH_CLEAN = [
+      'All three voices present and balanced. Hold it steady.',
+      'Clean attack, even sustain. Nicely voiced.',
+      'Strong fundamentals, minimal overtone bleed. Good.',
+      'Locked in. Cosine match well above threshold.'
+    ];
+    function updateCoach(){
+      if(scenario.missing!=null){
+        const pc=scenario.missing; const v=CHORDS[curKey].voices.find(x=>x.pc===pc);
+        coachEl.classList.remove('good');
+        const strHint = {2:'string 1 (E)',7:'string 2 (B)',11:'string 3 (G)',0:'string 4 (D)'};
+        coachEl.innerHTML = `missing <b>${PCS[pc]}</b>${v?' ('+v.name+')':''} — check ${strHint[pc]||'your fretting'}, is it muted?`;
+      } else if(scenario.extra!=null){
+        coachEl.classList.remove('good');
+        coachEl.innerHTML = `extra <b>${PCS[scenario.extra]}</b> ringing — likely an open string; try light damping with your palm.`;
+      } else {
+        coachEl.classList.add('good');
+        coachEl.textContent = COACH_CLEAN[Math.floor(Math.random()*COACH_CLEAN.length)];
+      }
+    }
+
+    function renderPeaks(){
+      const ch = CHORDS[curKey];
+      peaksListEl.innerHTML='';
+      const rows=[];
+      ch.voices.slice(0,3).forEach(v=>{
+        const missing = scenario.missing!=null && v.pc===scenario.missing;
+        rows.push({cls:'t', name:v.name, role:missing?'weak / muted':'fundamental', f:v.f, dim:missing});
+      });
+      // a harmonic
+      const hv = ch.voices[0];
+      rows.push({cls:'h', name:PCS[hv.pc]+(parseInt(hv.name.slice(-1))+1), role:'2nd harmonic', f:hv.f*2});
+      if(scenario.extra!=null){
+        rows.push({cls:'h', name:PCS[scenario.extra]+'3', role:'extra — not in chord', f:noteFreq(50+scenario.extra)});
+      }
+      rows.forEach(r=>{
+        const el=document.createElement('div'); el.className='peak-row'; if(r.dim) el.style.opacity='.5';
+        el.innerHTML=`<span class="dot ${r.cls}"></span><span class="pn">${r.name}</span><span>${r.role}</span><span class="pf">${Math.round(r.f)} Hz</span>`;
+        peaksListEl.appendChild(el);
+      });
+      peakCountEl.textContent = rows.filter(r=>!r.dim).length;
+    }
+
+    // ============================================================
+    // MAIN LOOP
+    // ============================================================
+    let playing = true;
+    let bpm = 98;
+    let beatsPerChord = 4;
+    let lastT = performance.now();
+    let songPos = 0.34; // progress 0..1
+
+    setChord('G');
+
+    function tick(now){
+      const dt = Math.min(64, now-lastT); lastT=now;
+      requestAnimationFrame(tick);
+      if(!playing && !reduced){ /* still draw a frozen frame */ }
+
+      // advance beat phase
+      if(playing){
+        const beatDur = 60000/bpm; // ms per beat
+        beatPhase += dt/beatDur;
+        // tokens advance, drop arrived ones
+        while(beatPhase >= 1){
+          beatPhase -= 1;
+          // shift one beat: advance every chord (every beatsPerChord beats)
+          hwTokens.forEach(t=>t.pos -= 1);
+          // when the leading token crosses, advance chord
+          if(hwTokens.length && hwTokens[0].pos <= -1){
+            hwTokens.shift();
+            progIdx = (progIdx+1)%PROG.length;
+            const nextKey = PROG[(progIdx+4)%PROG.length];
+            hwTokens.push({ key: nextKey, pos: hwTokens.length>0? hwTokens[hwTokens.length-1].pos+1 : 4 });
+            setChord(PROG[progIdx]);
+            updateCoach();
+          }
+        }
+        // song progress drift
+        songPos += dt/ (60000/bpm * 4 * PROG.length) ; // loop over progression
+        if(songPos>1) songPos-=1;
+      }
+
+      // cleanliness drift: ease toward target with a little noise; simulate "correcting"
+      if(playing){
+        correctTimer += dt;
+        // after a moment on a dirty chord, the player "fixes" it -> retarget to clean
+        if((scenario.missing!=null||scenario.extra!=null) && correctTimer>1600 && Math.random()<0.012){
+          scenario.missing=null; scenario.extra=null;
+          cleanTarget = 0.93+Math.random()*0.06;
+          renderBreakdown(); renderPeaks(); recomputeGold(); computeLabels();
+          updateCoach();
+        }
+        // clean chords occasionally dip a touch (finger pressure)
+        if(scenario.missing==null && scenario.extra==null && Math.random()<0.006){
+          cleanTarget = 0.86+Math.random()*0.06;
+        } else if(scenario.missing==null && scenario.extra==null && cleanTarget<0.9){
+          cleanTarget = 0.93+Math.random()*0.06;
+        }
+        cleanVal += (cleanTarget-cleanVal)*0.045;
+        cleanVal += (Math.random()-0.5)*0.004; // micro jitter
+        cleanVal = clamp(cleanVal,0,0.999);
+      }
+
+      // readouts
+      const pctv = Math.round(cleanVal*100);
+      cleanValEl.innerHTML = pctv+'<span class="pct">%</span>';
+      cleanStatusEl.textContent = cleanVal>0.9? 'Clean' : cleanVal>0.78? 'Almost' : cleanVal>0.65? 'Adjust' : 'Off';
+
+      // current chord glow follows cleanliness
+      {
+        const v=cleanVal;
+        const colT = v>0.88?0: v>0.7? (0.88-v)/0.18 : 1;
+        const col = lerpC(TEAL, GOLD, clamp(colT,0,1));
+        curChordEl.style.textShadow = `0 0 16px ${rgba(col,0.9)}, 0 0 44px ${rgba(col,0.5)}, 0 0 90px ${rgba(col,0.22)}`;
+      }
+
+      // analyzer side metrics
+      const intune = clamp(0.90 + cleanVal*0.085 + Math.sin(now*0.0013)*0.01, 0, 0.999);
+      intuneEl.textContent = (intune*100).toFixed(1)+'%';
+      mfIntune.style.width = (intune*100).toFixed(0)+'%';
+      const onset = clamp(0.78 + 0.18*Math.abs(Math.sin(now*0.0006)) - (scenario.missing!=null?0.12:0), 0,0.99);
+      onsetEl.textContent = Math.round(onset*100)+'%';
+      mfOnset.style.width = Math.round(onset*100)+'%';
+
+      // progress bar
+      progFill.style.width = (12 + songPos*70).toFixed(1)+'%';
+
+      // chromagram: energy per pitch class from chord (target gold) + noise
+      {
+        const ch = CHORDS[curKey];
+        const target = new Array(12).fill(0.06);
+        ch.pcs.forEach(pc=>{ if(!(scenario.missing!=null&&pc===scenario.missing)) target[pc]=0.85; else target[pc]=0.22; });
+        if(scenario.extra!=null) target[scenario.extra]=0.5;
+        // a little energy in fifths/thirds for realism
+        for(let i=0;i<12;i++){
+          const wob = 0.06*Math.sin(now*0.003 + i*1.7);
+          chromaVals[i] += (clamp(target[i]+wob+(Math.random()-0.5)*0.03,0,1)-chromaVals[i])*0.12;
+          const b=chromaBins[i];
+          b.bar.style.height = (8 + chromaVals[i]*100*0.78)+'%';
+          const isT = ch.pcs.includes(i) && !(scenario.missing!=null&&i===scenario.missing);
+          b.bin.classList.toggle('target', isT);
+        }
+      }
+
+      // draw canvases
+      buildSpectrum(now);
+      drawFFT(now);
+      drawGauge(now);
+      drawHighway(now, dt);
+    }
+    requestAnimationFrame(tick);
+
+    // initial coach
+    updateCoach();
+
+    // ============================================================
+    // Transport controls
+    // ============================================================
+    const playBtn=$('#btn-play');
+    const playSvg='<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+    const pauseSvg='<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+    playBtn.addEventListener('click',()=>{
+      playing=!playing;
+      playBtn.innerHTML = playing?pauseSvg:playSvg;
+      playBtn.title = playing?'Pause':'Play';
+      document.querySelector('.brand .dot').style.animationPlayState = playing?'running':'paused';
+    });
+
+    $('#btn-restart').addEventListener('click',()=>{
+      progIdx=0; beatPhase=0; songPos=0; cleanVal=0.78;
+      seedHighway(); setChord(PROG[0]); updateCoach();
+      // replay entrance reveals
+      ['.topbar','.col-left','.col-center','.col-right','.fft-row'].forEach(sel=>{
+        const el=document.querySelector(sel); if(!el)return;
+        el.style.animation='none'; void el.offsetWidth; el.style.animation='';
+      });
+    });
+
+    const bpmPresets=[98,76,120,140];
+    let bpmI=0;
+    $('#btn-tempo').addEventListener('click',()=>{
+      bpmI=(bpmI+1)%bpmPresets.length; bpm=bpmPresets[bpmI];
+      $('#bpm-val').textContent=bpm;
+    });
+
+    // chord strip click -> jump
+    document.querySelectorAll('.chordstrip .chip').forEach(chip=>{
+      chip.addEventListener('click',()=>{
+        const key=chip.textContent;
+        if(!CHORDS[key])return;
+        setChord(key); updateCoach();
+        // reseed highway around this
+        const idx=PROG.indexOf(key); if(idx>=0){ progIdx=idx; beatPhase=0; seedHighway(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

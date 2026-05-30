@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local machine state (mic calibration is per-machine)
+ukejam_config.json
+
+# Recorded audio clips
+clips/
+
+# Tooling
+.playwright-mcp/
+
+# App database (local data)
+ukejam.db
+
+# Tauri app build artifacts
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/

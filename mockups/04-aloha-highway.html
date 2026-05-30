@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ukejam — Aloha Highway</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Alfa+Slab+One&family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --burnt:#c14a23;
+    --coral:#e8714c;
+    --salmon:#f29e7b;
+    --gold:#f4b643;
+    --sun:#f6d365;
+    --teal:#1f6f6b;
+    --deep-teal:#114b48;
+    --ocean:#2f8e84;
+    --cream:#f4e7cd;
+    --sand:#e9d2a8;
+    --ink:#3a2418;
+    --plum:#6b2c3e;
+    --night:#3d1f33;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+
+  body{
+    font-family:'Crimson Pro', Georgia, serif;
+    background:#2a1626;
+    color:var(--ink);
+    overflow-x:hidden;
+    min-height:100vh;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+  }
+
+  /* ---------- POSTER FRAME ---------- */
+  .poster{
+    position:relative;
+    width:min(1380px, 96vw);
+    height:min(860px, 92vh);
+    border-radius:6px;
+    overflow:hidden;
+    box-shadow:0 40px 90px -20px rgba(20,8,4,.7), 0 0 0 12px #efdcb6, 0 0 0 14px #c9a35f;
+    isolation:isolate;
+  }
+
+  /* ---------- LAYERED SUNSET BACKGROUND ---------- */
+  .sky{
+    position:absolute; inset:0;
+    background:linear-gradient(180deg,
+        #6b2c4f 0%, #9a3b4e 18%, var(--burnt) 40%,
+        var(--coral) 58%, var(--gold) 76%, var(--sun) 90%, #f6e0a0 100%);
+  }
+
+  /* slow drifting cloud bands for a calm sky */
+  .cloud{
+    position:absolute; height:18px; border-radius:50%;
+    background:rgba(244,231,205,.18); filter:blur(6px);
+    animation:cloudDrift linear infinite;
+  }
+  .cloud.c1{ top:12%; left:-20%; width:220px; animation-duration:70s; }
+  .cloud.c2{ top:20%; left:-30%; width:300px; height:24px; animation-duration:95s; animation-delay:-30s; opacity:.7; }
+  .cloud.c3{ top:8%;  left:-25%; width:160px; animation-duration:80s; animation-delay:-55s; opacity:.5; }
+  @keyframes cloudDrift{ from{ transform:translateX(0);} to{ transform:translateX(165vw);} }
+
+  /* setting sun rings */
+  .sun-rings{
+    position:absolute; left:50%; top:50%;
+    width:340px; height:340px; transform:translate(-50%,-50%);
+    pointer-events:none; z-index:1;
+  }
+  .sun-rings span{
+    position:absolute; left:50%; top:50%;
+    border:2px solid rgba(244,231,205,.35);
+    border-radius:50%; transform:translate(-50%,-50%);
+    animation:breathe 7s ease-in-out infinite;
+  }
+  .sun-rings span:nth-child(1){ width:430px;height:430px; animation-delay:0s; }
+  .sun-rings span:nth-child(2){ width:520px;height:520px; animation-delay:.6s; border-color:rgba(244,231,205,.22);}
+  .sun-rings span:nth-child(3){ width:610px;height:610px; animation-delay:1.2s; border-color:rgba(244,231,205,.14);}
+  .sun-rings span:nth-child(4){ width:700px;height:700px; animation-delay:1.8s; border-color:rgba(244,231,205,.08);}
+  @keyframes breathe{ 0%,100%{ transform:translate(-50%,-50%) scale(1); opacity:.9;} 50%{ transform:translate(-50%,-50%) scale(1.035); opacity:.55;} }
+
+  /* ocean */
+  .ocean{
+    position:absolute; left:0; right:0; bottom:0; height:22%;
+    background:linear-gradient(180deg, var(--ocean) 0%, var(--teal) 55%, var(--deep-teal) 100%);
+  }
+  .ocean::before,.ocean::after{
+    content:""; position:absolute; left:0; right:0; height:5px;
+    background:rgba(244,231,205,.28);
+  }
+  .ocean::before{ top:18%; } .ocean::after{ top:34%; opacity:.6; }
+  .ocean-shimmer{
+    position:absolute; left:50%; bottom:0; width:300px; height:22%;
+    transform:translateX(-50%);
+    background:repeating-linear-gradient(180deg, rgba(246,211,101,0) 0 10px, rgba(246,211,101,.26) 10px 14px);
+    mix-blend-mode:screen; pointer-events:none;
+  }
+
+  /* distant island silhouette */
+  .island{
+    position:absolute; right:8%; bottom:22%;
+    width:0;height:0;
+    border-left:80px solid transparent; border-right:110px solid transparent;
+    border-bottom:108px solid var(--night); opacity:.6;
+  }
+
+  /* PALM SILHOUETTES */
+  .palm{ position:absolute; bottom:22%; transform-origin:bottom center; z-index:2;}
+  .palm .trunk{
+    position:absolute; bottom:0; left:50%;
+    width:14px; height:300px;
+    background:linear-gradient(90deg, #1c0f16, #2e1922);
+    border-radius:8px 8px 0 0;
+    transform:translateX(-50%) rotate(var(--lean,-6deg));
+    transform-origin:bottom center;
+  }
+  .frond{
+    position:absolute; width:170px; height:46px;
+    background:var(--night); border-radius:0 100% 0 100%/0 100% 0 100%;
+    transform-origin:0% 100%; animation:sway 6s ease-in-out infinite;
+  }
+  @keyframes sway{ 0%,100%{ transform:rotate(var(--r)) translateY(0);} 50%{ transform:rotate(calc(var(--r) + 2.5deg)) translateY(-2px);} }
+  .palm-left{ left:4%; }
+  .palm-left .crown{ position:absolute; bottom:288px; left:calc(50% - 16px); }
+  .palm-right{ right:5%; bottom:22%; transform:scale(.78); }
+  .crown .frond:nth-child(1){ --r:18deg;  animation-delay:0s; }
+  .crown .frond:nth-child(2){ --r:50deg;  animation-delay:.4s; }
+  .crown .frond:nth-child(3){ --r:90deg;  animation-delay:.8s; }
+  .crown .frond:nth-child(4){ --r:130deg; animation-delay:1.2s; transform-origin:100% 100%; border-radius:100% 0 100% 0/100% 0 100% 0;}
+  .crown .frond:nth-child(5){ --r:162deg; animation-delay:1.6s; transform-origin:100% 100%; border-radius:100% 0 100% 0/100% 0 100% 0;}
+
+  /* foreground leaves */
+  .leaf{
+    position:absolute; bottom:-30px; width:240px;height:300px;
+    background:var(--night); opacity:.85; z-index:2;
+    clip-path:polygon(50% 0,62% 18%,58% 30%,72% 40%,64% 52%,78% 62%,66% 74%,80% 84%,50% 100%,20% 84%,34% 74%,22% 62%,36% 52%,28% 40%,42% 30%,38% 18%);
+  }
+  .leaf-l{ left:-60px; transform:rotate(-16deg); }
+  .leaf-r{ right:-70px; transform:rotate(14deg) scaleX(-1); }
+
+  /* ---------- TEXTURE OVERLAYS ---------- */
+  .halftone{
+    position:absolute; inset:0; pointer-events:none; z-index:40;
+    background-image:radial-gradient(rgba(60,30,20,.5) 1px, transparent 1.4px);
+    background-size:5px 5px; mix-blend-mode:multiply; opacity:.12;
+  }
+  .grain{
+    position:absolute; inset:0; pointer-events:none; z-index:41;
+    opacity:.16; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .vignette{
+    position:absolute; inset:0; pointer-events:none; z-index:42;
+    box-shadow:inset 0 0 160px 30px rgba(40,12,28,.45);
+  }
+
+  /* ---------- CONTENT GRID ---------- */
+  .stage{
+    position:absolute; inset:0; z-index:20;
+    display:grid;
+    grid-template-columns:288px 1fr 288px;
+    grid-template-rows:auto 1fr auto;
+    gap:14px;
+    padding:26px 32px 22px;
+  }
+
+  /* staggered reveal */
+  .reveal{ opacity:0; transform:translateY(14px); animation:rise .8s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes rise{ to{ opacity:1; transform:none; } }
+  .d1{ animation-delay:.05s;} .d2{ animation-delay:.18s;} .d3{ animation-delay:.32s;}
+  .d4{ animation-delay:.46s;} .d5{ animation-delay:.6s;} .d6{ animation-delay:.74s;} .d7{ animation-delay:.88s;}
+
+  /* ---------- TOP BAR ---------- */
+  .topbar{
+    grid-column:1 / -1;
+    display:flex; align-items:center; justify-content:space-between; gap:20px;
+  }
+  .titleblock{ text-shadow:2px 2px 0 rgba(61,31,51,.35); }
+  .kicker{
+    font-family:'Bebas Neue', sans-serif; letter-spacing:.42em; font-size:14px;
+    color:var(--cream); text-transform:uppercase; opacity:.92;
+    margin-bottom:-2px; padding-left:4px;
+  }
+  .song-title{
+    font-family:'Pacifico', cursive; font-size:44px; line-height:.95; color:var(--cream);
+    text-shadow:2px 2px 0 var(--burnt), -1.5px -1px 0 rgba(47,142,132,.55);
+  }
+  .byline{
+    font-family:'Bebas Neue', sans-serif; letter-spacing:.22em; font-size:16px;
+    color:var(--sand); padding-left:6px; margin-top:2px;
+  }
+  /* chord-list chip strip */
+  .chordlist{ display:flex; align-items:center; gap:7px; margin-top:8px; padding-left:4px; }
+  .chordlist .lbl{ font-family:'Bebas Neue',sans-serif; letter-spacing:.18em; font-size:11px; color:var(--sand); margin-right:2px; }
+  .chip{
+    font-family:'Alfa Slab One',serif; font-size:14px; color:var(--ink);
+    background:var(--cream); border:2px solid var(--ink); border-radius:5px;
+    padding:2px 8px; box-shadow:2px 2px 0 rgba(61,31,51,.3);
+  }
+
+  /* progress — vintage ruler/filmstrip */
+  .progress-wrap{ min-width:320px; text-align:right; }
+  .progress-meta{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.18em;
+    color:var(--cream); font-size:14px; margin-bottom:6px;
+  }
+  .progress-rail{
+    position:relative; height:18px;
+    background:repeating-linear-gradient(90deg, var(--cream) 0 14px, var(--sand) 14px 16px);
+    border:2px solid var(--ink); border-radius:3px;
+    box-shadow:2px 2px 0 rgba(61,31,51,.4); overflow:hidden;
+  }
+  .progress-fill{
+    position:absolute; top:0; bottom:0; left:0; width:34%;
+    background:linear-gradient(90deg, var(--burnt), var(--coral));
+    mix-blend-mode:multiply; transition:width .4s ease;
+  }
+  .progress-knob{
+    position:absolute; top:50%; left:34%;
+    width:22px;height:22px; transform:translate(-50%,-50%);
+    background:var(--gold); border:2px solid var(--ink); border-radius:50%;
+    box-shadow:1px 1px 0 rgba(61,31,51,.5); transition:left .4s ease;
+  }
+
+  /* ---------- LEFT: FINGERING CARD + TUNE BADGE ---------- */
+  .left{ display:flex; flex-direction:column; gap:14px; align-items:stretch; }
+  .card{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.06)),
+      repeating-linear-gradient(92deg, #d9a55c 0 7px, #cf9a50 7px 9px, #d9a55c 9px 17px),
+      var(--sand);
+    border:3px solid var(--ink); border-radius:8px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.45), inset 0 0 0 6px rgba(244,231,205,.55);
+    padding:14px 16px 12px; color:var(--ink); position:relative;
+  }
+  .card-label{
+    font-family:'Bebas Neue', sans-serif; letter-spacing:.24em; font-size:14px;
+    text-align:center; color:var(--burnt);
+    border-bottom:2px dotted var(--burnt); padding-bottom:5px; margin-bottom:8px;
+  }
+  .fingering{ display:flex; flex-direction:column; align-items:center; }
+  .chord-name-big{
+    font-family:'Alfa Slab One', serif; font-size:28px; color:var(--burnt);
+    text-align:center; line-height:1; margin-bottom:6px;
+  }
+  .chord-name-big small{ font-size:13px; color:var(--ink); font-family:'Bebas Neue',sans-serif; letter-spacing:.1em;}
+  svg .fret{ stroke:var(--ink); stroke-width:2; }
+  svg .nut{ stroke:var(--ink); stroke-width:6; }
+  svg .string{ stroke:var(--ink); stroke-width:2; }
+  .dot{ fill:var(--burnt); stroke:var(--ink); stroke-width:1.5; }
+  .dot-num{ fill:var(--cream); font-family:'Bebas Neue',sans-serif; font-size:13px; text-anchor:middle; }
+  .open-mark{ fill:none; stroke:var(--teal); stroke-width:2.4; }
+  .mute-mark{ stroke:var(--plum); stroke-width:2.4; }
+  .string-name{ fill:var(--ink); font-family:'Bebas Neue',sans-serif; font-size:13px; text-anchor:middle; }
+  .tuning-note{
+    font-family:'Crimson Pro',serif; font-style:italic; font-size:13px;
+    color:var(--deep-teal); text-align:center; margin-top:6px;
+  }
+
+  /* accuracy / in-tune badge */
+  .badge-tune{
+    background:var(--deep-teal); border:3px solid var(--ink); border-radius:8px;
+    box-shadow:4px 5px 0 rgba(61,31,51,.45);
+    padding:12px 14px; color:var(--cream);
+    display:flex; align-items:center; gap:12px;
+  }
+  .tune-ring{
+    width:54px;height:54px;border-radius:50%;
+    background:conic-gradient(var(--gold) 0 92%, rgba(244,231,205,.22) 92% 100%);
+    display:grid; place-items:center; flex:0 0 auto; border:2px solid var(--cream);
+  }
+  .tune-ring b{
+    width:40px;height:40px;border-radius:50%;
+    background:var(--deep-teal); display:grid; place-items:center;
+    font-family:'Alfa Slab One',serif; font-size:14px; color:var(--gold);
+  }
+  .tune-txt b{ font-family:'Bebas Neue',sans-serif; letter-spacing:.16em; font-size:18px; display:block; color:var(--sun);}
+  .tune-txt span{ font-style:italic; font-size:13px; opacity:.85; }
+
+  /* gentle coaching feedback (left column, calm) */
+  .feedback{
+    border:3px solid var(--ink); border-radius:8px;
+    box-shadow:4px 5px 0 rgba(61,31,51,.45);
+    padding:13px 15px; position:relative; overflow:hidden;
+  }
+  .feedback .fb-tag{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.22em; font-size:12px;
+    display:inline-block; margin-bottom:5px;
+  }
+  .fb-good{ background:var(--ocean); color:var(--cream); }
+  .fb-good .fb-tag{ color:var(--sun); }
+  .fb-good .fb-msg{ font-family:'Pacifico',cursive; font-size:24px; line-height:1; text-shadow:1.5px 1.5px 0 var(--deep-teal);}
+  .fb-good .fb-sub{ font-style:italic; font-size:13px; opacity:.9; margin-top:4px; }
+  .fb-coach{ background:var(--cream); color:var(--ink); }
+  .fb-coach .fb-tag{ color:var(--burnt); }
+  .fb-coach .fb-msg{ font-family:'Crimson Pro',serif; font-weight:600; font-size:17px; color:var(--burnt); line-height:1.2;}
+  .fb-coach .fb-sub{ font-style:italic; font-size:13px; margin-top:5px; color:var(--plum);}
+  .fb-coach::after{ content:"~"; position:absolute; right:12px; top:6px; font-size:24px; color:var(--gold); }
+
+  /* ---------- CENTER: GENTLE HIGHWAY ---------- */
+  .center{ display:flex; flex-direction:column; align-items:stretch; min-height:0; gap:12px; }
+
+  /* the lazy-river path: chords drift down a warm curved current toward the NOW sun */
+  .river{
+    position:relative; flex:1; min-height:0;
+    border-radius:14px; overflow:hidden;
+    border:3px solid var(--ink);
+    box-shadow:5px 6px 0 rgba(61,31,51,.4), inset 0 0 0 5px rgba(244,231,205,.22);
+    background:
+      linear-gradient(180deg, rgba(107,44,79,.18) 0%, rgba(193,74,35,.10) 40%, rgba(244,182,67,.10) 100%);
+  }
+  /* soft boardwalk / current lane down the middle */
+  .lane{
+    position:absolute; left:50%; top:-4%; bottom:-4%;
+    width:62%; transform:translateX(-50%);
+    background:
+      radial-gradient(120% 60% at 50% 0%, rgba(244,231,205,.12), transparent 60%),
+      linear-gradient(180deg, rgba(244,231,205,.05), rgba(47,142,132,.10));
+    border-left:3px dashed rgba(244,231,205,.35);
+    border-right:3px dashed rgba(244,231,205,.35);
+    -webkit-mask:linear-gradient(180deg, transparent 0, #000 12%, #000 100%);
+            mask:linear-gradient(180deg, transparent 0, #000 12%, #000 100%);
+  }
+  /* slow flowing ripples to read as a gentle current */
+  .ripples{
+    position:absolute; left:50%; top:0; bottom:0; width:62%; transform:translateX(-50%);
+    background:repeating-linear-gradient(180deg, rgba(244,231,205,0) 0 70px, rgba(244,231,205,.16) 70px 76px);
+    animation:rippleFlow 9s linear infinite; opacity:.7; pointer-events:none;
+  }
+  @keyframes rippleFlow{ from{ background-position:0 0;} to{ background-position:0 76px;} }
+  .lane-cap{
+    position:absolute; top:10%; left:50%; transform:translateX(-50%);
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.32em; font-size:12px;
+    color:var(--cream); opacity:.8; text-shadow:1px 1px 0 rgba(61,31,51,.5);
+  }
+
+  /* drifting chord = vintage luggage tag floating toward NOW */
+  .floater{
+    position:absolute; left:50%;
+    transform:translate(-50%,-50%) scale(var(--s,1));
+    will-change:top, transform;
+  }
+  .tag{
+    position:relative; background:var(--cream);
+    border:2.5px solid var(--ink); border-radius:7px;
+    padding:9px 16px 8px; min-width:62px; text-align:center;
+    box-shadow:3px 4px 0 rgba(61,31,51,.35);
+  }
+  .tag::before{
+    content:""; position:absolute; top:6px; left:50%; transform:translateX(-50%);
+    width:7px;height:7px;border-radius:50%; background:var(--sand); border:1.5px solid var(--ink);
+  }
+  .tag .nm{ font-family:'Alfa Slab One',serif; font-size:26px; color:var(--ink); line-height:1; margin-top:6px;}
+  .tag .ct{ font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:.12em; color:var(--burnt);}
+  /* the small lei-flower riding above each tag */
+  .floater .lei{
+    position:absolute; top:-13px; left:50%; transform:translateX(-50%);
+    width:18px; height:18px; border-radius:50%;
+    background:radial-gradient(circle at 40% 35%, var(--sun), var(--coral) 70%);
+    box-shadow:0 0 0 3px rgba(244,231,205,.7), 2px 2px 0 rgba(61,31,51,.3);
+  }
+  .floater.near .tag{ background:var(--gold); }
+  .floater.near .tag .nm{ color:var(--ink); }
+
+  /* NOW marker — record-label sun disc near bottom of the river */
+  .now-sun{
+    position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
+    width:200px; height:200px; display:grid; place-items:center; z-index:6;
+  }
+  .now-sun .ring-rays{
+    position:absolute; inset:-16px; border-radius:50%;
+    background:repeating-conic-gradient(var(--gold) 0 6deg, transparent 6deg 12deg);
+    -webkit-mask:radial-gradient(circle, transparent 52%, #000 53%, #000 60%, transparent 61%);
+            mask:radial-gradient(circle, transparent 52%, #000 53%, #000 60%, transparent 61%);
+    animation:spin 60s linear infinite; opacity:.9;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg);} }
+  .chord-disc{
+    width:172px;height:172px;border-radius:50%;
+    background:radial-gradient(circle at 38% 32%, #ffeec0, var(--sun) 42%, var(--gold) 78%, var(--coral) 100%);
+    border:4px solid var(--ink);
+    box-shadow:0 0 0 7px var(--cream), 0 0 0 10px var(--burnt), 6px 8px 0 rgba(61,31,51,.4);
+    display:grid; place-items:center; position:relative; text-align:center;
+  }
+  .now-label{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.3em; font-size:12px;
+    color:var(--burnt); margin-bottom:-4px;
+  }
+  .chord-glyph{
+    font-family:'Alfa Slab One', serif; font-size:74px; line-height:.8;
+    color:var(--ink); text-shadow:2px 2px 0 var(--coral);
+  }
+  .chord-sub{ font-family:'Crimson Pro',serif; font-style:italic; font-size:14px; color:var(--plum); margin-top:2px;}
+  /* the warm "now zone" glow the tags ease into */
+  .now-zone{
+    position:absolute; left:50%; bottom:90px; transform:translateX(-50%);
+    width:64%; height:120px; pointer-events:none; z-index:4;
+    background:radial-gradient(60% 80% at 50% 100%, rgba(246,211,101,.35), transparent 70%);
+    animation:zonePulse 4.5s ease-in-out infinite;
+  }
+  @keyframes zonePulse{ 0%,100%{ opacity:.6;} 50%{ opacity:1;} }
+
+  /* lyrics — songbook below the river */
+  .songbook{
+    background:linear-gradient(180deg, rgba(244,231,205,.96), rgba(233,210,168,.96));
+    border:3px solid var(--ink); border-radius:10px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.4), inset 0 0 0 5px rgba(255,255,255,.25);
+    padding:12px 24px 14px; position:relative;
+  }
+  .songbook::before{ content:"♪"; position:absolute; top:6px; right:14px; font-size:22px; color:var(--burnt); opacity:.6; }
+  .lyric-head{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.26em; font-size:12px;
+    color:var(--burnt); border-bottom:2px dotted var(--burnt); padding-bottom:4px; margin-bottom:7px;
+  }
+  .lyric-line{
+    font-family:'Crimson Pro',serif; font-size:20px; line-height:1.45; color:var(--ink);
+    position:relative; padding:1px 2px; transition:opacity .4s ease;
+  }
+  .lyric-line.past{ opacity:.45; }
+  .lyric-line.next{ opacity:.7; }
+  .lyric-line .chordmark{
+    font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:.06em;
+    color:var(--teal); vertical-align:super; margin:0 2px 0 4px; font-weight:700;
+  }
+  .syl{
+    background:linear-gradient(180deg, transparent 55%, var(--gold) 55%, var(--gold) 92%, transparent 92%);
+    color:var(--burnt); font-weight:600; border-radius:2px; padding:0 1px;
+    animation:pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse{ 0%,100%{ filter:saturate(1);} 50%{ filter:saturate(1.5) brightness(1.06);} }
+
+  /* ---------- RIGHT: UPCOMING + TRANSPORT ---------- */
+  .right{ display:flex; flex-direction:column; gap:14px; align-items:stretch; }
+
+  /* upcoming "coming up" tag strip — calm static list mirroring the flow */
+  .upcoming{
+    background:var(--sand);
+    border:3px solid var(--ink); border-radius:8px;
+    box-shadow:4px 5px 0 rgba(61,31,51,.45);
+    padding:13px 14px 14px; color:var(--ink);
+  }
+  .upcoming .card-label{ border-color:var(--burnt); }
+  .upnext{ display:flex; flex-direction:column; gap:8px; }
+  .uprow{
+    display:flex; align-items:center; gap:10px;
+    background:var(--cream); border:2px solid var(--ink); border-radius:6px;
+    padding:6px 10px; box-shadow:2px 3px 0 rgba(61,31,51,.3);
+    transition:transform .3s ease, background .3s ease;
+  }
+  .uprow.lead{ background:var(--gold); transform:translateX(4px); }
+  .uprow .seq{ font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:.1em; color:var(--burnt); width:42px; }
+  .uprow .nm2{ font-family:'Alfa Slab One',serif; font-size:20px; color:var(--ink); }
+  .uprow .bars{ font-family:'Crimson Pro',serif; font-style:italic; font-size:13px; color:var(--plum); margin-left:auto; }
+
+  /* transport — wood console with knobs */
+  .console{
+    margin-top:auto;
+    background:repeating-linear-gradient(88deg, #7a3d22 0 9px, #6c3520 9px 12px, #7a3d22 12px 22px);
+    border:3px solid var(--ink); border-radius:10px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.5), inset 0 0 0 5px rgba(244,231,205,.18);
+    padding:14px; color:var(--cream);
+  }
+  .console-label{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.26em; font-size:12px;
+    text-align:center; color:var(--sun); margin-bottom:10px; text-shadow:1px 1px 0 rgba(0,0,0,.4);
+  }
+  .transport{ display:flex; justify-content:center; align-items:center; gap:14px; margin-bottom:12px; }
+  .btn{
+    width:52px;height:52px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #f7d98f, var(--gold) 60%, var(--burnt) 100%);
+    border:3px solid var(--ink);
+    box-shadow:0 4px 0 rgba(61,31,51,.6), inset 0 2px 4px rgba(255,255,255,.4);
+    display:grid; place-items:center; cursor:pointer;
+    transition:transform .12s ease, box-shadow .12s ease; color:var(--ink);
+  }
+  .btn:hover{ transform:translateY(-2px); box-shadow:0 6px 0 rgba(61,31,51,.6); }
+  .btn:active{ transform:translateY(2px); box-shadow:0 1px 0 rgba(61,31,51,.6); }
+  .btn.play{ width:64px;height:64px; background:radial-gradient(circle at 35% 30%, #ffe6b0, var(--coral) 55%, var(--plum) 100%);}
+  .btn svg{ width:22px;height:22px; }
+  .btn.play svg{ width:28px;height:28px; }
+  .knobs{ display:flex; justify-content:space-around; gap:10px; }
+  .knob{ text-align:center; cursor:pointer; }
+  .knob .dial{
+    width:46px;height:46px;border-radius:50%; margin:0 auto;
+    background:conic-gradient(from -130deg, var(--deep-teal) 0 60%, #0c3936 60% 100%);
+    border:3px solid var(--ink); position:relative;
+    box-shadow:inset 0 2px 4px rgba(255,255,255,.25), 0 3px 0 rgba(61,31,51,.5);
+    transition:transform .15s ease;
+  }
+  .knob:hover .dial{ transform:rotate(-8deg); }
+  .knob .dial::after{
+    content:""; position:absolute; top:5px; left:50%; width:3px;height:15px;
+    background:var(--sun); transform:translateX(-50%) rotate(28deg); transform-origin:bottom center; border-radius:2px;
+  }
+  .knob .v{ font-family:'Alfa Slab One',serif; font-size:15px; color:var(--sun); margin-top:5px; line-height:1;}
+  .knob .lab{ font-family:'Bebas Neue',sans-serif; letter-spacing:.16em; font-size:10px; color:var(--sand); margin-top:1px;}
+
+  /* corner mockup label */
+  .mockup-tag{
+    position:absolute; left:14px; bottom:12px; z-index:50;
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.18em; font-size:11px;
+    color:var(--cream); background:rgba(61,31,51,.55);
+    padding:4px 10px; border:1.5px solid rgba(244,231,205,.5); border-radius:4px;
+    backdrop-filter:blur(2px);
+  }
+
+  @media (max-width:1080px){
+    .poster{ height:auto; min-height:92vh; }
+    .stage{ grid-template-columns:1fr; grid-template-rows:auto auto auto auto; overflow:auto; }
+    .river{ min-height:420px; }
+    .console{ margin-top:14px; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{ animation-duration:.001s !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="poster">
+    <!-- ===== BACKGROUND ===== -->
+    <div class="sky"></div>
+    <div class="cloud c1"></div><div class="cloud c2"></div><div class="cloud c3"></div>
+    <div class="sun-rings"><span></span><span></span><span></span><span></span></div>
+
+    <div class="palm palm-left">
+      <div class="trunk" style="--lean:-7deg"></div>
+      <div class="crown">
+        <div class="frond"></div><div class="frond"></div><div class="frond"></div>
+        <div class="frond"></div><div class="frond"></div>
+      </div>
+    </div>
+    <div class="palm palm-right">
+      <div class="trunk" style="--lean:6deg"></div>
+      <div class="crown" style="position:absolute;bottom:288px;left:calc(50% - 16px);">
+        <div class="frond"></div><div class="frond"></div><div class="frond"></div>
+        <div class="frond"></div><div class="frond"></div>
+      </div>
+    </div>
+
+    <div class="island"></div>
+    <div class="ocean"><div class="ocean-shimmer"></div></div>
+    <div class="leaf leaf-l"></div>
+    <div class="leaf leaf-r"></div>
+
+    <!-- ===== CONTENT ===== -->
+    <div class="stage">
+
+      <!-- TOP BAR -->
+      <div class="topbar reveal d1">
+        <div class="titleblock">
+          <div class="kicker">Now Playing · Aloha Highway</div>
+          <div class="song-title">Banana Pancakes</div>
+          <div class="byline">Jack Johnson</div>
+          <div class="chordlist">
+            <span class="lbl">CHORDS</span>
+            <span class="chip">G</span><span class="chip">C</span><span class="chip">D</span>
+            <span class="chip">Em</span><span class="chip">Am</span><span class="chip">D7</span>
+          </div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-meta" id="progMeta">VERSE 1 · 1:24 / 3:11</div>
+          <div class="progress-rail">
+            <div class="progress-fill" id="progFill"></div>
+            <div class="progress-knob" id="progKnob"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LEFT COLUMN -->
+      <div class="left reveal d3">
+        <div class="card">
+          <div class="card-label">Fingering · Baritone Uke</div>
+          <div class="fingering">
+            <div class="chord-name-big" id="fingerName">G <small>major</small></div>
+            <svg class="chord-box" id="fingerSvg" width="178" height="200" viewBox="0 0 178 200">
+              <!-- string labels D G B E -->
+              <text class="string-name" x="29" y="14">D</text>
+              <text class="string-name" x="69" y="14">G</text>
+              <text class="string-name" x="109" y="14">B</text>
+              <text class="string-name" x="149" y="14">E</text>
+              <!-- frets -->
+              <line class="nut"   x1="29" y1="40"  x2="149" y2="40"></line>
+              <line class="fret"  x1="29" y1="78"  x2="149" y2="78"></line>
+              <line class="fret"  x1="29" y1="116" x2="149" y2="116"></line>
+              <line class="fret"  x1="29" y1="154" x2="149" y2="154"></line>
+              <line class="fret"  x1="29" y1="192" x2="149" y2="192"></line>
+              <!-- strings -->
+              <line class="string" x1="29"  y1="40" x2="29"  y2="192"></line>
+              <line class="string" x1="69"  y1="40" x2="69"  y2="192"></line>
+              <line class="string" x1="109" y1="40" x2="109" y2="192"></line>
+              <line class="string" x1="149" y1="40" x2="149" y2="192"></line>
+              <!-- finger dots (rebuilt per chord by JS) -->
+              <g id="dotGroup">
+                <circle class="open-mark" cx="29" cy="28" r="6"></circle>
+                <circle class="open-mark" cx="69" cy="28" r="6"></circle>
+                <circle class="dot" cx="109" cy="59" r="11"></circle>
+                <text class="dot-num" x="109" y="64">2</text>
+                <circle class="dot" cx="149" cy="59" r="11"></circle>
+                <text class="dot-num" x="149" y="64">3</text>
+              </g>
+            </svg>
+            <div class="tuning-note">Tuning D · G · B · E — take it easy</div>
+          </div>
+        </div>
+
+        <div class="badge-tune">
+          <div class="tune-ring" id="tuneRing"><b id="tunePct">92%</b></div>
+          <div class="tune-txt">
+            <b>In Tune</b>
+            <span>nice &amp; steady this verse</span>
+          </div>
+        </div>
+
+        <div class="feedback fb-good" id="fbGood">
+          <span class="fb-tag">GENTLE FEEDBACK</span>
+          <div class="fb-msg">Nice! ✓</div>
+          <div class="fb-sub">That G ring is clean and warm — right on the beat.</div>
+        </div>
+
+        <div class="feedback fb-coach" id="fbCoach">
+          <span class="fb-tag">A LITTLE COACHING</span>
+          <div class="fb-msg">Almost — try fretting the B string</div>
+          <div class="fb-sub">It's buzzing a touch. Press just behind the fret and let it sing.</div>
+        </div>
+      </div>
+
+      <!-- CENTER COLUMN: the gentle highway -->
+      <div class="center reveal d2">
+        <div class="river" id="river">
+          <div class="lane"></div>
+          <div class="ripples"></div>
+          <div class="lane-cap">DRIFTING IN · TAKE YOUR TIME</div>
+          <!-- floaters injected by JS -->
+          <div class="now-zone"></div>
+          <div class="now-sun">
+            <div class="ring-rays"></div>
+            <div class="chord-disc">
+              <div>
+                <div class="now-label">NOW</div>
+                <div class="chord-glyph" id="nowGlyph">G</div>
+                <div class="chord-sub" id="nowSub">hold for two bars</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="songbook reveal d5">
+          <div class="lyric-head">Verse · Songbook</div>
+          <div class="lyric-line past">
+            <span class="chordmark">G</span>Can't you see that it's just rainin'…
+          </div>
+          <div class="lyric-line">
+            <span class="chordmark">G</span>But, baby, you hardly even <span class="syl">no</span><span class="chordmark">C</span>tice
+          </div>
+          <div class="lyric-line next">
+            <span class="chordmark">D</span>when I try to show you <span class="chordmark">Em</span>this
+          </div>
+          <div class="lyric-line next">
+            <span class="chordmark">Am</span>is the way I'm <span class="chordmark">D7</span>feeling now…
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="right reveal d4">
+        <div class="upcoming">
+          <div class="card-label">Coming Up</div>
+          <div class="upnext" id="upNext"><!-- rows injected by JS --></div>
+        </div>
+
+        <div class="console reveal d6">
+          <div class="console-label">TRANSPORT</div>
+          <div class="transport">
+            <button class="btn" id="restartBtn" title="Restart" aria-label="Restart">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 3 3 8 8 8"/>
+              </svg>
+            </button>
+            <button class="btn play" id="playBtn" title="Play/Pause" aria-label="Play or pause">
+              <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            </button>
+            <button class="btn" id="stopBtn" title="Stop" aria-label="Stop">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            </button>
+          </div>
+          <div class="knobs">
+            <div class="knob" id="tempoKnob"><div class="dial"></div><div class="v" id="tempoVal">92</div><div class="lab">TEMPO</div></div>
+            <div class="knob"><div class="dial" style="background:conic-gradient(from -130deg,var(--burnt) 0 45%,#5a2412 45% 100%)"></div><div class="v">70%</div><div class="lab">VOLUME</div></div>
+            <div class="knob"><div class="dial" style="background:conic-gradient(from -130deg,var(--gold) 0 80%,#7a5a16 80% 100%)"></div><div class="v">ON</div><div class="lab">METRONOME</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== TEXTURE OVERLAYS ===== -->
+    <div class="halftone"></div>
+    <div class="grain"></div>
+    <div class="vignette"></div>
+
+    <div class="mockup-tag">MOCKUP — ukejam / Aloha Highway</div>
+  </div>
+
+  <script>
+  (function(){
+    // ----- Song chord progression (the loop that drifts down the river) -----
+    var SONG = [
+      { nm:'G',  full:'G <small>major</small>',  sub:'hold for two bars', bars:2 },
+      { nm:'C',  full:'C <small>major</small>',  sub:'one easy bar',       bars:1 },
+      { nm:'D',  full:'D <small>major</small>',  sub:'one bar, light',     bars:1 },
+      { nm:'Em', full:'Em <small>minor</small>', sub:'two warm bars',      bars:2 },
+      { nm:'Am', full:'Am <small>minor</small>', sub:'one gentle bar',     bars:1 },
+      { nm:'D7', full:'D7 <small>dom 7</small>', sub:'one bar, then loop', bars:1 }
+    ];
+
+    // Baritone (D G B E) fingerings — plausible shapes. dots: {string:0-3, fret:1-4, finger}
+    // openOrMute per string index: 'o' open, 'x' mute, or null
+    var SHAPES = {
+      'G':  { marks:['o','o',null,null], dots:[{s:2,f:3,n:2},{s:3,f:3,n:3}] },
+      'C':  { marks:['x','o','o',null], dots:[{s:3,f:1,n:1}] },
+      'D':  { marks:['x','x',null,null], dots:[{s:2,f:2,n:1},{s:3,f:3,n:3}] },
+      'Em': { marks:['o',null,null,'o'], dots:[{s:1,f:2,n:2},{s:2,f:2,n:3}] },
+      'Am': { marks:['x','o',null,'o'], dots:[{s:2,f:2,n:2}] },
+      'D7': { marks:['x','x',null,null], dots:[{s:2,f:1,n:1},{s:3,f:2,n:2}] }
+    };
+    var STRING_X = [29,69,109,149];
+    var FRET_Y   = [40,78,116,154,192]; // nut + 4 frets; dot center = midpoint
+
+    function renderFingering(nm){
+      var sh = SHAPES[nm] || SHAPES['G'];
+      var g = document.getElementById('dotGroup');
+      var out = '';
+      // open/mute marks above the nut
+      for(var i=0;i<4;i++){
+        var m = sh.marks[i], x = STRING_X[i];
+        if(m==='o') out += '<circle class="open-mark" cx="'+x+'" cy="28" r="6"></circle>';
+        else if(m==='x') out += '<line class="mute-mark" x1="'+(x-5)+'" y1="23" x2="'+(x+5)+'" y2="33"></line>'+
+                                 '<line class="mute-mark" x1="'+(x-5)+'" y1="33" x2="'+(x+5)+'" y2="23"></line>';
+      }
+      // finger dots (center between fret lines)
+      sh.dots.forEach(function(d){
+        var x = STRING_X[d.s];
+        var y = (FRET_Y[d.f-1] + FRET_Y[d.f]) / 2;
+        out += '<circle class="dot" cx="'+x+'" cy="'+y+'" r="11"></circle>';
+        out += '<text class="dot-num" x="'+x+'" y="'+(y+5)+'">'+d.n+'</text>';
+      });
+      g.innerHTML = out;
+    }
+
+    // ----- Build upcoming list (right column) -----
+    var upNext = document.getElementById('upNext');
+    function renderUpcoming(currentIdx){
+      var html = '';
+      for(var k=0;k<4;k++){
+        var idx = (currentIdx + k) % SONG.length;
+        var c = SONG[idx];
+        var lead = k===0 ? ' lead' : '';
+        var seq = k===0 ? 'NOW' : '+'+k;
+        html += '<div class="uprow'+lead+'"><span class="seq">'+seq+'</span>'+
+                '<span class="nm2">'+c.nm+'</span>'+
+                '<span class="bars">'+c.bars+(c.bars>1?' bars':' bar')+'</span></div>';
+      }
+      upNext.innerHTML = html;
+    }
+
+    // ----- The gentle river of floaters -----
+    var river = document.getElementById('river');
+    var FLOW_MS = 2600;        // time for one chord to advance one step (slow, calm)
+    var VISIBLE = 4;           // how many tags ride the river ahead of NOW
+    var floaters = [];         // {el, slot} slot 0 = at NOW, higher = further up
+    var headIndex = 0;         // SONG index currently at NOW
+    var playing = true;
+    var lastTick = performance.now();
+    var acc = 0;
+
+    function slotToTop(slot){
+      // slot 0 -> ~ at the now-sun (about 78%); higher slots recede upward & shrink
+      // gentle perspective curve
+      var base = 80;             // % from top of river for slot 0
+      var step = 17;             // % per slot
+      return base - slot*step;
+    }
+    function slotToScale(slot){
+      return Math.max(0.45, 1 - slot*0.16);
+    }
+    function slotToOpacity(slot){
+      return Math.max(0.35, 1 - slot*0.18);
+    }
+
+    function makeFloater(songIdx, slot){
+      var c = SONG[songIdx];
+      var el = document.createElement('div');
+      el.className = 'floater' + (slot<=0.5 ? ' near':'');
+      el.innerHTML = '<div class="lei"></div><div class="tag"><div class="nm">'+c.nm+'</div>'+
+                     '<div class="ct">'+c.bars+(c.bars>1?' BARS':' BAR')+'</div></div>';
+      river.insertBefore(el, river.querySelector('.now-zone'));
+      var f = { el:el, slot:slot, idx:songIdx };
+      positionFloater(f);
+      return f;
+    }
+    function positionFloater(f){
+      f.el.style.top = slotToTop(f.slot) + '%';
+      f.el.style.setProperty('--s', slotToScale(f.slot).toFixed(3));
+      f.el.style.opacity = slotToOpacity(f.slot).toFixed(2);
+      if(f.slot <= 0.55) f.el.classList.add('near'); else f.el.classList.remove('near');
+    }
+
+    function seed(){
+      floaters.forEach(function(f){ f.el.remove(); });
+      floaters = [];
+      for(var s=0;s<VISIBLE;s++){
+        var idx = (headIndex + s) % SONG.length;
+        floaters.push(makeFloater(idx, s));
+      }
+      updateNow();
+    }
+
+    function updateNow(){
+      var c = SONG[headIndex];
+      document.getElementById('nowGlyph').textContent = c.nm;
+      document.getElementById('nowSub').textContent = c.sub;
+      document.getElementById('fingerName').innerHTML = c.full;
+      renderFingering(c.nm);
+      renderUpcoming(headIndex);
+    }
+
+    // advance one step: front floater eases into NOW, new one appears up top
+    function advance(){
+      headIndex = (headIndex + 1) % SONG.length;
+      // the slot-0 floater "arrives" -> remove it; everyone shifts down a slot
+      var arrived = floaters.shift();
+      if(arrived){
+        arrived.el.style.transition = 'opacity .6s ease, transform .6s ease';
+        arrived.el.style.opacity = '0';
+        arrived.el.style.transform = 'translate(-50%,-50%) scale(1.15)';
+        setTimeout(function(){ arrived.el.remove(); }, 650);
+      }
+      // add a new one at the far slot
+      var newIdx = (headIndex + VISIBLE - 1) % SONG.length;
+      var nf = makeFloater(newIdx, VISIBLE - 1 + 1); // start a touch beyond, then settle
+      floaters.push(nf);
+      updateNow();
+      pulseFeedback();
+      bumpProgress();
+    }
+
+    // smooth continuous drift between steps using rAF; on each whole step call advance()
+    function tick(now){
+      var dt = now - lastTick; lastTick = now;
+      if(playing){
+        acc += dt;
+        var t = acc / FLOW_MS; // 0..1 progress to next step
+        // continuously interpolate each floater's slot downward
+        floaters.forEach(function(f, i){
+          var targetSlot = i - t;          // slide toward NOW
+          f.el.style.top = slotToTop(targetSlot) + '%';
+          f.el.style.setProperty('--s', slotToScale(Math.max(0,targetSlot)).toFixed(3));
+          f.el.style.opacity = slotToOpacity(Math.max(0,targetSlot)).toFixed(2);
+          if(targetSlot <= 0.55) f.el.classList.add('near'); else f.el.classList.remove('near');
+        });
+        if(acc >= FLOW_MS){
+          acc -= FLOW_MS;
+          advance();
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    // ----- gentle, alternating feedback (never harsh) -----
+    var fbGood = document.getElementById('fbGood');
+    var fbCoach = document.getElementById('fbCoach');
+    var goodMsgs = [
+      ['Nice! ✓','That ring is clean and warm — right on the beat.'],
+      ['Lovely ✓','Smooth change. Your timing is settling in beautifully.'],
+      ['In tune ✓','Steady and relaxed — exactly the island feel.'],
+      ['Sweet ✓','Nice soft strum. Let it breathe between chords.']
+    ];
+    var coachMsgs = [
+      ['Almost — try fretting the B string','It\'s buzzing a touch. Press just behind the fret.'],
+      ['Ease up a little','No rush — let the chord settle before the next one.'],
+      ['Round the G out','Curl your fingertips so each string can sing.'],
+      ['Lighter on the strum','Gentle wrist — this one likes a soft touch.']
+    ];
+    var gi=0, ci=0;
+    function pulseFeedback(){
+      // mostly encouraging; occasionally a soft tip
+      if(Math.random() < 0.7){
+        var g = goodMsgs[gi++ % goodMsgs.length];
+        fbGood.querySelector('.fb-msg').textContent = g[0];
+        fbGood.querySelector('.fb-sub').textContent = g[1];
+        flash(fbGood);
+      } else {
+        var c = coachMsgs[ci++ % coachMsgs.length];
+        fbCoach.querySelector('.fb-msg').textContent = c[0];
+        fbCoach.querySelector('.fb-sub').textContent = c[1];
+        flash(fbCoach);
+      }
+      // gently drift the in-tune % within a warm range
+      var pct = 88 + Math.floor(Math.random()*9); // 88..96
+      var ring = document.getElementById('tuneRing');
+      document.getElementById('tunePct').textContent = pct + '%';
+      ring.style.background = 'conic-gradient(var(--gold) 0 '+pct+'%, rgba(244,231,205,.22) '+pct+'% 100%)';
+    }
+    function flash(el){
+      el.style.transition = 'none';
+      el.style.transform = 'scale(1.025)';
+      requestAnimationFrame(function(){
+        el.style.transition = 'transform .5s ease';
+        el.style.transform = 'scale(1)';
+      });
+    }
+
+    // ----- progress bar drifts slowly through the song -----
+    var prog = 0.18;
+    var fill = document.getElementById('progFill');
+    var knob = document.getElementById('progKnob');
+    var meta = document.getElementById('progMeta');
+    function bumpProgress(){
+      prog += 0.03;
+      if(prog > 1) prog = 0.04;
+      var pctW = (prog*100).toFixed(1) + '%';
+      fill.style.width = pctW;
+      knob.style.left = pctW;
+      var total = 191; // 3:11 in seconds
+      var cur = Math.floor(total*prog);
+      var mm = Math.floor(cur/60), ss = ('0'+(cur%60)).slice(-2);
+      var section = prog < .5 ? 'VERSE 1' : (prog < .8 ? 'CHORUS' : 'VERSE 2');
+      meta.textContent = section + ' · ' + mm + ':' + ss + ' / 3:11';
+    }
+
+    // ----- transport controls -----
+    var playBtn = document.getElementById('playBtn');
+    var playSvg  = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>';
+    var pauseSvg = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16" rx="1.2"/><rect x="14" y="4" width="5" height="16" rx="1.2"/></svg>';
+    playBtn.innerHTML = pauseSvg; // starts playing
+    playBtn.addEventListener('click', function(){
+      playing = !playing;
+      playBtn.innerHTML = playing ? pauseSvg : playSvg;
+      lastTick = performance.now();
+      // pause/resume ambient css animations too
+      var rate = playing ? 'running' : 'paused';
+      document.querySelectorAll('.ripples,.now-zone,.ring-rays,.frond,.sun-rings span,.cloud,.syl')
+        .forEach(function(el){ el.style.animationPlayState = rate; });
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', function(){
+      headIndex = 0; acc = 0; prog = 0.04; lastTick = performance.now();
+      seed(); bumpProgress();
+      document.querySelectorAll('.reveal').forEach(function(el){
+        el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+      });
+    });
+
+    document.getElementById('stopBtn').addEventListener('click', function(){
+      playing = false; playBtn.innerHTML = playSvg;
+      headIndex = 0; acc = 0; seed();
+      document.querySelectorAll('.ripples,.now-zone,.ring-rays,.frond,.sun-rings span,.cloud,.syl')
+        .forEach(function(el){ el.style.animationPlayState = 'paused'; });
+    });
+
+    // tempo knob cycles calm BPM presets and adjusts the drift speed
+    var tempos = [92, 76, 64, 108];
+    var ti = 0;
+    document.getElementById('tempoKnob').addEventListener('click', function(){
+      ti = (ti+1) % tempos.length;
+      var bpm = tempos[ti];
+      document.getElementById('tempoVal').textContent = bpm;
+      // slower bpm -> longer (calmer) flow per step
+      FLOW_MS = Math.round(2600 * (92 / bpm));
+    });
+
+    // ----- boot -----
+    seed();
+    renderFingering('G');
+    renderUpcoming(0);
+    requestAnimationFrame(function(t){ lastTick = t; requestAnimationFrame(tick); });
+  })();
+  </script>
+</body>
+</html>

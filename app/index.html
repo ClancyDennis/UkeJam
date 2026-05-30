@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>ukejam</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="app">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">ukejam</span>
+          <span class="tagline">baritone · D G B E</span>
+        </div>
+        <nav class="modes">
+          <button class="mode-btn" data-mode="cal-mic" disabled>Cal Mic</button>
+          <button class="mode-btn active" data-mode="tuner">Cal Instrument</button>
+          <button class="mode-btn" data-mode="play">Play</button>
+        </nav>
+        <div class="conn">
+          <span class="dot" id="conn-dot"></span>
+          <span id="conn-text">idle</span>
+        </div>
+      </header>
+
+      <!-- Tuner view -->
+      <main class="tuner-view" id="tuner-view">
+        <div class="panel meter-panel">
+          <div class="panel-title">
+            Instrument Tuner <span class="tag">nearest string · cents</span>
+          </div>
+
+          <!-- Big note readout -->
+          <div class="note-readout">
+            <div class="note-name" id="note-name">—</div>
+            <div class="note-freq" id="note-freq">0.0 Hz</div>
+          </div>
+
+          <!-- Needle / cents bar -->
+          <div class="needle-wrap">
+            <div class="needle-scale">
+              <span>-50</span><span>-25</span><span class="zero">0</span
+              ><span>+25</span><span>+50</span>
+            </div>
+            <canvas id="needle" width="900" height="170"></canvas>
+            <div class="cents-readout">
+              <span id="cents-val">0</span><span class="cents-unit">cents</span>
+            </div>
+            <div class="verdict" id="verdict">play a string</div>
+          </div>
+
+          <button class="listen-btn" id="listen-btn">Start listening</button>
+        </div>
+
+        <!-- Per-string status -->
+        <div class="panel strings-panel">
+          <div class="panel-title">Open strings</div>
+          <div class="strings" id="strings"></div>
+        </div>
+      </main>
+
+      <!-- Play / chord-detection view -->
+      <main class="play-view" id="play-view" hidden>
+        <div class="panel chord-panel">
+          <div class="panel-title">
+            Chord <span class="tag">live detection</span>
+          </div>
+          <div class="chord-readout">
+            <div class="chord-name" id="chord-name">—</div>
+            <div class="target-row">
+              <span class="target-lbl">target</span>
+              <select id="target-select">
+                <option value="">free play</option>
+                <option value="G">G</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+                <option value="Em">Em</option>
+                <option value="Am">Am</option>
+                <option value="A">A</option>
+                <option value="E">E</option>
+                <option value="D7">D7</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="gauge-wrap">
+            <canvas id="gauge" width="360" height="220"></canvas>
+            <div class="gauge-readout">
+              <div class="gauge-val" id="clean-val">0<span class="pct">%</span></div>
+              <div class="gauge-status" id="clean-status">listening</div>
+            </div>
+          </div>
+
+          <div class="coach" id="coach"></div>
+          <button class="listen-btn" id="listen-btn-2">Start listening</button>
+        </div>
+
+        <div class="panel chroma-panel">
+          <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
+          <div class="chroma" id="chroma"></div>
+        </div>
+      </main>
+
+      <div class="corner-label" id="corner-label">ukejam / Tuner · native</div>
+    </div>
+  </body>
+</html>

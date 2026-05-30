@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ukejam — Aloha Lounge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Monoton&family=Alfa+Slab+One&family=Pacifico&family=Bebas+Neue&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --burnt:#c14a23;
+    --coral:#e8714c;
+    --salmon:#f29e7b;
+    --gold:#f4b643;
+    --sun:#f6d365;
+    --teal:#1f6f6b;
+    --deep-teal:#114b48;
+    --ocean:#2f8e84;
+    --cream:#f4e7cd;
+    --sand:#e9d2a8;
+    --ink:#3a2418;
+    --plum:#6b2c3e;
+    --night:#3d1f33;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{ height:100%; }
+
+  body{
+    font-family:'Crimson Pro', Georgia, serif;
+    background:#2a1626;
+    color:var(--ink);
+    overflow-x:hidden;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+  }
+
+  /* ---------- POSTER FRAME ---------- */
+  .poster{
+    position:relative;
+    width:min(1380px, 96vw);
+    height:min(860px, 92vh);
+    border-radius:6px;
+    overflow:hidden;
+    box-shadow:0 40px 90px -20px rgba(20,8,4,.7), 0 0 0 12px #efdcb6, 0 0 0 14px #c9a35f;
+    isolation:isolate;
+  }
+
+  /* ---------- LAYERED SUNSET BACKGROUND ---------- */
+  .sky{
+    position:absolute; inset:0;
+    background:
+      linear-gradient(180deg,
+        #6b2c4f 0%,
+        #9a3b4e 18%,
+        var(--burnt) 40%,
+        var(--coral) 58%,
+        var(--gold) 76%,
+        var(--sun) 90%,
+        #f6e0a0 100%);
+  }
+
+  /* setting sun with concentric rings */
+  .sun-disc{
+    position:absolute;
+    left:50%; top:56%;
+    width:340px; height:340px;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle, #ffe9a8 0%, var(--sun) 36%, var(--gold) 70%, var(--coral) 100%);
+    box-shadow:0 0 80px 20px rgba(246,211,101,.55);
+  }
+  .sun-rings{
+    position:absolute;
+    left:50%; top:56%;
+    width:340px; height:340px;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+  }
+  .sun-rings span{
+    position:absolute; left:50%; top:50%;
+    border:2px solid rgba(244,231,205,.35);
+    border-radius:50%;
+    transform:translate(-50%,-50%);
+    animation:breathe 7s ease-in-out infinite;
+  }
+  .sun-rings span:nth-child(1){ width:400px;height:400px; animation-delay:0s; }
+  .sun-rings span:nth-child(2){ width:480px;height:480px; animation-delay:.6s; border-color:rgba(244,231,205,.22);}
+  .sun-rings span:nth-child(3){ width:560px;height:560px; animation-delay:1.2s; border-color:rgba(244,231,205,.14);}
+  .sun-rings span:nth-child(4){ width:640px;height:640px; animation-delay:1.8s; border-color:rgba(244,231,205,.08);}
+  @keyframes breathe{ 0%,100%{ transform:translate(-50%,-50%) scale(1); opacity:.9;} 50%{ transform:translate(-50%,-50%) scale(1.035); opacity:.55;} }
+
+  /* horizontal sun stripes (screen-print over the lower sun) */
+  .sun-bars{
+    position:absolute; left:50%; top:56%;
+    width:340px; height:170px;
+    transform:translate(-50%,0);
+    overflow:hidden; pointer-events:none;
+    border-bottom-left-radius:170px; border-bottom-right-radius:170px;
+  }
+  .sun-bars i{
+    position:absolute; left:-30%; width:160%; height:9px;
+    background:var(--coral); opacity:.7;
+  }
+  .sun-bars i:nth-child(1){ top:14%; }
+  .sun-bars i:nth-child(2){ top:34%; height:12px;}
+  .sun-bars i:nth-child(3){ top:56%; height:15px;}
+  .sun-bars i:nth-child(4){ top:80%; height:20px;}
+
+  /* ocean */
+  .ocean{
+    position:absolute; left:0; right:0; bottom:0; height:24%;
+    background:linear-gradient(180deg, var(--ocean) 0%, var(--teal) 55%, var(--deep-teal) 100%);
+  }
+  .ocean::before,.ocean::after{
+    content:""; position:absolute; left:0; right:0; height:6px;
+    background:rgba(244,231,205,.30);
+  }
+  .ocean::before{ top:18%; }
+  .ocean::after{ top:34%; opacity:.6; }
+  .ocean-shimmer{
+    position:absolute; left:50%; bottom:0; width:300px; height:24%;
+    transform:translateX(-50%);
+    background:repeating-linear-gradient(180deg, rgba(246,211,101,.0) 0 10px, rgba(246,211,101,.28) 10px 14px);
+    mix-blend-mode:screen; pointer-events:none;
+  }
+
+  /* distant volcano / tiki island silhouette */
+  .island{
+    position:absolute; right:9%; bottom:24%;
+    width:0;height:0;
+    border-left:90px solid transparent;
+    border-right:120px solid transparent;
+    border-bottom:120px solid var(--night);
+    opacity:.65;
+  }
+  .island::after{
+    content:""; position:absolute; left:-26px; top:6px;
+    width:52px;height:14px;
+    background:var(--coral); opacity:.85;
+    clip-path:polygon(0 100%,18% 30%,30% 70%,46% 0,60% 60%,75% 25%,100% 100%);
+  }
+
+  /* PALM SILHOUETTES */
+  .palm{ position:absolute; bottom:24%; transform-origin:bottom center; }
+  .palm .trunk{
+    position:absolute; bottom:0; left:50%;
+    width:14px; height:280px;
+    background:linear-gradient(90deg, #1c0f16, #2e1922);
+    border-radius:8px 8px 0 0;
+    transform:translateX(-50%) rotate(var(--lean,-6deg));
+    transform-origin:bottom center;
+  }
+  .frond{
+    position:absolute;
+    width:170px; height:46px;
+    background:var(--night);
+    border-radius:0 100% 0 100%/0 100% 0 100%;
+    transform-origin:0% 100%;
+    animation:sway 6s ease-in-out infinite;
+  }
+  @keyframes sway{ 0%,100%{ transform:rotate(var(--r)) translateY(0);} 50%{ transform:rotate(calc(var(--r) + 2.5deg)) translateY(-2px);} }
+
+  .palm-left{ left:6%; }
+  .palm-left .crown{ position:absolute; bottom:268px; left:calc(50% - 16px); }
+  .palm-right{ right:8%; bottom:24%; transform:scale(.78); }
+
+  .crown .frond:nth-child(1){ --r:18deg;  animation-delay:0s; }
+  .crown .frond:nth-child(2){ --r:50deg;  animation-delay:.4s; }
+  .crown .frond:nth-child(3){ --r:90deg;  animation-delay:.8s; }
+  .crown .frond:nth-child(4){ --r:130deg; animation-delay:1.2s; transform-origin:100% 100%; border-radius:100% 0 100% 0/100% 0 100% 0;}
+  .crown .frond:nth-child(5){ --r:162deg; animation-delay:1.6s; transform-origin:100% 100%; border-radius:100% 0 100% 0/100% 0 100% 0;}
+
+  /* tropical leaf foreground accents */
+  .leaf{
+    position:absolute; bottom:-30px;
+    width:240px;height:300px;
+    background:var(--night); opacity:.85;
+    clip-path:polygon(50% 0,62% 18%,58% 30%,72% 40%,64% 52%,78% 62%,66% 74%,80% 84%,50% 100%,20% 84%,34% 74%,22% 62%,36% 52%,28% 40%,42% 30%,38% 18%);
+  }
+  .leaf-l{ left:-50px; transform:rotate(-16deg); }
+  .leaf-r{ right:-60px; transform:rotate(14deg) scaleX(-1); }
+
+  /* ---------- TEXTURE OVERLAYS ---------- */
+  .halftone{
+    position:absolute; inset:0; pointer-events:none; z-index:30;
+    background-image:radial-gradient(rgba(60,30,20,.5) 1px, transparent 1.4px);
+    background-size:5px 5px;
+    mix-blend-mode:multiply; opacity:.12;
+  }
+  .grain{
+    position:absolute; inset:0; pointer-events:none; z-index:31;
+    opacity:.16; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .vignette{
+    position:absolute; inset:0; pointer-events:none; z-index:32;
+    box-shadow:inset 0 0 160px 30px rgba(40,12,28,.45);
+  }
+
+  /* ---------- CONTENT GRID ---------- */
+  .stage{
+    position:absolute; inset:0; z-index:20;
+    display:grid;
+    grid-template-columns:300px 1fr 300px;
+    grid-template-rows:auto 1fr auto;
+    gap:14px;
+    padding:30px 34px 26px;
+  }
+
+  /* staggered reveal */
+  .reveal{ opacity:0; transform:translateY(14px); animation:rise .8s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes rise{ to{ opacity:1; transform:none; } }
+  .d1{ animation-delay:.05s;} .d2{ animation-delay:.18s;} .d3{ animation-delay:.32s;}
+  .d4{ animation-delay:.46s;} .d5{ animation-delay:.6s;} .d6{ animation-delay:.74s;} .d7{ animation-delay:.88s;}
+
+  /* ---------- TOP BAR ---------- */
+  .topbar{
+    grid-column:1 / -1;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:20px;
+  }
+  .titleblock{ text-shadow:2px 2px 0 rgba(61,31,51,.35); }
+  .kicker{
+    font-family:'Bebas Neue', sans-serif;
+    letter-spacing:.42em; font-size:14px;
+    color:var(--cream); text-transform:uppercase; opacity:.92;
+    margin-bottom:-2px; padding-left:4px;
+  }
+  .song-title{
+    font-family:'Pacifico', cursive;
+    font-size:46px; line-height:.95;
+    color:var(--cream);
+    /* slight off-register print: cyan/coral ghost */
+    text-shadow:
+      2px 2px 0 var(--burnt),
+     -1.5px -1px 0 rgba(47,142,132,.55);
+  }
+  .byline{
+    font-family:'Bebas Neue', sans-serif;
+    letter-spacing:.22em; font-size:16px;
+    color:var(--sand); padding-left:6px; margin-top:2px;
+  }
+
+  /* progress as a vintage ruler/filmstrip */
+  .progress-wrap{ min-width:330px; text-align:right; }
+  .progress-meta{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.18em;
+    color:var(--cream); font-size:14px; margin-bottom:6px;
+  }
+  .progress-rail{
+    position:relative; height:18px;
+    background:repeating-linear-gradient(90deg, var(--cream) 0 14px, var(--sand) 14px 16px);
+    border:2px solid var(--ink); border-radius:3px;
+    box-shadow:2px 2px 0 rgba(61,31,51,.4);
+    overflow:hidden;
+  }
+  .progress-fill{
+    position:absolute; inset:0 62% 0 0;
+    background:linear-gradient(90deg, var(--burnt), var(--coral));
+    mix-blend-mode:multiply;
+  }
+  .progress-knob{
+    position:absolute; top:50%; left:38%;
+    width:22px;height:22px; transform:translate(-50%,-50%);
+    background:var(--gold); border:2px solid var(--ink); border-radius:50%;
+    box-shadow:1px 1px 0 rgba(61,31,51,.5);
+  }
+
+  /* ---------- LEFT: FINGERING CARD ---------- */
+  .left{ display:flex; flex-direction:column; gap:14px; align-items:flex-start; }
+
+  .card{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.06)),
+      repeating-linear-gradient(92deg, #d9a55c 0 7px, #cf9a50 7px 9px, #d9a55c 9px 17px),
+      var(--sand);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.45), inset 0 0 0 6px rgba(244,231,205,.55);
+    padding:16px 16px 14px;
+    color:var(--ink);
+    position:relative;
+  }
+  .card-label{
+    font-family:'Bebas Neue', sans-serif; letter-spacing:.24em;
+    font-size:14px; text-align:center; color:var(--burnt);
+    border-bottom:2px dotted var(--burnt); padding-bottom:5px; margin-bottom:10px;
+  }
+  .fingering{ display:flex; flex-direction:column; align-items:center; }
+  .chord-box{ position:relative; }
+  .chord-name-big{
+    font-family:'Alfa Slab One', serif;
+    font-size:30px; color:var(--burnt); text-align:center; line-height:1;
+    margin-bottom:8px;
+  }
+  .chord-name-big small{ font-size:14px; color:var(--ink); font-family:'Bebas Neue',sans-serif; letter-spacing:.1em;}
+  svg .fret{ stroke:var(--ink); stroke-width:2; }
+  svg .nut{ stroke:var(--ink); stroke-width:6; }
+  svg .string{ stroke:var(--ink); stroke-width:2; }
+  .dot{ fill:var(--burnt); stroke:var(--ink); stroke-width:1.5; }
+  .dot-num{ fill:var(--cream); font-family:'Bebas Neue',sans-serif; font-size:13px; text-anchor:middle; }
+  .open-mark{ fill:none; stroke:var(--teal); stroke-width:2.4; }
+  .string-name{ fill:var(--ink); font-family:'Bebas Neue',sans-serif; font-size:13px; text-anchor:middle; }
+  .tuning-note{
+    font-family:'Crimson Pro',serif; font-style:italic; font-size:13px;
+    color:var(--deep-teal); text-align:center; margin-top:8px;
+  }
+
+  /* accuracy badge */
+  .badge-tune{
+    align-self:stretch;
+    background:var(--deep-teal);
+    border:3px solid var(--ink);
+    border-radius:8px;
+    box-shadow:4px 5px 0 rgba(61,31,51,.45);
+    padding:12px 14px; color:var(--cream);
+    display:flex; align-items:center; gap:12px;
+  }
+  .tune-ring{
+    width:54px;height:54px;border-radius:50%;
+    background:conic-gradient(var(--gold) 0 92%, rgba(244,231,205,.22) 92% 100%);
+    display:grid; place-items:center; flex:0 0 auto;
+    border:2px solid var(--cream);
+  }
+  .tune-ring b{
+    width:40px;height:40px;border-radius:50%;
+    background:var(--deep-teal); display:grid; place-items:center;
+    font-family:'Alfa Slab One',serif; font-size:14px; color:var(--gold);
+  }
+  .tune-txt b{ font-family:'Bebas Neue',sans-serif; letter-spacing:.16em; font-size:18px; display:block; color:var(--sun);}
+  .tune-txt span{ font-style:italic; font-size:13px; opacity:.85; }
+
+  /* ---------- CENTER: SUN BADGE + LYRICS ---------- */
+  .center{ display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:18px; }
+
+  .chord-sun{
+    position:relative; width:248px; height:248px; flex:0 0 auto;
+    display:grid; place-items:center;
+    margin-top:4px;
+  }
+  .chord-sun .ring-rays{
+    position:absolute; inset:-18px; border-radius:50%;
+    background:repeating-conic-gradient(var(--gold) 0 6deg, transparent 6deg 12deg);
+    -webkit-mask:radial-gradient(circle, transparent 52%, #000 53%, #000 60%, transparent 61%);
+            mask:radial-gradient(circle, transparent 52%, #000 53%, #000 60%, transparent 61%);
+    animation:spin 60s linear infinite; opacity:.9;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg);} }
+  .chord-disc{
+    width:200px;height:200px;border-radius:50%;
+    background:radial-gradient(circle at 38% 32%, #ffeec0, var(--sun) 42%, var(--gold) 78%, var(--coral) 100%);
+    border:4px solid var(--ink);
+    box-shadow:0 0 0 7px var(--cream), 0 0 0 10px var(--burnt), 6px 8px 0 rgba(61,31,51,.4);
+    display:grid; place-items:center; position:relative;
+    text-align:center;
+  }
+  .chord-disc::before{ /* record label center dot */
+    content:""; position:absolute; width:14px;height:14px;border-radius:50%;
+    background:var(--ink); top:50%; left:50%; transform:translate(-50%,-50%);
+    opacity:.0;
+  }
+  .now-label{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.3em; font-size:13px;
+    color:var(--burnt); margin-bottom:-6px;
+  }
+  .chord-glyph{
+    font-family:'Alfa Slab One', serif; font-size:84px; line-height:.8;
+    color:var(--ink); text-shadow:2px 2px 0 var(--coral);
+  }
+  .chord-sub{ font-family:'Crimson Pro',serif; font-style:italic; font-size:15px; color:var(--plum); margin-top:2px;}
+
+  /* upcoming chords — luggage tag strip */
+  .timeline{
+    display:flex; gap:10px; align-items:center; justify-content:center;
+    flex-wrap:wrap;
+  }
+  .tag{
+    position:relative;
+    background:var(--cream);
+    border:2.5px solid var(--ink); border-radius:6px;
+    padding:8px 14px 7px; min-width:58px; text-align:center;
+    box-shadow:3px 3px 0 rgba(61,31,51,.35);
+    transition:transform .25s ease, box-shadow .25s ease;
+  }
+  .tag::before{ /* string hole */
+    content:""; position:absolute; top:6px; left:50%; transform:translateX(-50%);
+    width:7px;height:7px;border-radius:50%; background:var(--sand); border:1.5px solid var(--ink);
+  }
+  .tag .nm{ font-family:'Alfa Slab One',serif; font-size:24px; color:var(--ink); line-height:1; margin-top:6px;}
+  .tag .ct{ font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:.12em; color:var(--burnt);}
+  .tag.current{
+    background:var(--burnt);
+    transform:translateY(-6px) rotate(-2deg) scale(1.06);
+    box-shadow:4px 6px 0 rgba(61,31,51,.5);
+  }
+  .tag.current .nm{ color:var(--cream); text-shadow:1px 1px 0 var(--night);}
+  .tag.current .ct{ color:var(--sun); }
+  .tag.current::after{
+    content:"NOW"; position:absolute; bottom:-10px; left:50%; transform:translateX(-50%);
+    font-family:'Bebas Neue',sans-serif; font-size:10px; letter-spacing:.18em;
+    background:var(--gold); color:var(--ink); padding:1px 6px; border:1.5px solid var(--ink); border-radius:3px;
+  }
+  .tag.done{ opacity:.5; }
+  .tag:hover{ transform:translateY(-4px) rotate(1deg); }
+
+  /* lyrics — songbook */
+  .songbook{
+    width:100%;
+    background:linear-gradient(180deg, rgba(244,231,205,.96), rgba(233,210,168,.96));
+    border:3px solid var(--ink); border-radius:10px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.4), inset 0 0 0 5px rgba(255,255,255,.25);
+    padding:16px 26px 18px; position:relative;
+  }
+  .songbook::before{
+    content:"♪"; position:absolute; top:8px; right:14px; font-size:22px; color:var(--burnt); opacity:.6;
+  }
+  .lyric-head{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.26em; font-size:12px;
+    color:var(--burnt); border-bottom:2px dotted var(--burnt); padding-bottom:5px; margin-bottom:9px;
+  }
+  .lyric-line{
+    font-family:'Crimson Pro',serif; font-size:21px; line-height:1.5; color:var(--ink);
+    position:relative; padding:2px 2px;
+  }
+  .lyric-line.past{ opacity:.45; }
+  .lyric-line.next{ opacity:.7; }
+  .lyric-line .chordmark{
+    font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:.06em;
+    color:var(--teal); vertical-align:super; margin:0 2px 0 4px; font-weight:700;
+  }
+  .syl{
+    background:linear-gradient(180deg, transparent 55%, var(--gold) 55%, var(--gold) 92%, transparent 92%);
+    color:var(--burnt); font-weight:600; border-radius:2px; padding:0 1px;
+    animation:pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse{ 0%,100%{ filter:saturate(1);} 50%{ filter:saturate(1.5) brightness(1.06);} }
+
+  /* ---------- RIGHT: FEEDBACK + TRANSPORT ---------- */
+  .right{ display:flex; flex-direction:column; gap:14px; align-items:stretch; }
+
+  .feedback{
+    border:3px solid var(--ink); border-radius:8px;
+    box-shadow:4px 5px 0 rgba(61,31,51,.45);
+    padding:14px 16px; position:relative; overflow:hidden;
+  }
+  .feedback .fb-tag{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.22em; font-size:12px;
+    display:inline-block; margin-bottom:6px;
+  }
+  .fb-good{ background:var(--ocean); color:var(--cream); }
+  .fb-good .fb-tag{ color:var(--sun); }
+  .fb-good .fb-msg{ font-family:'Pacifico',cursive; font-size:26px; line-height:1; text-shadow:1.5px 1.5px 0 var(--deep-teal);}
+  .fb-good .fb-sub{ font-style:italic; font-size:14px; opacity:.9; margin-top:4px; }
+
+  .fb-coach{ background:var(--cream); color:var(--ink); }
+  .fb-coach .fb-tag{ color:var(--burnt); }
+  .fb-coach .fb-msg{ font-family:'Crimson Pro',serif; font-weight:600; font-size:18px; color:var(--burnt); line-height:1.2;}
+  .fb-coach .fb-sub{ font-style:italic; font-size:13px; margin-top:5px; color:var(--plum);}
+  .fb-coach::after{
+    content:"~"; position:absolute; right:12px; top:8px; font-size:26px; color:var(--gold);
+  }
+
+  /* transport panel — wood console with knobs */
+  .console{
+    margin-top:auto;
+    background:
+      repeating-linear-gradient(88deg, #7a3d22 0 9px, #6c3520 9px 12px, #7a3d22 12px 22px);
+    border:3px solid var(--ink); border-radius:10px;
+    box-shadow:5px 6px 0 rgba(61,31,51,.5), inset 0 0 0 5px rgba(244,231,205,.18);
+    padding:16px; color:var(--cream);
+  }
+  .console-label{
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.26em; font-size:12px;
+    text-align:center; color:var(--sun); margin-bottom:12px;
+    text-shadow:1px 1px 0 rgba(0,0,0,.4);
+  }
+  .transport{ display:flex; justify-content:center; align-items:center; gap:14px; margin-bottom:14px; }
+  .btn{
+    width:54px;height:54px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #f7d98f, var(--gold) 60%, var(--burnt) 100%);
+    border:3px solid var(--ink);
+    box-shadow:0 4px 0 rgba(61,31,51,.6), inset 0 2px 4px rgba(255,255,255,.4);
+    display:grid; place-items:center; cursor:pointer;
+    transition:transform .12s ease, box-shadow .12s ease;
+    color:var(--ink);
+  }
+  .btn:hover{ transform:translateY(-2px); box-shadow:0 6px 0 rgba(61,31,51,.6); }
+  .btn:active{ transform:translateY(2px); box-shadow:0 1px 0 rgba(61,31,51,.6); }
+  .btn.play{ width:66px;height:66px; background:radial-gradient(circle at 35% 30%, #ffe6b0, var(--coral) 55%, var(--plum) 100%);}
+  .btn svg{ width:24px;height:24px; }
+  .btn.play svg{ width:30px;height:30px; }
+
+  .knobs{ display:flex; justify-content:space-around; gap:10px; }
+  .knob{ text-align:center; }
+  .knob .dial{
+    width:48px;height:48px;border-radius:50%; margin:0 auto;
+    background:conic-gradient(from -130deg, var(--deep-teal) 0 60%, #0c3936 60% 100%);
+    border:3px solid var(--ink); position:relative;
+    box-shadow:inset 0 2px 4px rgba(255,255,255,.25), 0 3px 0 rgba(61,31,51,.5);
+  }
+  .knob .dial::after{
+    content:""; position:absolute; top:5px; left:50%; width:3px;height:16px;
+    background:var(--sun); transform:translateX(-50%) rotate(28deg); transform-origin:bottom center; border-radius:2px;
+  }
+  .knob .v{ font-family:'Alfa Slab One',serif; font-size:15px; color:var(--sun); margin-top:5px; line-height:1;}
+  .knob .lab{ font-family:'Bebas Neue',sans-serif; letter-spacing:.16em; font-size:10px; color:var(--sand); margin-top:1px;}
+
+  /* corner mockup label */
+  .mockup-tag{
+    position:absolute; left:14px; bottom:12px; z-index:40;
+    font-family:'Bebas Neue',sans-serif; letter-spacing:.18em; font-size:11px;
+    color:var(--cream); background:rgba(61,31,51,.55);
+    padding:4px 10px; border:1.5px solid rgba(244,231,205,.5); border-radius:4px;
+    backdrop-filter:blur(2px);
+  }
+
+  @media (max-width:1080px){
+    .poster{ height:auto; min-height:92vh; }
+    .stage{ grid-template-columns:1fr; grid-template-rows:auto auto auto auto; overflow:auto; }
+    .left,.right{ flex-direction:row; flex-wrap:wrap; }
+    .console{ margin-top:14px; }
+  }
+</style>
+</head>
+<body>
+  <div class="poster">
+    <!-- ===== BACKGROUND ===== -->
+    <div class="sky"></div>
+    <div class="sun-disc"></div>
+    <div class="sun-bars"><i></i><i></i><i></i><i></i></div>
+    <div class="sun-rings"><span></span><span></span><span></span><span></span></div>
+
+    <div class="palm palm-left">
+      <div class="trunk" style="--lean:-7deg"></div>
+      <div class="crown">
+        <div class="frond"></div><div class="frond"></div><div class="frond"></div>
+        <div class="frond"></div><div class="frond"></div>
+      </div>
+    </div>
+    <div class="palm palm-right">
+      <div class="trunk" style="--lean:6deg"></div>
+      <div class="crown" style="position:absolute;bottom:268px;left:calc(50% - 16px);">
+        <div class="frond"></div><div class="frond"></div><div class="frond"></div>
+        <div class="frond"></div><div class="frond"></div>
+      </div>
+    </div>
+
+    <div class="island"></div>
+    <div class="ocean"><div class="ocean-shimmer"></div></div>
+
+    <div class="leaf leaf-l"></div>
+    <div class="leaf leaf-r"></div>
+
+    <!-- ===== CONTENT ===== -->
+    <div class="stage">
+
+      <!-- TOP BAR -->
+      <div class="topbar reveal d1">
+        <div class="titleblock">
+          <div class="kicker">Now Playing · Aloha Lounge</div>
+          <div class="song-title">Banana Pancakes</div>
+          <div class="byline">Jack Johnson</div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-meta">VERSE 1 · 1:24 / 3:11</div>
+          <div class="progress-rail">
+            <div class="progress-fill"></div>
+            <div class="progress-knob"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LEFT COLUMN -->
+      <div class="left reveal d3">
+        <div class="card">
+          <div class="card-label">Fingering · Baritone Uke</div>
+          <div class="fingering">
+            <div class="chord-name-big">G <small>major</small></div>
+            <svg class="chord-box" width="180" height="200" viewBox="0 0 180 200">
+              <!-- string labels D G B E -->
+              <text class="string-name" x="30" y="14">D</text>
+              <text class="string-name" x="70" y="14">G</text>
+              <text class="string-name" x="110" y="14">B</text>
+              <text class="string-name" x="150" y="14">E</text>
+
+              <!-- open / muted markers -->
+              <circle class="open-mark" cx="30" cy="28" r="6"></circle>
+              <circle class="open-mark" cx="70" cy="28" r="6"></circle>
+
+              <!-- nut -->
+              <line class="nut" x1="30" y1="40" x2="150" y2="40"></line>
+              <!-- frets -->
+              <line class="fret" x1="30" y1="40"  x2="150" y2="40"></line>
+              <line class="fret" x1="30" y1="78"  x2="150" y2="78"></line>
+              <line class="fret" x1="30" y1="116" x2="150" y2="116"></line>
+              <line class="fret" x1="30" y1="154" x2="150" y2="154"></line>
+              <line class="fret" x1="30" y1="192" x2="150" y2="192"></line>
+              <!-- strings -->
+              <line class="string" x1="30"  y1="40" x2="30"  y2="192"></line>
+              <line class="string" x1="70"  y1="40" x2="70"  y2="192"></line>
+              <line class="string" x1="110" y1="40" x2="110" y2="192"></line>
+              <line class="string" x1="150" y1="40" x2="150" y2="192"></line>
+
+              <!-- G major shape (baritone DGBE, like guitar top4): B string 3rd fret, E string 2nd...
+                   plausible: B(3rd fret), E(3rd fret) high G voicing -->
+              <circle class="dot" cx="110" cy="135" r="11"></circle>
+              <text class="dot-num" x="110" y="140">2</text>
+              <circle class="dot" cx="150" cy="135" r="11"></circle>
+              <text class="dot-num" x="150" y="140">3</text>
+            </svg>
+            <div class="tuning-note">Tuning D · G · B · E</div>
+          </div>
+        </div>
+
+        <div class="badge-tune">
+          <div class="tune-ring"><b>92%</b></div>
+          <div class="tune-txt">
+            <b>In Tune</b>
+            <span>nice &amp; steady this verse</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER COLUMN -->
+      <div class="center">
+        <div class="chord-sun reveal d2">
+          <div class="ring-rays"></div>
+          <div class="chord-disc">
+            <div>
+              <div class="now-label">NOW PLAYING</div>
+              <div class="chord-glyph">G</div>
+              <div class="chord-sub">hold for two bars</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="timeline reveal d4">
+          <div class="tag done"><div class="nm">D</div><div class="ct">2 BARS</div></div>
+          <div class="tag current"><div class="nm">G</div><div class="ct">2 BARS</div></div>
+          <div class="tag"><div class="nm">C</div><div class="ct">1 BAR</div></div>
+          <div class="tag"><div class="nm">D</div><div class="ct">1 BAR</div></div>
+          <div class="tag"><div class="nm">Em</div><div class="ct">2 BARS</div></div>
+          <div class="tag"><div class="nm">Am</div><div class="ct">1 BAR</div></div>
+          <div class="tag"><div class="nm">D7</div><div class="ct">1 BAR</div></div>
+        </div>
+
+        <div class="songbook reveal d5">
+          <div class="lyric-head">Verse · Songbook</div>
+          <div class="lyric-line past">
+            <span class="chordmark">G</span>Can't you see that it's just rainin'…
+          </div>
+          <div class="lyric-line">
+            <span class="chordmark">G</span>But, baby, you hardly even <span class="syl">no</span><span class="chordmark">C</span>tice
+          </div>
+          <div class="lyric-line next">
+            <span class="chordmark">D</span>when I try to show you <span class="chordmark">Em</span>this
+          </div>
+          <div class="lyric-line next">
+            <span class="chordmark">Am</span>is the way I'm <span class="chordmark">D7</span>feeling now…
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="right">
+        <div class="feedback fb-good reveal d4">
+          <span class="fb-tag">LIVE FEEDBACK</span>
+          <div class="fb-msg">Nice! ✓</div>
+          <div class="fb-sub">That G ring is clean and warm — right on the beat.</div>
+        </div>
+
+        <div class="feedback fb-coach reveal d5">
+          <span class="fb-tag">GENTLE COACHING</span>
+          <div class="fb-msg">Almost — try fretting the B string</div>
+          <div class="fb-sub">It's buzzing a touch. Press just behind the 2nd fret and let it sing.</div>
+        </div>
+
+        <div class="console reveal d6">
+          <div class="console-label">TRANSPORT</div>
+          <div class="transport">
+            <button class="btn" title="Restart" aria-label="Restart">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 3 3 8 8 8"/>
+              </svg>
+            </button>
+            <button class="btn play" title="Play/Pause" aria-label="Play or pause">
+              <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            </button>
+            <button class="btn" title="Stop" aria-label="Stop">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            </button>
+          </div>
+          <div class="knobs">
+            <div class="knob"><div class="dial"></div><div class="v">92</div><div class="lab">TEMPO</div></div>
+            <div class="knob"><div class="dial" style="background:conic-gradient(from -130deg,var(--burnt) 0 45%,#5a2412 45% 100%)"></div><div class="v">70%</div><div class="lab">VOLUME</div></div>
+            <div class="knob"><div class="dial" style="background:conic-gradient(from -130deg,var(--gold) 0 80%,#7a5a16 80% 100%)"></div><div class="v">ON</div><div class="lab">METRONOME</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== TEXTURE OVERLAYS ===== -->
+    <div class="halftone"></div>
+    <div class="grain"></div>
+    <div class="vignette"></div>
+
+    <div class="mockup-tag">MOCKUP — ukejam / Aloha Lounge</div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ukejam — Live Analyzer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg-0:#060a0c;
+    --bg-1:#0a0f12;
+    --bg-2:#0c1417;
+    --teal:#19e3c4;
+    --teal-2:#2fd6c4;
+    --teal-dim:#0e8d7c;
+    --gold:#f5c451;
+    --gold-2:#ffcf6b;
+    --gold-dim:#9c7a2c;
+    --amber:#ff9d4d;
+    --ink:#dff7f1;
+    --ink-dim:rgba(223,247,241,.55);
+    --ink-faint:rgba(223,247,241,.32);
+    --line-teal:rgba(25,227,196,.30);
+    --panel-bg:linear-gradient(180deg, rgba(12,20,23,.78), rgba(8,13,15,.78));
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+
+  body{
+    font-family:'Space Grotesk',system-ui,sans-serif;
+    background:
+      radial-gradient(120% 80% at 18% 8%, rgba(25,227,196,.07), transparent 52%),
+      radial-gradient(120% 90% at 88% 96%, rgba(245,196,81,.05), transparent 55%),
+      linear-gradient(180deg,var(--bg-0) 0%, var(--bg-1) 55%, var(--bg-0) 100%);
+    color:var(--ink);
+    overflow:hidden;
+    position:relative;
+    min-height:100vh;
+  }
+
+  /* fine grain + vignette for depth (subtle, not retro) */
+  .grain{
+    pointer-events:none; position:fixed; inset:-50%; z-index:91;
+    opacity:.035;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .vignette{
+    pointer-events:none; position:fixed; inset:0; z-index:89;
+    box-shadow:inset 0 0 260px 70px rgba(0,0,0,.78);
+  }
+  /* faint hairline measurement grid for "lab instrument" feel */
+  .labgrid{
+    pointer-events:none; position:fixed; inset:0; z-index:1; opacity:.5;
+    background-image:
+      linear-gradient(rgba(25,227,196,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(25,227,196,.025) 1px, transparent 1px);
+    background-size:46px 46px;
+    mask-image:radial-gradient(120% 100% at 50% 40%, #000 30%, transparent 85%);
+    -webkit-mask-image:radial-gradient(120% 100% at 50% 40%, #000 30%, transparent 85%);
+  }
+
+  /* ===== App shell ===== */
+  .app{
+    position:relative; z-index:10;
+    height:100vh; width:100%;
+    display:flex; flex-direction:column;
+    padding:16px 24px 16px;
+    gap:14px;
+  }
+
+  /* ===== Top bar ===== */
+  .topbar{
+    display:flex; align-items:center; gap:24px;
+    opacity:0; transform:translateY(-16px);
+    animation:dropIn .6s .05s cubic-bezier(.2,.8,.2,1) forwards;
+  }
+  .brand{
+    font-family:'Chakra Petch',sans-serif; font-weight:700;
+    font-size:25px; line-height:1; letter-spacing:1px; white-space:nowrap;
+    color:var(--teal);
+    text-shadow:0 0 8px rgba(25,227,196,.8), 0 0 22px rgba(25,227,196,.35);
+  }
+  .brand .jam{ color:var(--gold); text-shadow:0 0 8px rgba(245,196,81,.8),0 0 22px rgba(245,196,81,.35); }
+  .brand .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--teal); margin-left:2px; box-shadow:0 0 8px var(--teal); vertical-align:middle; animation:livePulse 2.4s ease-in-out infinite; }
+
+  .song{ display:flex; flex-direction:column; gap:3px; min-width:210px; }
+  .song .title{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:19px; letter-spacing:.5px;
+    color:var(--ink);
+    text-shadow:0 0 16px rgba(25,227,196,.25);
+  }
+  .song .artist{ font-size:11px; letter-spacing:3px; text-transform:uppercase; color:rgba(25,227,196,.78); font-weight:500; }
+
+  .chordstrip{ display:flex; gap:7px; align-items:center; }
+  .chordstrip .lbl{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:var(--ink-faint); text-transform:uppercase; margin-right:2px; }
+  .chip{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:12px;
+    padding:3px 9px; border-radius:7px; letter-spacing:.5px;
+    border:1px solid var(--line-teal); color:rgba(25,227,196,.85);
+    background:rgba(25,227,196,.04);
+    cursor:pointer;
+  }
+  .chip.active{ color:var(--bg-0); background:var(--gold); border-color:var(--gold); box-shadow:0 0 14px rgba(245,196,81,.6); }
+
+  .progress-wrap{ flex:1; display:flex; flex-direction:column; gap:5px; min-width:160px; }
+  .progress-meta{ display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; color:var(--ink-dim); }
+  .progress{
+    height:5px; border-radius:20px;
+    background:rgba(25,227,196,.07);
+    border:1px solid rgba(25,227,196,.18);
+    overflow:visible; position:relative;
+  }
+  .progress .fill{
+    height:100%; width:34%;
+    background:linear-gradient(90deg,var(--teal-dim),var(--teal));
+    box-shadow:0 0 12px var(--teal);
+    border-radius:20px; position:relative;
+  }
+  .progress .head{
+    position:absolute; right:-3px; top:50%; transform:translateY(-50%);
+    width:9px; height:9px; border-radius:50%;
+    background:#fff; box-shadow:0 0 10px 2px var(--teal);
+  }
+
+  /* transport controls */
+  .transport{ display:flex; gap:9px; align-items:center; }
+  .btn{
+    --c:var(--teal);
+    width:42px; height:42px; border-radius:11px;
+    display:grid; place-items:center;
+    background:rgba(10,15,18,.7);
+    border:1.4px solid var(--c);
+    color:var(--c); cursor:pointer;
+    box-shadow:0 0 12px rgba(25,227,196,.22), inset 0 0 10px rgba(25,227,196,.06);
+    transition:transform .15s ease, box-shadow .2s ease, background .2s ease;
+  }
+  .btn svg{ width:18px; height:18px; fill:currentColor; filter:drop-shadow(0 0 4px currentColor); }
+  .btn:hover{ transform:translateY(-2px); box-shadow:0 0 20px var(--c), inset 0 0 14px rgba(25,227,196,.18); background:rgba(25,227,196,.07); }
+  .btn:active{ transform:translateY(0) scale(.96); }
+  .btn.play{ --c:var(--gold); box-shadow:0 0 16px rgba(245,196,81,.4), inset 0 0 12px rgba(245,196,81,.1); }
+  .btn.tempo{ width:auto; padding:0 14px; gap:6px; font-family:'JetBrains Mono',monospace; font-weight:600; font-size:13px; letter-spacing:.5px; }
+  .btn.tempo small{ font-size:9px; opacity:.6; }
+
+  /* calibrate button (matches neon panel/button language) */
+  .btn.cal{
+    --c:var(--gold);
+    width:auto; padding:0 14px; gap:7px;
+    font-family:'JetBrains Mono',monospace; font-weight:600; font-size:11px; letter-spacing:.5px;
+    text-transform:uppercase; white-space:nowrap;
+    box-shadow:0 0 14px rgba(245,196,81,.32), inset 0 0 12px rgba(245,196,81,.08);
+  }
+  .btn.cal svg{ width:15px; height:15px; }
+  .btn.cal.busy{ opacity:.7; cursor:progress; animation:calPulse 1s ease-in-out infinite; }
+  @keyframes calPulse{ 0%,100%{ box-shadow:0 0 14px rgba(245,196,81,.32), inset 0 0 12px rgba(245,196,81,.08);} 50%{ box-shadow:0 0 24px rgba(245,196,81,.7), inset 0 0 16px rgba(245,196,81,.18);} }
+
+  /* connection + calibration status line */
+  .conn{ display:flex; flex-direction:column; gap:3px; align-items:flex-end; min-width:160px; }
+  .conn .live{ font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:1px; font-weight:600; color:var(--teal); text-shadow:0 0 8px rgba(25,227,196,.6); white-space:nowrap; }
+  .conn .live.off{ color:var(--gold-dim); text-shadow:none; }
+  .conn .cfg{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.5px; color:var(--ink-faint); white-space:nowrap; }
+  .conn .cfg b{ color:rgba(25,227,196,.7); font-weight:600; }
+
+  /* ===== Stage layout ===== */
+  .stage{
+    flex:1; display:grid;
+    grid-template-columns:1fr 1.5fr 1fr;
+    grid-template-rows:1fr auto;
+    gap:14px; min-height:0;
+  }
+
+  /* panel base */
+  .panel{
+    border:1.2px solid var(--line-teal);
+    border-radius:14px;
+    background:var(--panel-bg);
+    box-shadow:0 0 24px rgba(25,227,196,.06), inset 0 0 30px rgba(25,227,196,.025);
+    padding:14px 15px;
+    position:relative; overflow:hidden;
+  }
+  .panel::before{
+    /* corner tick marks */
+    content:""; position:absolute; top:7px; left:7px; width:9px; height:9px;
+    border-top:1.4px solid rgba(25,227,196,.5); border-left:1.4px solid rgba(25,227,196,.5);
+  }
+  .panel-title{
+    font-family:'JetBrains Mono',monospace; font-weight:600; font-size:10px; letter-spacing:3px; text-transform:uppercase;
+    color:var(--teal); margin-bottom:10px;
+    text-shadow:0 0 10px rgba(25,227,196,.5);
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel-title .tag{ margin-left:auto; font-size:9px; letter-spacing:1px; color:var(--ink-faint); text-shadow:none; }
+
+  /* ===== column wrappers / reveal ===== */
+  .col-left{ grid-column:1; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:translateX(-26px); animation:slideInL .6s .2s cubic-bezier(.2,.8,.2,1) forwards; }
+  .col-center{ grid-column:2; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:scale(.97); animation:fadeScale .65s .12s cubic-bezier(.2,.8,.2,1) forwards; }
+  .col-right{ grid-column:3; grid-row:1; display:flex; flex-direction:column; gap:14px; min-height:0;
+    opacity:0; transform:translateX(26px); animation:slideInR .6s .25s cubic-bezier(.2,.8,.2,1) forwards; }
+  .fft-row{ grid-column:1 / -1; grid-row:2;
+    opacity:0; transform:translateY(20px); animation:slideUp .65s .34s cubic-bezier(.2,.8,.2,1) forwards; }
+
+  /* ===== HERO 1: CLEANLINESS METER (left top, big) ===== */
+  .clean-panel{ flex:0 0 auto; display:flex; flex-direction:column; }
+  .gauge-wrap{ position:relative; width:100%; display:flex; justify-content:center; align-items:center; }
+  .gauge-canvas{ width:210px; height:210px; }
+  .gauge-readout{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-46%);
+    text-align:center; pointer-events:none;
+  }
+  .gauge-val{
+    font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:50px; line-height:1;
+    color:var(--teal); font-variant-numeric:tabular-nums;
+    text-shadow:0 0 18px rgba(25,227,196,.7), 0 0 40px rgba(25,227,196,.3);
+    transition:color .4s, text-shadow .4s;
+  }
+  .gauge-val .pct{ font-size:22px; opacity:.6; }
+  .gauge-status{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:4px; text-transform:uppercase;
+    color:var(--teal); margin-top:4px; text-shadow:0 0 10px rgba(25,227,196,.6);
+    transition:color .4s;
+  }
+  .gauge-sub{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:var(--ink-faint); margin-top:3px; }
+
+  /* note breakdown */
+  .breakdown{ margin-top:6px; display:flex; flex-direction:column; gap:8px; }
+  .target-notes{ display:flex; gap:8px; justify-content:center; }
+  .note-tok{
+    font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:15px;
+    width:52px; padding:7px 0; text-align:center; border-radius:9px;
+    border:1.2px solid var(--line-teal); color:var(--ink-dim);
+    position:relative; transition:all .35s;
+  }
+  .note-tok .nm{ font-size:9px; font-family:'JetBrains Mono',monospace; opacity:.55; display:block; letter-spacing:1px; }
+  .note-tok.present{ color:var(--teal); border-color:var(--teal); background:rgba(25,227,196,.07); box-shadow:0 0 14px rgba(25,227,196,.25); }
+  .note-tok.present .nm{ color:var(--teal); opacity:.8; }
+  .note-tok.missing{ color:var(--gold); border-color:rgba(245,196,81,.5); border-style:dashed; opacity:.85; animation:missBlink 1.6s ease-in-out infinite; }
+  .note-tok .mark{ position:absolute; top:-7px; right:-7px; width:17px; height:17px; border-radius:50%; display:grid; place-items:center; font-size:10px; font-family:'JetBrains Mono'; }
+  .note-tok.present .mark{ background:var(--teal); color:var(--bg-0); box-shadow:0 0 8px var(--teal); }
+  .note-tok.missing .mark{ background:var(--gold); color:var(--bg-0); box-shadow:0 0 8px var(--gold); }
+  @keyframes missBlink{ 0%,100%{ opacity:.55; } 50%{ opacity:1; } }
+
+  .coach{
+    font-family:'JetBrains Mono',monospace; font-size:11px; line-height:1.5; letter-spacing:.3px;
+    padding:9px 11px; border-radius:9px; min-height:38px;
+    border-left:2px solid var(--gold);
+    background:rgba(245,196,81,.06); color:var(--gold-2);
+    transition:all .4s;
+  }
+  .coach.good{ border-left-color:var(--teal); background:rgba(25,227,196,.06); color:var(--teal); }
+  .coach b{ font-weight:700; }
+
+  /* ===== CHROMAGRAM (left bottom) ===== */
+  .chroma-panel{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+  .chroma-wrap{ flex:1; display:flex; align-items:flex-end; gap:5px; padding-top:6px; min-height:78px; }
+  .chroma-bin{ flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; height:100%; justify-content:flex-end; }
+  .chroma-bar{
+    width:100%; border-radius:4px 4px 2px 2px;
+    background:linear-gradient(180deg,var(--teal),var(--teal-dim));
+    box-shadow:0 0 8px rgba(25,227,196,.4);
+    min-height:3px; transition:height .12s linear;
+  }
+  .chroma-bin.target .chroma-bar{
+    background:linear-gradient(180deg,var(--gold-2),var(--gold-dim));
+    box-shadow:0 0 10px rgba(245,196,81,.6);
+  }
+  .chroma-lbl{ font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--ink-faint); }
+  .chroma-bin.target .chroma-lbl{ color:var(--gold); text-shadow:0 0 8px rgba(245,196,81,.5); }
+
+  /* ===== CENTER: highway + current chord ===== */
+  .highway-panel{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; padding:0; }
+  .highway-canvas-wrap{ position:relative; flex:1; min-height:0; }
+  .highway-canvas{ width:100%; height:100%; display:block; }
+  .now-tag{
+    position:absolute; top:11px; left:50%; transform:translateX(-50%);
+    font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:5px; color:var(--gold);
+    text-shadow:0 0 10px rgba(245,196,81,.7); text-transform:uppercase; z-index:4;
+  }
+  .current-chord{
+    position:absolute; left:50%; bottom:18px; transform:translateX(-50%);
+    text-align:center; z-index:5; pointer-events:none;
+  }
+  .current-chord .big{
+    font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:96px; line-height:.9;
+    color:#fff;
+    text-shadow:0 0 16px var(--teal), 0 0 44px rgba(25,227,196,.55), 0 0 90px rgba(25,227,196,.25);
+    transition:text-shadow .4s;
+  }
+  .current-chord .lbl{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:6px; color:var(--teal); text-transform:uppercase; text-shadow:0 0 10px var(--teal); }
+
+  /* lyrics panel center bottom */
+  .lyrics-panel{ flex:0 0 auto; }
+  .lyric-line{ font-size:21px; font-weight:500; line-height:1.4; color:var(--ink-faint); }
+  .lyric-line.now{ color:var(--ink); }
+  .lyric-line.next{ font-size:15px; color:var(--ink-faint); margin-top:6px; }
+  .syll{ position:relative; padding:0 1px; transition:color .25s, text-shadow .25s; }
+  .syll.lit{ color:var(--gold-2); text-shadow:0 0 12px rgba(245,196,81,.7); }
+  .syll.lit::after{ content:""; position:absolute; left:0; right:0; bottom:-3px; height:2px; background:var(--gold); box-shadow:0 0 8px var(--gold); border-radius:3px; }
+  .chord-cue{ font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:11px; color:var(--teal); text-shadow:0 0 8px var(--teal); vertical-align:super; margin:0 2px; }
+
+  /* ===== RIGHT: fingering + metrics ===== */
+  .finger-panel{ flex:0 0 auto; display:flex; flex-direction:column; align-items:center; }
+  .finger-name{ font-family:'Chakra Petch',sans-serif; font-weight:700; font-size:30px; color:var(--gold); text-shadow:0 0 14px rgba(245,196,81,.6); line-height:1; margin-bottom:1px; }
+  .finger-tuning{ font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:2px; color:rgba(25,227,196,.7); text-transform:uppercase; margin-bottom:8px; }
+  .fret-svg{ width:100%; max-width:172px; filter:drop-shadow(0 0 8px rgba(25,227,196,.2)); }
+  .string-lbls{ display:flex; justify-content:space-between; width:100%; max-width:172px; margin-top:5px; padding:0 14px; }
+  .string-lbls span{ font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; color:var(--ink-dim); width:20px; text-align:center; }
+
+  .metrics-panel{ flex:1 1 auto; display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .metric{ display:flex; flex-direction:column; gap:5px; }
+  .metric-head{ display:flex; justify-content:space-between; align-items:baseline; }
+  .metric-head .k{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--ink-dim); }
+  .metric-head .v{ font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600; color:var(--teal); text-shadow:0 0 10px rgba(25,227,196,.5); font-variant-numeric:tabular-nums; }
+  .mbar{ height:6px; border-radius:6px; background:rgba(255,255,255,.05); border:1px solid rgba(25,227,196,.14); overflow:hidden; }
+  .mbar .mf{ height:100%; border-radius:6px; background:linear-gradient(90deg,var(--teal-dim),var(--teal)); box-shadow:0 0 10px var(--teal); transition:width .25s; }
+  .mbar .mf.gold{ background:linear-gradient(90deg,var(--gold-dim),var(--gold)); box-shadow:0 0 10px var(--gold); }
+
+  .peaks-list{ margin-top:2px; display:flex; flex-direction:column; gap:4px; }
+  .peak-row{ display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono',monospace; font-size:11px; }
+  .peak-row .dot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+  .peak-row .dot.t{ background:var(--gold); box-shadow:0 0 7px var(--gold); }
+  .peak-row .dot.h{ background:var(--teal); box-shadow:0 0 7px var(--teal); }
+  .peak-row .pn{ color:var(--ink); min-width:30px; }
+  .peak-row .pf{ color:var(--ink-dim); margin-left:auto; }
+  .peaks-empty{ font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint); letter-spacing:.5px; padding:2px 0; }
+
+  /* ===== HERO 2: FFT SPECTRUM (bottom full-width) ===== */
+  .fft-panel{ position:relative; padding:12px 16px 10px; }
+  .fft-canvas-wrap{ position:relative; width:100%; height:150px; }
+  .fft-canvas{ width:100%; height:100%; display:block; }
+
+  /* corner mockup label */
+  .mock-label{
+    position:fixed; left:14px; bottom:12px; z-index:95;
+    font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:1px;
+    color:rgba(25,227,196,.7);
+    border:1px solid rgba(25,227,196,.28); border-radius:6px;
+    padding:6px 9px; background:rgba(8,13,15,.6);
+    text-shadow:0 0 6px rgba(25,227,196,.4);
+  }
+
+  @keyframes dropIn{ to{ opacity:1; transform:translateY(0);} }
+  @keyframes slideInL{ to{ opacity:1; transform:translateX(0);} }
+  @keyframes slideInR{ to{ opacity:1; transform:translateX(0);} }
+  @keyframes slideUp{ to{ opacity:1; transform:translateY(0);} }
+  @keyframes fadeScale{ to{ opacity:1; transform:scale(1);} }
+  @keyframes livePulse{ 0%,100%{ opacity:1; box-shadow:0 0 8px var(--teal);} 50%{ opacity:.4; box-shadow:0 0 3px var(--teal);} }
+
+  /* responsive guard */
+  @media (max-width:1240px){
+    .stage{ grid-template-columns:1fr 1.3fr 1fr; }
+    .current-chord .big{ font-size:78px; }
+    .gauge-canvas{ width:184px; height:184px; }
+  }
+  @media (max-width:980px){
+    .stage{ grid-template-columns:1fr 1fr; grid-template-rows:auto auto auto; }
+    .col-left{ grid-column:1; grid-row:1; }
+    .col-center{ grid-column:2; grid-row:1; }
+    .col-right{ grid-column:1 / -1; grid-row:2; flex-direction:row; flex-wrap:wrap; }
+    .col-right > *{ flex:1; }
+    .fft-row{ grid-row:3; }
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{ animation-duration:.001s !important; animation-iteration-count:1 !important; transition-duration:.001s !important; }
+    .brand .dot{ animation:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="labgrid"></div>
+
+  <div class="app">
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="brand">uke<span class="jam">jam</span><span class="dot"></span></div>
+      <div class="song">
+        <div class="title">Live Analyzer</div>
+        <div class="artist">real-time input</div>
+      </div>
+      <div class="chordstrip">
+        <span class="lbl">Chords</span>
+        <span class="chip active">G</span>
+        <span class="chip">C</span>
+        <span class="chip">D</span>
+        <span class="chip">Em</span>
+        <span class="chip">Am</span>
+        <span class="chip">D7</span>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-meta"><span id="t-elapsed">00:00</span><span>LISTENING</span><span id="rms-val">rms —</span></div>
+        <div class="progress"><div class="fill" id="prog-fill"><div class="head"></div></div></div>
+      </div>
+      <div class="transport">
+        <button class="btn cal" id="btn-calibrate" title="Calibrate microphone using room noise">
+          <svg viewBox="0 0 24 24"><path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4zm7 10a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-3.06A9 9 0 0 0 21 11z"/></svg>
+          <span id="cal-label">Calibrate mic</span>
+        </button>
+      </div>
+      <div class="conn">
+        <div class="live off" id="conn-ind">● offline</div>
+        <div class="cfg" id="cfg-line">floor <b>—</b> · gate <b>—</b> · saved setting</div>
+      </div>
+    </header>
+
+    <!-- STAGE -->
+    <div class="stage">
+      <!-- LEFT: HERO cleanliness + chromagram -->
+      <div class="col-left">
+        <div class="panel clean-panel">
+          <div class="panel-title">Chord Cleanliness <span class="tag">cos-sim match</span></div>
+          <div class="gauge-wrap">
+            <canvas class="gauge-canvas" id="gauge" width="420" height="420"></canvas>
+            <div class="gauge-readout">
+              <div class="gauge-val" id="clean-val">0<span class="pct">%</span></div>
+              <div class="gauge-status" id="clean-status">Listening</div>
+              <div class="gauge-sub" id="clean-target">target · —</div>
+            </div>
+          </div>
+          <div class="breakdown">
+            <div class="target-notes" id="target-notes"></div>
+            <div class="coach good" id="coach">Listening for your strum…</div>
+          </div>
+        </div>
+
+        <div class="panel chroma-panel">
+          <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
+          <div class="chroma-wrap" id="chroma"></div>
+        </div>
+      </div>
+
+      <!-- CENTER: highway + current chord + lyrics -->
+      <div class="col-center">
+        <div class="panel highway-panel">
+          <div class="now-tag">— NOW —</div>
+          <div class="highway-canvas-wrap">
+            <canvas class="highway-canvas" id="highway"></canvas>
+            <div class="current-chord">
+              <div class="big" id="cur-chord">—</div>
+              <div class="lbl">Playing</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel lyrics-panel">
+          <div class="panel-title">Coaching <span class="tag">live</span></div>
+          <div class="lyric-line now" id="lyric-now">
+            Play a chord — the analyzer scores how cleanly it rings.
+          </div>
+          <div class="lyric-line next">
+            Calibrate once in a quiet room; the noise gate is saved and reused.
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: fingering + spectrum metrics -->
+      <div class="col-right">
+        <div class="panel finger-panel">
+          <div class="panel-title">Fingering <span class="tag">baritone</span></div>
+          <div class="finger-name">—</div>
+          <div class="finger-tuning">tuning · D G B E</div>
+          <svg class="fret-svg" viewBox="0 0 160 196" aria-label="chord fingering">
+            <defs>
+              <filter id="fg" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+            </defs>
+            <text x="20" y="34" fill="#19e3c4" font-family="JetBrains Mono" font-size="10" text-anchor="middle">1</text>
+            <!-- nut -->
+            <rect x="28" y="24" width="104" height="4" rx="2" fill="#19e3c4" opacity=".9" filter="url(#fg)"/>
+            <!-- frets -->
+            <g stroke="#19e3c4" stroke-width="1.6" opacity=".55">
+              <line x1="28" y1="64" x2="132" y2="64"/>
+              <line x1="28" y1="104" x2="132" y2="104"/>
+              <line x1="28" y1="144" x2="132" y2="144"/>
+              <line x1="28" y1="184" x2="132" y2="184"/>
+            </g>
+            <!-- strings D G B E -->
+            <g stroke="#19e3c4" stroke-width="1.6" opacity=".75" filter="url(#fg)">
+              <line x1="28" y1="24" x2="28" y2="184"/>
+              <line x1="62.6" y1="24" x2="62.6" y2="184"/>
+              <line x1="97.3" y1="24" x2="97.3" y2="184"/>
+              <line x1="132" y1="24" x2="132" y2="184"/>
+            </g>
+            <!-- G major shape on baritone (DGBE): D open, G open, B fret2, E fret3 -->
+            <!-- open string markers (D, G) -->
+            <circle cx="28" cy="16" r="5" fill="none" stroke="#19e3c4" stroke-width="1.6" filter="url(#fg)"/>
+            <circle cx="62.6" cy="16" r="5" fill="none" stroke="#19e3c4" stroke-width="1.6" filter="url(#fg)"/>
+            <!-- fretted: B string fret2 (finger 1), E string fret3 (finger 2) -->
+            <circle cx="97.3" cy="84" r="9" fill="#f5c451" filter="url(#fg)"/>
+            <circle cx="132" cy="124" r="9" fill="#f5c451" filter="url(#fg)"/>
+            <g fill="#0a0f12" font-family="Chakra Petch" font-size="11" font-weight="700" text-anchor="middle">
+              <text x="97.3" y="88">1</text>
+              <text x="132" y="128">2</text>
+            </g>
+          </svg>
+          <div class="string-lbls"><span>D</span><span>G</span><span>B</span><span>E</span></div>
+        </div>
+
+        <div class="panel metrics-panel">
+          <div class="panel-title">Analyzer <span class="tag">live</span></div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">Cleanliness</span><span class="v" id="m-intune">—</span></div>
+            <div class="mbar"><div class="mf" id="mf-intune" style="width:0%"></div></div>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">Signal (RMS)</span><span class="v gold-v" id="m-onset" style="color:var(--gold)">—</span></div>
+            <div class="mbar"><div class="mf gold" id="mf-onset" style="width:0%"></div></div>
+          </div>
+          <div class="metric">
+            <div class="metric-head"><span class="k">Detected peaks</span><span class="v" id="m-peakcount">0</span></div>
+          </div>
+          <div class="peaks-list" id="peaks-list">
+            <div class="peaks-empty">— no peaks —</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HERO 2: FFT spectrum, full width bottom -->
+      <div class="fft-row">
+        <div class="panel fft-panel">
+          <div class="panel-title">Live FFT Spectrum <span class="tag" id="fft-tag">96 log bins · 70 Hz – 2 kHz</span></div>
+          <div class="fft-canvas-wrap">
+            <canvas class="fft-canvas" id="fft"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grain"></div>
+  <div class="vignette"></div>
+  <div class="mock-label">ukejam / Live Analyzer</div>
+
+  <script>
+  (function(){
+    "use strict";
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // ---------- color helpers ----------
+    const TEAL = [25,227,196], GOLD = [245,196,81], AMBER=[255,157,77];
+    const rgba = (c,a)=>`rgba(${c[0]},${c[1]},${c[2]},${a})`;
+    const lerp = (a,b,t)=>a+(b-a)*t;
+    const lerpC = (a,b,t)=>[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];
+    const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+
+    // pitch class names (index 0=C .. 11=B)
+    const PCS = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    // tiny chord -> pitch-class lookup for the common chords (used to light chroma gold)
+    const CHORD_PCS = {
+      'G':[7,11,2], 'C':[0,4,7], 'D':[2,6,9], 'Em':[4,7,11], 'Am':[9,0,4], 'D7':[2,6,9,0],
+      'A':[9,1,4], 'E':[4,8,11], 'F':[5,9,0], 'Am7':[9,0,4,7], 'Dm':[2,5,9], 'B7':[11,3,6,9,1],
+    };
+    function pcOf(noteName){
+      // accepts "G", "F#", "G3" etc -> pitch class 0..11 or null
+      if(!noteName) return null;
+      const m = String(noteName).match(/^([A-G])([#b]?)/);
+      if(!m) return null;
+      const base = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[m[1]];
+      let pc = base + (m[2]==='#'?1:m[2]==='b'?-1:0);
+      return ((pc%12)+12)%12;
+    }
+    function chordPcs(label){
+      if(!label) return [];
+      if(CHORD_PCS[label]) return CHORD_PCS[label];
+      const root = pcOf(label);
+      return root==null? [] : [root];
+    }
+
+    // ---------- DOM refs ----------
+    const $ = s=>document.querySelector(s);
+    const gaugeC = $('#gauge'), gx = gaugeC.getContext('2d');
+    const fftC = $('#fft'), fx = fftC.getContext('2d');
+    const hwC = $('#highway'), hx = hwC.getContext('2d');
+    const cleanValEl = $('#clean-val'), cleanStatusEl = $('#clean-status'), cleanTargetEl = $('#clean-target');
+    const coachEl = $('#coach'), targetNotesEl = $('#target-notes');
+    const curChordEl = $('#cur-chord'), fingerNameEl = document.querySelector('.finger-name');
+    const chromaEl = $('#chroma');
+    const peaksListEl = $('#peaks-list'), peakCountEl = $('#m-peakcount');
+    const intuneEl = $('#m-intune'), mfIntune = $('#mf-intune');
+    const onsetEl = $('#m-onset'), mfOnset = $('#mf-onset');
+    const progFill = $('#prog-fill');
+    const rmsValEl = $('#rms-val');
+    const connInd = $('#conn-ind');
+    const cfgLine = $('#cfg-line');
+    const fftTagEl = $('#fft-tag');
+
+    // ---------- chromagram build ----------
+    const chromaBins = [];
+    for (let i=0;i<12;i++){
+      const bin = document.createElement('div'); bin.className='chroma-bin';
+      const bar = document.createElement('div'); bar.className='chroma-bar';
+      const lbl = document.createElement('div'); lbl.className='chroma-lbl'; lbl.textContent = PCS[i];
+      bin.appendChild(bar); bin.appendChild(lbl);
+      chromaEl.appendChild(bin);
+      chromaBins.push({bin,bar,lbl, val:0});
+    }
+    const chromaVals = new Array(12).fill(0);
+
+    // ---------- HiDPI canvas sizing ----------
+    function fitCanvas(c){
+      const dpr = Math.min(window.devicePixelRatio||1, 2);
+      const r = c.getBoundingClientRect();
+      c.width = Math.max(2,Math.round(r.width*dpr));
+      c.height = Math.max(2,Math.round(r.height*dpr));
+      const ctx = c.getContext('2d');
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      return { w:r.width, h:r.height };
+    }
+    let fftDim = fitCanvas(fftC), hwDim = fitCanvas(hwC);
+    function fitGauge(){
+      const dpr = Math.min(window.devicePixelRatio||1, 2);
+      const r = gaugeC.getBoundingClientRect();
+      gaugeC.width = Math.round(r.width*dpr); gaugeC.height = Math.round(r.height*dpr);
+      gx.setTransform(dpr,0,0,dpr,0,0);
+      return { w:r.width, h:r.height };
+    }
+    let gDim = fitGauge();
+    window.addEventListener('resize', ()=>{ fftDim=fitCanvas(fftC); hwDim=fitCanvas(hwC); gDim=fitGauge(); });
+
+    // ============================================================
+    // LIVE DATA STATE — fed by the SSE /stream frames
+    // ============================================================
+    const NBINS = 96;                 // incoming spectrum length
+    const FMIN = 70, FMAX = 2000;     // matches the server's log-spaced 70Hz..2000Hz range
+    const logF = f => Math.log(f/FMIN)/Math.log(FMAX/FMIN); // 0..1 across axis
+    // log-spaced center frequency of each incoming bin
+    const binF = [];
+    for(let i=0;i<NBINS;i++){ binF.push(FMIN*Math.pow(FMAX/FMIN, i/(NBINS-1))); }
+
+    const spec = new Float32Array(NBINS);        // displayed (smoothed)
+    const specTarget = new Float32Array(NBINS);  // latest frame
+    const goldBins = new Uint8Array(NBINS);      // which bins are highlighted gold (near a target-chord peak)
+
+    let cleanVal = 0;        // displayed cleanliness (0..1), smoothed
+    let cleanTargetV = 0;    // latest cleanliness
+
+    // latest frame snapshot (drives the non-canvas DOM)
+    let frame = null;
+    let gated = false;
+    let lastFrameTime = 0;
+    let detected = null, target = null;
+
+    // ============================================================
+    // FFT SPECTRUM (renders the live `spectrum` array)
+    // ============================================================
+    function recomputeGold(fr){
+      goldBins.fill(0);
+      if(!fr || !fr.gated || !fr.peaks) return;
+      const tpcs = chordPcs(fr.target);
+      const useAll = tpcs.length===0;
+      fr.peaks.forEach(p=>{
+        if(p.freq==null) return;
+        const pc = pcOf(p.note);
+        const inTarget = useAll || (pc!=null && tpcs.includes(pc));
+        if(!inTarget) return;
+        // highlight bins near this peak's frequency (approx, log distance)
+        for(let i=0;i<NBINS;i++){
+          if(Math.abs(Math.log(binF[i]/p.freq)) < 0.022) goldBins[i]=1;
+        }
+      });
+    }
+
+    function drawFFT(){
+      const {w,h}=fftDim; const padL=4, padR=4, padB=18, padT=6;
+      const plotW = w-padL-padR, plotH = h-padT-padB;
+      fx.clearRect(0,0,w,h);
+
+      // axis baseline
+      fx.strokeStyle = rgba(TEAL,0.14); fx.lineWidth=1;
+      fx.beginPath(); fx.moveTo(padL, h-padB); fx.lineTo(w-padR, h-padB); fx.stroke();
+
+      // frequency gridlines + labels (log)
+      const ticks=[80,120,196,247,294,440,659,1000,1500,2000];
+      fx.font='10px "JetBrains Mono", monospace'; fx.textAlign='center';
+      ticks.forEach(fr=>{
+        const x = padL + logF(fr)*plotW;
+        fx.strokeStyle=rgba(TEAL,0.06); fx.beginPath(); fx.moveTo(x,padT); fx.lineTo(x,h-padB); fx.stroke();
+        fx.fillStyle=rgba(TEAL,0.4);
+        fx.fillText(fr>=1000?(fr/1000)+'k':fr, x, h-5);
+      });
+
+      // smooth spec toward latest frame
+      for(let i=0;i<NBINS;i++){ spec[i] += (specTarget[i]-spec[i])*0.30; }
+
+      // build the curve as filled area
+      const barW = plotW/NBINS;
+      fx.beginPath();
+      fx.moveTo(padL, h-padB);
+      for(let i=0;i<NBINS;i++){
+        const x=padL+i*barW+barW/2;
+        const y=(h-padB)-spec[i]*plotH;
+        fx.lineTo(x,y);
+      }
+      fx.lineTo(w-padR, h-padB); fx.closePath();
+      const grad = fx.createLinearGradient(0,padT,0,h-padB);
+      grad.addColorStop(0, rgba(TEAL,0.22)); grad.addColorStop(1, rgba(TEAL,0.02));
+      fx.fillStyle=grad; fx.fill();
+
+      // glowing line, segment color teal/gold
+      fx.lineWidth=1.6; fx.lineJoin='round';
+      for(let i=0;i<NBINS-1;i++){
+        const x1=padL+i*barW+barW/2, y1=(h-padB)-spec[i]*plotH;
+        const x2=padL+(i+1)*barW+barW/2, y2=(h-padB)-spec[i+1]*plotH;
+        const gold = goldBins[i]||goldBins[i+1];
+        const tall = spec[i]>0.22||spec[i+1]>0.22;
+        fx.strokeStyle = gold? rgba(GOLD, tall?0.95:0.6) : rgba(TEAL, tall?0.9:0.5);
+        fx.shadowColor = gold? rgba(GOLD,0.9): rgba(TEAL,0.8);
+        fx.shadowBlur = (gold? 10:7)*(tall?1.4:0.7);
+        fx.beginPath(); fx.moveTo(x1,y1); fx.lineTo(x2,y2); fx.stroke();
+      }
+      fx.shadowBlur=0;
+
+      // peak markers / note labels from the live peaks
+      fx.textAlign='center';
+      const peaks = (frame && frame.gated && frame.peaks) ? frame.peaks.slice(0,4) : [];
+      const tpcs = chordPcs(frame && frame.target);
+      const useAll = tpcs.length===0;
+      peaks.forEach(p=>{
+        if(p.freq==null || p.freq<FMIN || p.freq>FMAX) return;
+        const x=padL+logF(p.freq)*plotW;
+        // find nearest displayed bin for height
+        let bi=0,best=1e9; for(let i=0;i<NBINS;i++){const d=Math.abs(binF[i]-p.freq); if(d<best){best=d;bi=i;}}
+        const y=(h-padB)-spec[bi]*plotH;
+        const pc = pcOf(p.note);
+        const gold = useAll || (pc!=null && tpcs.includes(pc));
+        const col = gold?GOLD:TEAL;
+        fx.fillStyle=rgba(col,1); fx.shadowColor=rgba(col,0.9); fx.shadowBlur=10;
+        fx.beginPath(); fx.arc(x,y,3,0,Math.PI*2); fx.fill(); fx.shadowBlur=0;
+        fx.fillStyle=rgba(col,0.95);
+        fx.font='600 11px "JetBrains Mono", monospace';
+        fx.fillText((p.note||'')+' '+Math.round(p.freq)+'Hz', x, Math.max(padT+11,y-9));
+      });
+    }
+
+    // ============================================================
+    // CLEANLINESS GAUGE (radial arc) — driven by `cleanliness`
+    // ============================================================
+    const A0 = Math.PI*0.75, A1 = Math.PI*2.25; // 270deg sweep from lower-left
+    function drawGauge(){
+      const {w,h}=gDim; const cx=w/2, cy=h/2, R=Math.min(w,h)*0.40;
+      gx.clearRect(0,0,w,h);
+
+      // value color: teal when clean (>=85%), toward gold/amber when not
+      const v = cleanVal;
+      const colT = v>0.88? 0 : v>0.7? lerp(0,1,(0.88-v)/0.18) : 1;
+      const col = lerpC(TEAL, GOLD, colT);
+      const colDanger = v<0.7? lerpC(GOLD, AMBER, clamp((0.7-v)/0.2,0,1)) : col;
+      const arcCol = v<0.7? colDanger : col;
+
+      // tick ring (instrument feel)
+      gx.save();
+      for(let i=0;i<=40;i++){
+        const a = A0 + (A1-A0)*(i/40);
+        const major = i%5===0;
+        const r1 = R+10, r2 = R+(major?20:15);
+        gx.strokeStyle = rgba(TEAL, major?0.32:0.14); gx.lineWidth=major?1.4:1;
+        gx.beginPath();
+        gx.moveTo(cx+Math.cos(a)*r1, cy+Math.sin(a)*r1);
+        gx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2);
+        gx.stroke();
+      }
+      gx.restore();
+
+      // background track
+      gx.lineCap='round';
+      gx.strokeStyle=rgba(TEAL,0.10); gx.lineWidth=11;
+      gx.beginPath(); gx.arc(cx,cy,R,A0,A1); gx.stroke();
+
+      // value arc with glow
+      const a = A0 + (A1-A0)*clamp(v,0,1);
+      gx.shadowColor=rgba(arcCol,0.85); gx.shadowBlur=22;
+      gx.strokeStyle=rgba(arcCol,0.95); gx.lineWidth=11;
+      gx.beginPath(); gx.arc(cx,cy,R,A0,a); gx.stroke();
+      gx.shadowBlur=0;
+
+      // moving tip dot
+      const tx=cx+Math.cos(a)*R, ty=cy+Math.sin(a)*R;
+      gx.fillStyle='#fff'; gx.shadowColor=rgba(arcCol,1); gx.shadowBlur=16;
+      gx.beginPath(); gx.arc(tx,ty,5,0,Math.PI*2); gx.fill(); gx.shadowBlur=0;
+
+      // subtle inner threshold mark at 90%
+      const ah=A0+(A1-A0)*0.90;
+      gx.strokeStyle=rgba(GOLD,0.45); gx.lineWidth=1.5;
+      gx.beginPath();
+      gx.moveTo(cx+Math.cos(ah)*(R-8), cy+Math.sin(ah)*(R-8));
+      gx.lineTo(cx+Math.cos(ah)*(R+6), cy+Math.sin(ah)*(R+6));
+      gx.stroke();
+
+      // push color into the HTML readout
+      cleanValEl.style.color = rgba(arcCol,1);
+      cleanValEl.style.textShadow = `0 0 18px ${rgba(arcCol,0.7)}, 0 0 40px ${rgba(arcCol,0.3)}`;
+      cleanStatusEl.style.color = rgba(arcCol,1);
+      cleanStatusEl.style.textShadow = `0 0 10px ${rgba(arcCol,0.6)}`;
+    }
+
+    // ============================================================
+    // HIGHWAY (kept: gentle ambient motion; shows detected/target chord)
+    // ============================================================
+    let beatPhase=0;
+    function drawHighway(){
+      const {w,h}=hwDim; hx.clearRect(0,0,w,h);
+      const nowY = h*0.66;          // NOW line position
+      const topY = h*0.06;
+      const cxc = w/2;
+
+      // track: thin neon vertical line + subtle perspective converging guides
+      hx.strokeStyle=rgba(TEAL,0.18); hx.lineWidth=1;
+      hx.beginPath(); hx.moveTo(cxc, topY); hx.lineTo(cxc, nowY); hx.stroke();
+      const railTop = w*0.10, railBot = w*0.34;
+      [-1,1].forEach(s=>{
+        hx.strokeStyle=rgba(TEAL,0.12);
+        hx.beginPath();
+        hx.moveTo(cxc+s*railTop, topY);
+        hx.lineTo(cxc+s*railBot, nowY);
+        hx.stroke();
+      });
+      // faint beat tick lines moving down
+      hx.strokeStyle=rgba(TEAL,0.05);
+      for(let b=0;b<6;b++){
+        const fb = b - beatPhase;
+        const yy = nowY - (fb/4.8)*(nowY-topY);
+        if(yy<topY||yy>nowY) continue;
+        hx.beginPath(); hx.moveTo(cxc-railBot*0.9, yy); hx.lineTo(cxc+railBot*0.9, yy); hx.globalAlpha=0.5*(1-(yy-topY)/(nowY-topY)+0.2); hx.stroke(); hx.globalAlpha=1;
+      }
+
+      // NOW line (gold, bright)
+      hx.shadowColor=rgba(GOLD,0.8); hx.shadowBlur=16;
+      hx.strokeStyle=rgba(GOLD,0.95); hx.lineWidth=2;
+      hx.beginPath(); hx.moveTo(w*0.14, nowY); hx.lineTo(w*0.86, nowY); hx.stroke();
+      hx.shadowBlur=0;
+      [0.14,0.86].forEach(fx2=>{
+        hx.fillStyle=rgba(GOLD,0.9); hx.shadowColor=rgba(GOLD,0.8); hx.shadowBlur=8;
+        hx.beginPath(); hx.arc(w*fx2, nowY, 3.5, 0, Math.PI*2); hx.fill(); hx.shadowBlur=0;
+      });
+    }
+
+    // ============================================================
+    // DOM updaters driven by the latest live frame
+    // ============================================================
+    function renderBreakdown(fr){
+      targetNotesEl.innerHTML='';
+      if(!fr || !fr.gated){
+        return; // idle: no note tokens while listening
+      }
+      const tpcs = chordPcs(fr.target);
+      const missing = fr.missing || [];
+      const missingPcs = missing.map(pcOf).filter(p=>p!=null);
+      const labels = (fr.target && CHORD_PCS[fr.target]) ? null : null;
+      // build a token per target pitch class (fall back to detected if no target known)
+      const pcsToShow = tpcs.length? tpcs : chordPcs(fr.detected);
+      // map pitch class -> a representative note name from peaks if available
+      const peakNoteByPc = {};
+      (fr.peaks||[]).forEach(p=>{ const pc=pcOf(p.note); if(pc!=null && !peakNoteByPc[pc]) peakNoteByPc[pc]=p.note; });
+
+      pcsToShow.forEach(pc=>{
+        const isMissing = missingPcs.includes(pc);
+        const present = !isMissing;
+        const d=document.createElement('div');
+        d.className='note-tok '+(present?'present':'missing');
+        d.dataset.pc=pc;
+        const nm = peakNoteByPc[pc] || '';
+        d.innerHTML = `<span>${PCS[pc]}</span><span class="nm">${nm}</span><span class="mark">${present?'✓':'!'}</span>`;
+        targetNotesEl.appendChild(d);
+      });
+      // extra notes (heard but not in target) -> small warning chips
+      (fr.extra||[]).forEach(ex=>{
+        const pc = pcOf(ex);
+        const d=document.createElement('div');
+        d.className='note-tok missing';
+        d.innerHTML=`<span>${pc!=null?PCS[pc]:ex}</span><span class="nm">extra</span><span class="mark">+</span>`;
+        targetNotesEl.appendChild(d);
+      });
+    }
+
+    function updateCoach(fr){
+      if(!fr || !fr.gated){
+        coachEl.classList.add('good');
+        coachEl.textContent = 'Listening for your strum…';
+        return;
+      }
+      const missing = fr.missing || [];
+      const extra = fr.extra || [];
+      if(missing.length){
+        coachEl.classList.remove('good');
+        coachEl.innerHTML = `missing <b>${missing[0]}</b> — check that string is ringing`;
+      } else if(extra.length){
+        coachEl.classList.remove('good');
+        coachEl.innerHTML = `extra <b>${extra[0]}</b> ringing — try muting that string`;
+      } else if((fr.cleanliness||0) >= 0.9){
+        coachEl.classList.add('good');
+        coachEl.textContent = 'All target voices present and balanced. Hold it steady.';
+      } else if((fr.cleanliness||0) >= 0.75){
+        coachEl.classList.add('good');
+        coachEl.innerHTML = `almost — even out the strum and let each string ring`;
+      } else {
+        coachEl.classList.remove('good');
+        coachEl.innerHTML = `off target — re-check the <b>${fr.target||'chord'}</b> shape`;
+      }
+    }
+
+    function renderPeaks(fr){
+      peaksListEl.innerHTML='';
+      const peaks = (fr && fr.gated && fr.peaks) ? fr.peaks : [];
+      if(!peaks.length){
+        const e=document.createElement('div'); e.className='peaks-empty';
+        e.textContent = (fr && fr.gated)? '— no peaks —' : '— listening —';
+        peaksListEl.appendChild(e);
+        peakCountEl.textContent='0';
+        return;
+      }
+      const tpcs = chordPcs(fr.target);
+      const useAll = tpcs.length===0;
+      peaks.slice(0,6).forEach(p=>{
+        const pc = pcOf(p.note);
+        const inTarget = useAll || (pc!=null && tpcs.includes(pc));
+        const el=document.createElement('div'); el.className='peak-row';
+        el.innerHTML=`<span class="dot ${inTarget?'t':'h'}"></span><span class="pn">${p.note||'—'}</span><span>peak</span><span class="pf">${Math.round(p.freq||0)} Hz</span>`;
+        peaksListEl.appendChild(el);
+      });
+      peakCountEl.textContent = peaks.length;
+    }
+
+    function renderChroma(fr){
+      const chroma = (fr && fr.gated && fr.chroma) ? fr.chroma : null;
+      const tpcs = chordPcs(fr && fr.target);
+      for(let i=0;i<12;i++){
+        const tv = chroma ? clamp(chroma[i]||0,0,1) : 0.0;
+        chromaVals[i] += (tv - chromaVals[i])*0.35;
+        const b=chromaBins[i];
+        b.bar.style.height = (3 + chromaVals[i]*100*0.85)+'%';
+        const isT = !!chroma && tpcs.includes(i);
+        b.bin.classList.toggle('target', isT);
+      }
+    }
+
+    // apply a freshly received frame to all DOM + targets
+    function applyFrame(fr){
+      frame = fr;
+      gated = !!fr.gated;
+      detected = fr.detected || null;
+      target = fr.target || null;
+
+      // spectrum target — 96 bins expected; resample if the server sends a different length
+      if(Array.isArray(fr.spectrum) && fr.spectrum.length){
+        const sp = fr.spectrum, L = sp.length;
+        for(let i=0;i<NBINS;i++){
+          const src = (L===NBINS) ? sp[i] : sp[Math.min(L-1, (i*L/NBINS)|0)];
+          specTarget[i] = gated ? clamp(src||0,0,1) : 0;
+        }
+      } else {
+        specTarget.fill(0);
+      }
+      recomputeGold(fr);
+
+      // cleanliness
+      cleanTargetV = gated ? clamp(fr.cleanliness||0,0,1) : 0;
+
+      // readouts
+      const pctv = Math.round((gated? (fr.cleanliness||0):0)*100);
+      const pct = gated ? pctv : 0;
+      // status text per spec
+      let status;
+      if(!gated) status = 'Listening';
+      else if((fr.cleanliness||0) >= 0.90) status = 'Clean';
+      else if((fr.cleanliness||0) >= 0.75) status = 'Almost';
+      else status = 'Off';
+      cleanStatusEl.textContent = status;
+
+      // target subline
+      cleanTargetEl.textContent = 'target · ' + (fr.target || '—');
+
+      // current chord + fingering name
+      const showChord = gated ? (fr.detected || fr.target || '—') : '—';
+      curChordEl.textContent = showChord;
+      fingerNameEl.textContent = gated ? (fr.target || fr.detected || '—') : '—';
+
+      // analyzer metrics
+      if(gated){
+        intuneEl.textContent = (pct)+'%';
+        mfIntune.style.width = pct+'%';
+        const rms = clamp((fr.rms||0)/0.2,0,1); // scale rms to a 0..1 bar (0.2 ~ loud)
+        onsetEl.textContent = (fr.rms!=null? fr.rms.toFixed(3):'—');
+        mfOnset.style.width = Math.round(rms*100)+'%';
+        rmsValEl.textContent = 'rms '+(fr.rms!=null?fr.rms.toFixed(3):'—');
+        progFill.style.width = (8 + clamp(fr.cleanliness||0,0,1)*86).toFixed(1)+'%';
+      } else {
+        intuneEl.textContent = '—';
+        mfIntune.style.width = '0%';
+        onsetEl.textContent = (fr.rms!=null? fr.rms.toFixed(3):'—');
+        mfOnset.style.width = Math.round(clamp((fr.rms||0)/0.2,0,1)*100)+'%';
+        rmsValEl.textContent = 'rms '+(fr.rms!=null?fr.rms.toFixed(3):'—');
+        progFill.style.width = '4%';
+      }
+
+      // chord strip active highlight
+      const activeKey = gated ? (fr.target || fr.detected) : null;
+      document.querySelectorAll('.chordstrip .chip').forEach(c=>{
+        c.classList.toggle('active', !!activeKey && c.textContent===activeKey);
+      });
+
+      // DOM lists
+      renderBreakdown(fr);
+      updateCoach(fr);
+      renderPeaks(fr);
+      renderChroma(fr);
+    }
+
+    // an honest idle frame (used before any data / on disconnect)
+    function idleFrame(){
+      return { gated:false, cleanliness:0, detected:null, target:null,
+               missing:[], extra:[], chroma:new Array(12).fill(0), spectrum:new Array(NBINS).fill(0), peaks:[], rms:0 };
+    }
+    applyFrame(idleFrame());
+
+    // ============================================================
+    // RENDER LOOP — smooths + redraws canvases every animation frame
+    // ============================================================
+    let lastT = performance.now();
+    function tick(now){
+      requestAnimationFrame(tick);
+      const dt = Math.min(64, now-lastT); lastT=now;
+
+      // gentle ambient highway motion
+      beatPhase += dt/700; if(beatPhase>=1) beatPhase-=1;
+
+      // smooth cleanliness toward latest frame target
+      cleanVal += (cleanTargetV-cleanVal)*0.12;
+      cleanVal = clamp(cleanVal,0,0.999);
+
+      const pctv = Math.round(cleanVal*100);
+      cleanValEl.innerHTML = pctv+'<span class="pct">%</span>';
+
+      // current chord glow follows cleanliness
+      {
+        const v=cleanVal;
+        const colT = v>0.88?0: v>0.7? (0.88-v)/0.18 : 1;
+        const col = lerpC(TEAL, GOLD, clamp(colT,0,1));
+        curChordEl.style.textShadow = `0 0 16px ${rgba(col,0.9)}, 0 0 44px ${rgba(col,0.5)}, 0 0 90px ${rgba(col,0.22)}`;
+      }
+
+      drawFFT();
+      drawGauge();
+      drawHighway();
+
+      // connection liveness: if no frame for >1.5s, treat as stale/offline
+      if(connectedOnce && (now - lastFrameTime) > 1500){
+        setConn(false);
+        // ease back to idle visuals honestly
+        cleanTargetV += (0 - cleanTargetV)*0.1;
+        for(let i=0;i<NBINS;i++) specTarget[i] *= 0.9;
+      }
+    }
+    requestAnimationFrame(tick);
+
+    // ============================================================
+    // CONNECTION INDICATOR
+    // ============================================================
+    let connectedOnce = false;
+    function setConn(live){
+      if(live){
+        connInd.textContent = '● live';
+        connInd.classList.remove('off');
+      } else {
+        connInd.textContent = '● offline';
+        connInd.classList.add('off');
+      }
+    }
+
+    // ============================================================
+    // SSE STREAM  (/stream, same origin) — the REAL data source
+    // ============================================================
+    let es = null;
+    function connectStream(){
+      try{
+        es = new EventSource('/stream');
+      }catch(e){
+        setConn(false); return;
+      }
+      es.onopen = ()=>{ /* wait for first frame to flip to live */ };
+      es.onmessage = (ev)=>{
+        let fr;
+        try{ fr = JSON.parse(ev.data); }
+        catch(e){ return; }
+        connectedOnce = true;
+        lastFrameTime = performance.now();
+        setConn(true);
+        applyFrame(fr);
+      };
+      es.onerror = ()=>{
+        setConn(false);
+        // EventSource auto-reconnects; reflect honest idle on the gauge meanwhile
+        applyFrame(idleFrame());
+      };
+    }
+    connectStream();
+
+    // ============================================================
+    // CONFIG + CALIBRATION  (/config GET, /calibrate POST)
+    // ============================================================
+    function fmtFloat(v){ return (v==null)? '—' : Number(v).toFixed(3); }
+    function setCfgLine(noise_floor, rms_gate, when){
+      const w = when ? ' · '+when : '';
+      cfgLine.innerHTML = `floor <b>${fmtFloat(noise_floor)}</b> · gate <b>${fmtFloat(rms_gate)}</b> · saved setting${w}`;
+    }
+
+    fetch('/config').then(r=>r.ok?r.json():null).then(cfg=>{
+      if(cfg) setCfgLine(cfg.noise_floor, cfg.rms_gate);
+    }).catch(()=>{ /* server not running — leave dashes */ });
+
+    const calBtn = $('#btn-calibrate');
+    const calLabel = $('#cal-label');
+    let calibrating = false;
+    calBtn.addEventListener('click', ()=>{
+      if(calibrating) return;
+      calibrating = true;
+      calBtn.classList.add('busy');
+      calLabel.textContent = 'measuring silence — stay quiet';
+      // give the user 2s of honest "stay quiet" before posting
+      setTimeout(()=>{
+        fetch('/calibrate', { method:'POST' })
+          .then(r=>r.ok?r.json():Promise.reject())
+          .then(res=>{
+            const t = res.calibrated_at ? formatWhen(res.calibrated_at) : timeNow();
+            setCfgLine(res.noise_floor, res.rms_gate, t);
+            calLabel.textContent = 'Calibrated';
+            setTimeout(()=>{ calLabel.textContent='Calibrate mic'; }, 2600);
+          })
+          .catch(()=>{
+            calLabel.textContent = 'calibrate failed';
+            setTimeout(()=>{ calLabel.textContent='Calibrate mic'; }, 2600);
+          })
+          .finally(()=>{
+            calibrating = false;
+            calBtn.classList.remove('busy');
+          });
+      }, 2000);
+    });
+
+    function timeNow(){
+      const d=new Date();
+      return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }
+    function formatWhen(v){
+      // accept epoch seconds, ms, or ISO string
+      let d;
+      if(typeof v==='number'){ d = new Date(v < 1e12 ? v*1000 : v); }
+      else { d = new Date(v); }
+      if(isNaN(d.getTime())) return timeNow();
+      return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }
+
+    // ============================================================
+    // Cosmetic chord-strip clicks (no effect on live data; just visual)
+    // ============================================================
+    document.querySelectorAll('.chordstrip .chip').forEach(chip=>{
+      chip.addEventListener('click',()=>{
+        document.querySelectorAll('.chordstrip .chip').forEach(c=>c.classList.remove('active'));
+        chip.classList.add('active');
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

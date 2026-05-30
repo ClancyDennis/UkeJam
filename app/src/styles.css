@@ -1,0 +1,536 @@
+:root {
+  --bg: #060a0c;
+  --bg-panel: #0a0f12;
+  --bg-panel-2: #0c1316;
+  --line: #16242a;
+  --teal: #19e3c4;
+  --teal-dim: #0f8a78;
+  --gold: #f5c451;
+  --gold-dim: #8a6f2a;
+  --amber: #ff9d4d;
+  --text: #cfe8e6;
+  --text-dim: #5d7b78;
+  --red: #ff5d6c;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(25, 227, 196, 0.06), transparent 60%),
+    linear-gradient(rgba(22, 36, 42, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22, 36, 42, 0.4) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px;
+  gap: 16px;
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.logo {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: 1px;
+  color: var(--teal);
+  text-shadow: 0 0 18px rgba(25, 227, 196, 0.45);
+}
+
+.tagline {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.modes {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-btn {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  padding: 9px 18px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+}
+
+.mode-btn.active {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+  background: rgba(245, 196, 81, 0.07);
+  box-shadow: 0 0 16px rgba(245, 196, 81, 0.15);
+}
+
+.mode-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.conn .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: all 0.2s;
+}
+
+.conn.live .dot {
+  background: var(--teal);
+  box-shadow: 0 0 12px var(--teal);
+}
+
+.conn.live {
+  color: var(--teal);
+}
+
+/* ---------- Layout ---------- */
+.tuner-view {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 26px;
+  position: relative;
+}
+
+.panel-title {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.panel-title .tag {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+
+.meter-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Note readout ---------- */
+.note-readout {
+  text-align: center;
+  margin: 18px 0 8px;
+}
+
+.note-name {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 120px;
+  line-height: 1;
+  color: var(--text-dim);
+  transition: all 0.15s ease;
+}
+
+.note-name.in-tune {
+  color: var(--teal);
+  text-shadow: 0 0 40px rgba(25, 227, 196, 0.5);
+}
+
+.note-name.flat,
+.note-name.sharp {
+  color: var(--gold);
+  text-shadow: 0 0 36px rgba(245, 196, 81, 0.4);
+}
+
+.note-freq {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 18px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+/* ---------- Needle ---------- */
+.needle-wrap {
+  margin-top: auto;
+  position: relative;
+}
+
+.needle-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 0 4px 6px;
+}
+
+.needle-scale .zero {
+  color: var(--teal);
+}
+
+#needle {
+  width: 100%;
+  height: 170px;
+  display: block;
+}
+
+.cents-readout {
+  text-align: center;
+  font-family: "JetBrains Mono", monospace;
+  margin-top: 8px;
+}
+
+#cents-val {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cents-unit {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-left: 6px;
+}
+
+.verdict {
+  text-align: center;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 16px;
+  letter-spacing: 1px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  min-height: 22px;
+}
+
+.verdict.in-tune {
+  color: var(--teal);
+  text-shadow: 0 0 16px rgba(25, 227, 196, 0.4);
+}
+
+.verdict.flat,
+.verdict.sharp {
+  color: var(--gold);
+}
+
+/* ---------- Listen button ---------- */
+.listen-btn {
+  margin-top: 18px;
+  align-self: center;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  letter-spacing: 1px;
+  padding: 12px 28px;
+  background: rgba(25, 227, 196, 0.08);
+  color: var(--teal);
+  border: 1px solid var(--teal-dim);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.listen-btn:hover {
+  background: rgba(25, 227, 196, 0.16);
+  box-shadow: 0 0 20px rgba(25, 227, 196, 0.25);
+}
+
+.listen-btn.on {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 93, 108, 0.08);
+}
+
+/* ---------- Strings ---------- */
+.strings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.string-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: all 0.18s ease;
+}
+
+.string-row.active {
+  border-color: var(--gold-dim);
+  background: rgba(245, 196, 81, 0.06);
+}
+
+.string-row.tuned {
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.06);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.12);
+}
+
+.string-note {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--text);
+  width: 46px;
+}
+
+.string-row.active .string-note {
+  color: var(--gold);
+}
+
+.string-row.tuned .string-note {
+  color: var(--teal);
+}
+
+.string-meta {
+  flex: 1;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.string-check {
+  font-size: 18px;
+  color: var(--text-dim);
+}
+
+.string-row.tuned .string-check {
+  color: var(--teal);
+}
+
+/* ---------- Play / chord view ---------- */
+.play-view {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.chord-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.chord-readout {
+  text-align: center;
+  margin-top: 8px;
+}
+
+.chord-name {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 110px;
+  line-height: 1;
+  color: var(--text-dim);
+  transition: all 0.12s ease;
+}
+
+.chord-name.clean {
+  color: var(--teal);
+  text-shadow: 0 0 44px rgba(25, 227, 196, 0.5);
+}
+
+.chord-name.dirty {
+  color: var(--gold);
+  text-shadow: 0 0 36px rgba(245, 196, 81, 0.4);
+}
+
+.target-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#target-select {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  background: var(--bg-panel-2);
+  color: var(--gold);
+  border: 1px solid var(--gold-dim);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.gauge-wrap {
+  position: relative;
+  margin-top: 18px;
+}
+
+#gauge {
+  width: 360px;
+  height: 220px;
+  display: block;
+}
+
+.gauge-readout {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+.gauge-val {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 44px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gauge-val .pct {
+  font-size: 20px;
+  color: var(--text-dim);
+}
+
+.gauge-status {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.coach {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+  color: var(--text-dim);
+  text-align: center;
+  min-height: 40px;
+  margin-top: 14px;
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.coach .miss {
+  color: var(--gold);
+}
+
+.coach .ok {
+  color: var(--teal);
+}
+
+/* chromagram */
+.chroma {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.chroma-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chroma-bar .pc {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  width: 28px;
+}
+
+.chroma-bar .track {
+  flex: 1;
+  height: 14px;
+  background: var(--bg-panel-2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.chroma-bar .fill {
+  height: 100%;
+  width: 0%;
+  background: var(--teal-dim);
+  border-radius: 7px;
+  transition: width 0.08s linear;
+}
+
+.chroma-bar.target .fill {
+  background: var(--gold);
+  box-shadow: 0 0 10px rgba(245, 196, 81, 0.5);
+}
+
+/* ---------- Corner label ---------- */
+.corner-label {
+  position: fixed;
+  bottom: 10px;
+  right: 14px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  letter-spacing: 0.5px;
+}
