@@ -3,12 +3,23 @@
 
 import { parseSong, type Song } from "./song";
 
+// A backing track imported from MIDI: the raw file (base64) plus a per-channel
+// summary so the player can pick which instruments sound (e.g. bass + drums).
+export interface BackingTrackInfo {
+  channel: number;
+  name: string;
+  noteCount: number;
+  isDrums: boolean;
+  isBass: boolean;
+}
 export interface SongRecord {
   id: string;
   title: string;
   artist: string;
   source: string; // raw pasted text (source of truth, re-parsable)
   created: number;
+  midi?: string; // base64 of the original MIDI (for backing playback), if imported
+  tracks?: BackingTrackInfo[]; // playable channels in that MIDI
 }
 
 const KEY = "ukejam.library.v1";
@@ -22,8 +33,24 @@ function load(): SongRecord[] {
   }
 }
 
+// Thrown when localStorage rejects the write (usually the ~5 MB quota — base64
+// MIDIs are stored inline, so a few large imports can hit it). Callers surface
+// this to the user instead of silently dropping the save.
+export class LibraryFullError extends Error {
+  constructor() {
+    super("library storage is full (large MIDI imports use a lot of space)");
+    this.name = "LibraryFullError";
+  }
+}
+
 function save(records: SongRecord[]) {
-  localStorage.setItem(KEY, JSON.stringify(records));
+  try {
+    localStorage.setItem(KEY, JSON.stringify(records));
+  } catch (e) {
+    // QuotaExceededError (and Safari's variant) land here; treat any setItem
+    // failure as "full" so the caller can report it.
+    throw new LibraryFullError();
+  }
 }
 
 export function listSongs(): SongRecord[] {
@@ -32,7 +59,7 @@ export function listSongs(): SongRecord[] {
 
 export function addSong(
   source: string,
-  overrides?: { title?: string; artist?: string }
+  overrides?: { title?: string; artist?: string; midi?: string; tracks?: BackingTrackInfo[] }
 ): SongRecord {
   const parsed = parseSong(source);
   // explicit fields win; otherwise fall back to any {title:}/{artist:} in text
@@ -45,6 +72,8 @@ export function addSong(
     artist,
     source,
     created: Date.now(),
+    midi: overrides?.midi,
+    tracks: overrides?.tracks,
   };
   const records = load();
   records.push(rec);

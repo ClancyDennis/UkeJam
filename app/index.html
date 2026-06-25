@@ -29,6 +29,9 @@
           <span class="tagline">baritone · D G B E</span>
         </div>
         <nav class="utils">
+          <button class="util-btn" data-mode="arrangement" title="Arrangement">
+            <span class="util-icon">▦</span> Chart
+          </button>
           <button class="util-btn" data-mode="library" title="Your songs">
             <span class="util-icon">♬</span> Songs
           </button>
@@ -37,6 +40,9 @@
           </button>
           <button class="util-btn" data-mode="cal-mic" title="Calibrate microphone">
             <span class="util-icon">⚙</span> Setup
+          </button>
+          <button class="util-btn" id="diag-btn" title="Show analyzer diagnostics (d)">
+            <span class="util-icon">◇</span> Diagnostics
           </button>
           <div class="conn">
             <span class="dot" id="conn-dot"></span>
@@ -84,62 +90,139 @@
 
       <!-- Play / chord-detection view (default home screen) -->
       <main class="play-view" id="play-view">
-        <!-- LEFT: cleanliness gauge + coach + transport -->
-        <div class="panel clean-panel">
-          <div class="panel-title">
-            Chord Cleanliness <span class="tag">cos-sim match</span>
+        <!-- MODE BAR: free-play vs. song + transport (hands-free hint) -->
+        <div class="modebar" id="modebar">
+          <button class="modebar-song-btn" data-mode="library" title="Choose a song">♬</button>
+          <span class="mode-tag" id="mode-tag">● Free play</span>
+          <div class="mode-main">
+            <span class="mode-title" id="practice-title">Free play</span>
+            <span class="mode-meta" id="practice-sub">mic idle</span>
           </div>
-          <div class="gauge-wrap">
-            <canvas id="gauge" class="gauge-canvas" width="420" height="420"></canvas>
-            <div class="gauge-readout">
-              <div class="gauge-val" id="clean-val">0<span class="pct">%</span></div>
-              <div class="gauge-status" id="clean-status">idle</div>
-              <div class="gauge-sub" id="clean-target">free play</div>
+          <div class="mode-stats">
+            <span id="practice-pos">--</span>
+            <span id="practice-next">choose song</span>
+          </div>
+          <span class="mode-spacer"></span>
+          <button class="listen-btn slim" id="listen-btn-2">Start listening</button>
+          <div class="transport" id="transport" hidden>
+            <button class="tp-btn" id="tp-restart" title="Restart">⟲</button>
+            <button class="tp-btn play" id="tp-play" title="Play / pause (space)">▶</button>
+            <span class="kbd" title="Spacebar plays / pauses">space</span>
+            <span class="tp-time" id="tp-time">0:00</span>
+            <span class="tp-bpm" id="tp-bpm">—</span>
+            <div class="backing-controls" id="backing-controls" hidden>
+              <button class="tp-chip" id="tp-tracks" title="Choose backing instruments">♪ band</button>
+              <button class="tp-chip" id="tp-wait" title="Wait for me to play each chord before advancing">⏸ wait</button>
+              <div class="track-picker" id="track-picker" hidden></div>
             </div>
           </div>
-          <div class="coach" id="coach"></div>
-          <button class="listen-btn" id="listen-btn-2">Start listening</button>
         </div>
 
-        <!-- CENTER: two stacks — detected+fingering | song+chromagram -->
-        <div class="col-center">
-          <!-- left stack: detected chord above fingering -->
-          <div class="center-left">
-            <div class="panel chord-panel">
-              <div class="now-tag">— DETECTED —</div>
-              <div class="chord-readout">
+        <!-- CLUSTER: Now-fingering · chord letter + cleanliness · Next-fingering -->
+        <div class="cluster">
+          <!-- Now fingering -->
+          <div class="panel finger-panel current-finger-panel">
+            <div class="panel-title">
+              <span id="current-finger-title">Now</span>
+              <span class="tag" id="current-finger-tag">baritone</span>
+              <span class="shape-controls" id="current-shape-controls" hidden>
+                <button class="shape-btn" id="current-shape-prev" title="Previous fingering">&lsaquo;</button>
+                <span class="shape-count" id="current-shape-count">1/1</span>
+                <button class="shape-btn" id="current-shape-next" title="Next fingering">&rsaquo;</button>
+              </span>
+            </div>
+            <svg id="current-fretboard" class="fretboard" viewBox="0 0 150 200" aria-label="current chord fingering"></svg>
+          </div>
+
+          <!-- Center: highway + giant chord letter + slim cleanliness -->
+          <div class="panel highway-panel">
+            <div class="now-tag">— NOW —</div>
+            <div class="highway-stage">
+              <canvas id="highway" class="highway-canvas"></canvas>
+              <div class="current-chord">
                 <div class="chord-name" id="chord-name">—</div>
-                <div class="chord-sub">Playing</div>
+                <div class="chord-sub" id="chord-sub">Playing</div>
               </div>
             </div>
-            <div class="panel finger-panel">
-              <div class="panel-title">Fingering <span class="tag" id="finger-tag">baritone</span></div>
-              <svg id="fretboard" class="fretboard" viewBox="0 0 150 200" aria-label="chord fingering"></svg>
+            <!-- slim inline cleanliness (replaces the radial gauge in the cluster) -->
+            <div class="clean-inline">
+              <span class="clean-val" id="clean-val">0<span class="pct">%</span></span>
+              <span class="clean-status" id="clean-status">idle</span>
+              <span class="clean-target" id="clean-target">free play</span>
+              <div class="target-notes" id="target-notes"></div>
             </div>
+            <div class="coach" id="coach"></div>
           </div>
 
-          <!-- right stack: song chord strip above chromagram -->
-          <div class="center-right">
-            <div class="panel song-panel">
-              <div class="panel-title">Song <span class="tag" id="song-tag">chord progression</span></div>
-              <div class="song-bar" id="song-bar">
-                <div class="song-bar-empty" id="song-bar-empty">
-                  <button class="back-btn" data-mode="library">♬ Choose a song</button>
-                  <span>or just play — free detection</span>
-                </div>
-                <div class="song-bar-strip" id="song-strip" hidden></div>
-              </div>
-              <div class="lyrics-view" id="lyrics-view" hidden></div>
+          <!-- Up Next fingering -->
+          <div class="panel finger-panel next-finger-panel">
+            <div class="panel-title">
+              <span id="finger-title">Up Next</span>
+              <span class="tag" id="finger-tag">baritone</span>
+              <span class="shape-controls" id="next-shape-controls" hidden>
+                <button class="shape-btn" id="next-shape-prev" title="Previous fingering">&lsaquo;</button>
+                <span class="shape-count" id="next-shape-count">1/1</span>
+                <button class="shape-btn" id="next-shape-next" title="Next fingering">&rsaquo;</button>
+              </span>
             </div>
-            <div class="panel chroma-panel">
-              <div class="panel-title">Chromagram <span class="tag">12 pitch classes</span></div>
-              <div class="chroma" id="chroma"></div>
-            </div>
+            <svg id="fretboard" class="fretboard" viewBox="0 0 150 200" aria-label="chord fingering"></svg>
           </div>
         </div>
 
-        <!-- FULL-WIDTH: live FFT spectrum -->
-        <div class="fft-row">
+        <!-- BOTTOM BAND: chord strip + lyrics + transition coaching -->
+        <div class="bottom-band">
+          <div class="panel song-panel">
+            <div class="panel-title">Song <span class="tag" id="song-tag">chord progression</span></div>
+            <div class="song-bar" id="song-bar">
+              <div class="song-bar-empty" id="song-bar-empty">
+                <button class="back-btn" data-mode="library">♬ Choose a song</button>
+                <span>or just play — free detection</span>
+              </div>
+              <div class="song-bar-strip" id="song-strip" hidden></div>
+            </div>
+            <div class="lyrics-view" id="lyrics-view" hidden></div>
+          </div>
+
+          <div class="panel transition-panel" id="transition-panel">
+            <div class="panel-title">Transition <span class="tag" id="transition-tag">song mode</span></div>
+            <div class="transition-coach" id="transition-coach"></div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Diagnostics drawer: analyzer instrumentation, hidden by default -->
+      <div class="drawer" id="diag-drawer" hidden>
+        <div class="drawer-head">
+          Diagnostics
+          <button class="drawer-close" id="diag-close" title="Close (d)">close ✕</button>
+        </div>
+        <div class="diag-grid">
+          <div class="panel clean-panel">
+            <div class="panel-title">
+              Chord Cleanliness <span class="tag">cos-sim match</span>
+            </div>
+            <div class="gauge-wrap">
+              <canvas id="gauge" class="gauge-canvas" width="320" height="320"></canvas>
+            </div>
+          </div>
+
+          <div class="panel chroma-panel">
+            <div class="panel-title">Chroma + Analyzer <span class="tag">live notes</span></div>
+            <div class="chroma-analyzer">
+              <div class="chroma" id="chroma"></div>
+              <div class="inline-metrics">
+                <div class="metric">
+                  <div class="metric-head"><span class="k">Match</span><span class="v" id="m-match">—</span></div>
+                  <div class="mbar"><div class="mf" id="mf-match" style="width:0%"></div></div>
+                </div>
+                <div class="metric">
+                  <div class="metric-head"><span class="k">Detected peaks</span><span class="v" id="m-peakcount">0</span></div>
+                </div>
+                <div class="peaks-list" id="peaks-list"></div>
+              </div>
+            </div>
+          </div>
+
           <div class="panel fft-panel">
             <div class="panel-title">
               Live FFT Spectrum
@@ -150,6 +233,45 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Arrangement view: full song sheet + chord chart -->
+      <main class="arrangement-view" id="arrangement-view" hidden>
+        <section class="panel arrangement-panel">
+          <div class="panel-title">
+            <button class="back-btn" data-mode="play">← Play</button>
+            Arrangement <span class="tag" id="arrangement-tag">no song</span>
+          </div>
+          <div class="arrangement-status">
+            <div class="arr-transport" id="arr-transport" hidden>
+              <button class="tp-btn" id="arr-restart" title="Restart">⟲</button>
+              <button class="tp-btn play" id="arr-play" title="Play / pause">▶</button>
+              <span class="tp-time" id="arr-time">0:00</span>
+              <span class="tp-bpm" id="arr-bpm">—</span>
+            </div>
+            <div class="arr-stat">
+              <span class="arr-k">Now</span>
+              <span class="arr-v" id="arr-now">--</span>
+            </div>
+            <div class="arr-stat">
+              <span class="arr-k">Next</span>
+              <span class="arr-v" id="arr-next">--</span>
+            </div>
+            <div class="arr-stat">
+              <span class="arr-k">Song</span>
+              <span class="arr-v" id="arr-count">--</span>
+            </div>
+          </div>
+          <div class="arrangement-empty" id="arrangement-empty">
+            <button class="back-btn" data-mode="library">♬ Choose a song</button>
+          </div>
+          <div class="arrangement-sheet" id="arrangement-sheet"></div>
+        </section>
+
+        <aside class="panel arrangement-chords-panel">
+          <div class="panel-title">Chord Chart <span class="tag" id="arrangement-chord-tag">baritone</span></div>
+          <div class="arrangement-chords" id="arrangement-chords"></div>
+        </aside>
       </main>
 
       <!-- Setup / calibration view (secondary utility screen) -->
@@ -187,8 +309,22 @@
             class="paste-box"
             placeholder="Paste a chord chart or tab here…&#10;&#10;[Am]I was scared of [G]dentists and the [C]dark&#10;&#10;…or chords-above-lyrics, or [Verse] sections. Tablature staves are ignored.&#10;(A {title:} / {artist:} line in the text fills the fields above automatically.)"
           ></textarea>
+          <!-- after a MIDI import: pick which channels chords are read from -->
+          <div class="chan-picker" id="chan-picker" hidden>
+            <span class="chan-label">chords from:</span>
+            <div class="chan-chips" id="chan-chips"></div>
+          </div>
+          <!-- after a MIDI import: optionally lay lyrics over the timed chart -->
+          <textarea
+            id="lyrics-box"
+            class="paste-box lyrics-box"
+            hidden
+            placeholder="Optional: paste a chord/lyric tab here to lay lyrics over this MIDI's timing.&#10;The MIDI keeps its exact bars + tempo; the words get placed under the right beats (needs ✨ AI enhance on)."
+          ></textarea>
           <div class="lib-add-row">
             <button class="listen-btn" id="add-song-btn">Add to library</button>
+            <button class="listen-btn ghost" id="load-midi-btn" title="Import a .mid file as a timed chord chart">♪ Load MIDI</button>
+            <input type="file" id="midi-input" accept=".mid,.midi,audio/midi" hidden />
             <label class="ai-toggle" title="Clean up the tab with AI before saving">
               <input type="checkbox" id="ai-enhance" checked />
               <span>✨ AI enhance</span>
@@ -204,6 +340,40 @@
       </main>
 
       <div class="corner-label" id="corner-label">ukejam / Chords · native</div>
+
+      <!-- SoundFont install prompt: backing playback needs a GM SoundFont, and
+           none is bundled (the good banks aren't free to redistribute). -->
+      <div class="sf-overlay" id="sf-overlay" hidden>
+        <div class="sf-modal">
+          <button class="sf-close" id="sf-close" title="Close">✕</button>
+          <div class="sf-title">Backing track needs a SoundFont</div>
+          <p class="sf-text">
+            Playing the band needs a General MIDI SoundFont. ukejam doesn't bundle
+            one (the good banks aren't free to redistribute), so grab a free one —
+            a one-time download.
+          </p>
+          <button class="listen-btn" id="sf-download">
+            Download GeneralUser GS — free, ~30&nbsp;MB
+          </button>
+          <progress class="sf-progress" id="sf-progress" value="0" max="100" hidden></progress>
+          <span class="sf-status" id="sf-status"></span>
+          <details class="sf-more">
+            <summary>Use a different SoundFont</summary>
+            <p>
+              Any General MIDI <code>.sf2</code> works. Search the web or
+              <a href="https://musical-artifacts.com" target="_blank" rel="noopener">musical-artifacts.com</a>
+              for “GM SoundFont sf2”. Good free picks:
+              <b>GeneralUser GS</b>, <b>FluidR3_GM</b>, <b>MuseScore MS Basic</b>.
+            </p>
+            <p>
+              To use your own, set the <code>UKEJAM_SOUNDFONT</code> environment
+              variable to its path, or drop it as <code>soundfont.sf2</code> in:
+            </p>
+            <div class="sf-path" id="sf-path">…</div>
+            <button class="listen-btn ghost" id="sf-open-folder">Open folder</button>
+          </details>
+        </div>
+      </div>
     </div>
   </body>
 </html>

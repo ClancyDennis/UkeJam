@@ -13,10 +13,10 @@ pub const NOTE_NAMES: [&str; 12] = [
 /// (quality suffix, intervals from root, score prior).
 /// Prior < 1 penalizes a quality so simpler chords win near-ties.
 const QUALITIES: &[(&str, &[usize], f32)] = &[
-    ("", &[0, 4, 7], 1.00),      // major
-    ("m", &[0, 3, 7], 1.00),     // minor
-    ("5", &[0, 7], 0.84),        // power chord (penalized hard: usually a triad
-                                 // whose 3rd just rings quietly, e.g. Am's C)
+    ("", &[0, 4, 7], 1.00),  // major
+    ("m", &[0, 3, 7], 1.00), // minor
+    ("5", &[0, 7], 0.84),    // power chord (penalized hard: usually a triad
+    // whose 3rd just rings quietly, e.g. Am's C)
     ("sus2", &[0, 2, 7], 0.97),
     ("sus4", &[0, 5, 7], 0.97),
     ("7", &[0, 4, 7, 10], 0.96),
@@ -30,8 +30,6 @@ pub struct ChordBook {
     pub labels: Vec<String>,
     pub templates: Vec<[f32; 12]>, // unit-normalized
     pub priors: Vec<f32>,
-    /// pitch-class set per template, for the missing/extra diff.
-    pub pcs: Vec<Vec<usize>>,
 }
 
 impl ChordBook {
@@ -39,15 +37,12 @@ impl ChordBook {
         let mut labels = Vec::new();
         let mut templates = Vec::new();
         let mut priors = Vec::new();
-        let mut pcs = Vec::new();
-        for root in 0..12usize {
+        for (root, name) in NOTE_NAMES.iter().enumerate() {
             for &(suffix, intervals, prior) in QUALITIES {
                 let mut vec = [0.0f32; 12];
-                let mut classes = Vec::new();
                 for &iv in intervals {
                     let pc = (root + iv) % 12;
                     vec[pc] = 1.0;
-                    classes.push(pc);
                 }
                 let norm = (vec.iter().map(|x| x * x).sum::<f32>()).sqrt();
                 if norm > 0.0 {
@@ -55,14 +50,16 @@ impl ChordBook {
                         *x /= norm;
                     }
                 }
-                labels.push(format!("{}{}", NOTE_NAMES[root], suffix));
+                labels.push(format!("{name}{suffix}"));
                 templates.push(vec);
                 priors.push(prior);
-                classes.sort_unstable();
-                pcs.push(classes);
             }
         }
-        Self { labels, templates, priors, pcs }
+        Self {
+            labels,
+            templates,
+            priors,
+        }
     }
 
     /// Index of the best chord (prior-weighted) plus raw cosine score.
@@ -142,4 +139,38 @@ pub fn diff(chroma: &[f32; 12], target: &[usize], thresh: f32) -> (Vec<String>, 
         .map(|&p| NOTE_NAMES[p].to_string())
         .collect();
     (missing, extra)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_supported_chord_names() {
+        assert_eq!(pitch_classes_for("C").unwrap(), vec![0, 4, 7]);
+        assert_eq!(pitch_classes_for("Am").unwrap(), vec![0, 4, 9]);
+        assert_eq!(pitch_classes_for("Bb").unwrap(), vec![2, 5, 10]);
+        assert_eq!(pitch_classes_for("F#m7").unwrap(), vec![1, 4, 6, 9]);
+    }
+
+    #[test]
+    fn rejects_unsupported_chord_names() {
+        assert!(pitch_classes_for("").is_none());
+        assert!(pitch_classes_for("c").is_none());
+        assert!(pitch_classes_for("C/G").is_none());
+        assert!(pitch_classes_for("Gadd9").is_none());
+    }
+
+    #[test]
+    fn diffs_missing_and_extra_pitch_classes() {
+        let target = pitch_classes_for("C").unwrap();
+        let mut chroma = [0.0; 12];
+        chroma[0] = 0.4;
+        chroma[4] = 0.4;
+        chroma[2] = 0.3;
+
+        let (missing, extra) = diff(&chroma, &target, 0.18);
+        assert_eq!(missing, vec!["G"]);
+        assert_eq!(extra, vec!["D"]);
+    }
 }

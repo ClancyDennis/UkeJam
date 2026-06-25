@@ -9,6 +9,12 @@ ukejam_config.json
 # Recorded audio clips
 clips/
 
+# macOS
+.DS_Store
+
+# Personal/local song content (copyrighted MIDI transcriptions — keep local, do not ship)
+midi/
+
 # Tooling
 .playwright-mcp/
 
@@ -20,3 +26,9 @@ app/node_modules/
 app/dist/
 app/src-tauri/target/
 app/src-tauri/gen/
+
+# Local research/experiments scratch area (large; not for distribution)
+experiments/
+
+# Loose dev screenshots in repo root
+/*.png

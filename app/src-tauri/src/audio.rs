@@ -9,7 +9,10 @@
 //! detector will extend the same capture/FFT pipeline later.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TrySendError;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -81,6 +84,20 @@ struct Shared {
     gate: f32,                  // RMS silence gate (set by mic calibration)
 }
 
+struct CaptureRuntime {
+    stream: Option<cpal::Stream>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl Drop for CaptureRuntime {
+    fn drop(&mut self) {
+        drop(self.stream.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Tracks the capture thread. The cpal `Stream` is `!Send` on macOS, so it is
 /// created, owned, and dropped entirely within a dedicated thread; here we only
 /// keep the `running` flag that thread polls to know when to shut down, plus
@@ -88,6 +105,7 @@ struct Shared {
 pub struct AudioState {
     running: Arc<AtomicBool>,
     shared: Arc<Mutex<Shared>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Default for AudioState {
@@ -99,6 +117,7 @@ impl Default for AudioState {
                 target: None,
                 gate: RMS_GATE,
             })),
+            thread: Mutex::new(None),
         }
     }
 }
@@ -107,9 +126,11 @@ impl AudioState {
     /// Start capturing in the given mode. Idempotent (updates mode if running).
     pub fn start(&self, app: AppHandle, mode: Mode) -> Result<(), String> {
         self.shared.lock().unwrap().mode = mode;
-        if self.running.swap(true, Ordering::SeqCst) {
+        let mut thread = self.thread.lock().unwrap();
+        if thread.is_some() {
             return Ok(()); // already running; mode updated above
         }
+        self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();
         let shared = self.shared.clone();
 
@@ -117,7 +138,7 @@ impl AudioState {
         // caller before the thread settles into its keep-alive loop.
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             match build_stream(app, shared) {
                 Ok(stream) => {
                     // Stream must stay alive (and on this thread) to keep
@@ -136,7 +157,19 @@ impl AudioState {
         });
 
         // Wait for the thread to report whether the stream started.
-        rx.recv().unwrap_or_else(|_| Err("capture thread died".into()))
+        match rx
+            .recv()
+            .unwrap_or_else(|_| Err("capture thread died".into()))
+        {
+            Ok(()) => {
+                *thread = Some(handle);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = handle.join();
+                Err(e)
+            }
+        }
     }
 
     /// Switch analysis mode while running.
@@ -156,11 +189,14 @@ impl AudioState {
 
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.thread.lock().unwrap().take() {
+            let _ = handle.join();
+        }
     }
 }
 
 /// Build and start the cpal input stream. Runs on the capture thread.
-fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<cpal::Stream, String> {
+fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<CaptureRuntime, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -171,21 +207,26 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<cpal::Stre
     let sample_rate = config.sample_rate().0 as f32;
     let channels = config.channels() as usize;
 
-    let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(FFT_SIZE * 2)));
-    let analyzer = Arc::new(Analyzer::new(sample_rate));
+    let (sample_tx, sample_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
+    let worker_shared = shared.clone();
+    let worker_app = app.clone();
+    let worker = std::thread::spawn(move || {
+        let mut buf = Vec::with_capacity(FFT_SIZE * 2);
+        let analyzer = Analyzer::new(sample_rate);
+        let mut last_emit = Instant::now();
+        while let Ok(chunk) = sample_rx.recv() {
+            feed(&mut buf, &chunk);
+            drain_and_emit(&buf, &analyzer, &worker_app, &worker_shared, &mut last_emit);
+        }
+    });
 
     let err_fn = |e| eprintln!("audio stream error: {e}");
-    let buf_cb = buf.clone();
-    let app_cb = app.clone();
-    let an = analyzer.clone();
-    let sh = shared.clone();
 
-    let stream = match config.sample_format() {
+    let stream_result = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
             move |data: &[f32], _| {
-                feed(&buf_cb, data, channels);
-                drain_and_emit(&buf_cb, &an, &app_cb, &sh);
+                send_chunk(&sample_tx, downmix_f32(data, channels));
             },
             err_fn,
             None,
@@ -193,9 +234,7 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<cpal::Stre
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.into(),
             move |data: &[i16], _| {
-                let f: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
-                feed(&buf_cb, &f, channels);
-                drain_and_emit(&buf_cb, &an, &app_cb, &sh);
+                send_chunk(&sample_tx, downmix_i16(data, channels));
             },
             err_fn,
             None,
@@ -203,65 +242,127 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<cpal::Stre
         cpal::SampleFormat::U16 => device.build_input_stream(
             &config.into(),
             move |data: &[u16], _| {
-                let f: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
-                feed(&buf_cb, &f, channels);
-                drain_and_emit(&buf_cb, &an, &app_cb, &sh);
+                send_chunk(&sample_tx, downmix_u16(data, channels));
             },
             err_fn,
             None,
         ),
-        fmt => return Err(format!("unsupported sample format: {fmt:?}")),
-    }
-    .map_err(|e| format!("build input stream: {e}"))?;
+        fmt => {
+            drop(sample_tx);
+            let _ = worker.join();
+            return Err(format!("unsupported sample format: {fmt:?}"));
+        }
+    };
+    let stream = match stream_result {
+        Ok(stream) => stream,
+        Err(e) => {
+            let _ = worker.join();
+            return Err(format!("build input stream: {e}"));
+        }
+    };
 
-    stream.play().map_err(|e| format!("stream play: {e}"))?;
-    Ok(stream)
+    if let Err(e) = stream.play() {
+        drop(stream);
+        let _ = worker.join();
+        return Err(format!("stream play: {e}"));
+    }
+    Ok(CaptureRuntime {
+        stream: Some(stream),
+        worker: Some(worker),
+    })
 }
 
 /// Append (downmixed-to-mono) samples to the rolling buffer.
-fn feed(buf: &Arc<Mutex<Vec<f32>>>, data: &[f32], channels: usize) {
-    let mut b = buf.lock().unwrap();
-    if channels <= 1 {
-        b.extend_from_slice(data);
-    } else {
-        // average channels to mono
-        for frame in data.chunks(channels) {
-            let s: f32 = frame.iter().copied().sum::<f32>() / channels as f32;
-            b.push(s);
-        }
-    }
+fn feed(buf: &mut Vec<f32>, data: &[f32]) {
+    buf.extend_from_slice(data);
     // Cap memory: keep at most 2 windows of history.
     let cap = FFT_SIZE * 2;
-    if b.len() > cap {
-        let drop = b.len() - cap;
-        b.drain(0..drop);
+    if buf.len() > cap {
+        let drop = buf.len() - cap;
+        buf.drain(0..drop);
     }
 }
 
-/// When we have a full window, analyze it per the current mode and emit.
+fn send_chunk(tx: &std::sync::mpsc::SyncSender<Vec<f32>>, chunk: Vec<f32>) {
+    match tx.try_send(chunk) {
+        Ok(()) | Err(TrySendError::Full(_)) => {}
+        Err(TrySendError::Disconnected(_)) => {}
+    }
+}
+
+fn downmix_f32(data: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return data.to_vec();
+    }
+    data.chunks(channels)
+        .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
+        .collect()
+}
+
+fn downmix_i16(data: &[i16], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return data.iter().map(|&s| s as f32 / 32768.0).collect();
+    }
+    data.chunks(channels)
+        .map(|frame| frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32)
+        .collect()
+}
+
+fn downmix_u16(data: &[u16], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return data
+            .iter()
+            .map(|&s| (s as f32 - 32768.0) / 32768.0)
+            .collect();
+    }
+    data.chunks(channels)
+        .map(|frame| {
+            frame
+                .iter()
+                .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                .sum::<f32>()
+                / channels as f32
+        })
+        .collect()
+}
+
+// Cap how often readings cross the IPC boundary. Analysis still runs on every
+// window (so the chord chroma EMA keeps its per-window cadence); we only
+// coalesce the emits to ~45/s — well above the 60fps UI's needs, but far below
+// the audio callback rate, which otherwise serialized a full spectrum per chunk.
+const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(22);
+
+/// When we have a full window, analyze it per the current mode and emit (rate-limited).
 fn drain_and_emit(
-    buf: &Arc<Mutex<Vec<f32>>>,
+    buf: &[f32],
     analyzer: &Analyzer,
     app: &AppHandle,
     shared: &Arc<Mutex<Shared>>,
+    last_emit: &mut Instant,
 ) {
-    let window = {
-        let b = buf.lock().unwrap();
-        if b.len() < FFT_SIZE {
-            return;
-        }
-        b[b.len() - FFT_SIZE..].to_vec()
-    };
+    if buf.len() < FFT_SIZE {
+        return;
+    }
+    let window = &buf[buf.len() - FFT_SIZE..];
     let (mode, target, gate) = {
         let s = shared.lock().unwrap();
         (s.mode, s.target.clone(), s.gate)
     };
+    let due = last_emit.elapsed() >= MIN_EMIT_INTERVAL;
     match mode {
         Mode::Tuner => {
-            let _ = app.emit("tuner", analyzer.analyze_tuner(&window, gate));
+            let reading = analyzer.analyze_tuner(window, gate);
+            if due {
+                *last_emit = Instant::now();
+                let _ = app.emit("tuner", reading);
+            }
         }
         Mode::Chord => {
-            let _ = app.emit("chord", analyzer.analyze_chord(&window, target.as_deref(), gate));
+            let reading = analyzer.analyze_chord(window, target.as_deref(), gate);
+            if due {
+                *last_emit = Instant::now();
+                let _ = app.emit("chord", reading);
+            }
         }
     }
 }
@@ -275,6 +376,9 @@ struct Analyzer {
     /// Exponentially-smoothed chroma, so a quiet note (e.g. Am's C string)
     /// accumulates across frames instead of being judged on one instant.
     smooth: Mutex<[f32; 12]>,
+    /// Reusable FFT scratch (length FFT_SIZE), so each window doesn't allocate a
+    /// fresh complex buffer. Single capture thread, so contention is nil.
+    scratch: Mutex<Vec<Complex<f32>>>,
 }
 
 const CHROMA_SMOOTH: f32 = 0.4; // EMA weight for the newest frame
@@ -295,20 +399,19 @@ impl Analyzer {
             hann,
             book: ChordBook::build(),
             smooth: Mutex::new([0.0; 12]),
+            scratch: Mutex::new(vec![Complex::new(0.0, 0.0); FFT_SIZE]),
         }
     }
 
     /// Windowed FFT magnitudes + mean-removed RMS.
     fn spectrum(&self, samples: &[f32]) -> (Vec<f32>, f32) {
         let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
-        let rms = (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>()
-            / samples.len() as f32)
-            .sqrt();
-        let mut buf: Vec<Complex<f32>> = samples
-            .iter()
-            .zip(&self.hann)
-            .map(|(&s, &w)| Complex::new((s - mean) * w, 0.0))
-            .collect();
+        let rms =
+            (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32).sqrt();
+        let mut buf = self.scratch.lock().unwrap();
+        for (slot, (&s, &w)) in buf.iter_mut().zip(samples.iter().zip(&self.hann)) {
+            *slot = Complex::new((s - mean) * w, 0.0);
+        }
         self.fft.process(&mut buf);
         let mag = buf[..FFT_SIZE / 2].iter().map(|c| c.norm()).collect();
         (mag, rms)
@@ -320,7 +423,7 @@ impl Analyzer {
         let mut chroma = [0.0f32; 12];
         let lo = (CHROMA_FMIN / bin_hz).floor().max(1.0) as usize;
         let hi = ((CHROMA_FMAX / bin_hz).ceil() as usize).min(mag.len());
-        for i in lo..hi {
+        for (i, &magnitude) in mag.iter().enumerate().take(hi).skip(lo) {
             let f = i as f32 * bin_hz;
             let midi = 69.0 + 12.0 * (f / 440.0).log2();
             let nearest = midi.round();
@@ -328,7 +431,7 @@ impl Analyzer {
             // suppress leakage skirts: cos(pi*cents)^2, like the Python engine
             let w = (std::f32::consts::PI * cents).cos().max(0.0).powi(2);
             let pc = ((nearest as i32) % 12 + 12) % 12;
-            chroma[pc as usize] += mag[i] * w;
+            chroma[pc as usize] += magnitude * w;
         }
         let norm = (chroma.iter().map(|x| x * x).sum::<f32>()).sqrt();
         if norm > 0.0 {
@@ -346,18 +449,18 @@ impl Analyzer {
         let (fmin, fmax) = (70.0f32, 2000.0f32);
         let ratio = (fmax / fmin).powf(1.0 / n as f32);
         let mut out = vec![0.0f32; n];
-        for k in 0..n {
+        for (k, band) in out.iter_mut().enumerate() {
             let lo_f = fmin * ratio.powi(k as i32);
             let hi_f = fmin * ratio.powi(k as i32 + 1);
             let lo = (lo_f / bin_hz).floor() as usize;
             let hi = ((hi_f / bin_hz).ceil() as usize).min(mag.len());
             let mut peak = 0.0f32;
-            for i in lo..hi {
-                if mag[i] > peak {
-                    peak = mag[i];
+            for &magnitude in mag.iter().take(hi).skip(lo) {
+                if magnitude > peak {
+                    peak = magnitude;
                 }
             }
-            out[k] = peak;
+            *band = peak;
         }
         let max = out.iter().cloned().fold(0.0f32, f32::max);
         if max > 0.0 {
@@ -422,9 +525,8 @@ impl Analyzer {
     fn analyze_tuner(&self, samples: &[f32], gate: f32) -> TunerReading {
         // RMS for the silence gate / level meter.
         let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
-        let rms = (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>()
-            / samples.len() as f32)
-            .sqrt();
+        let rms =
+            (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32).sqrt();
 
         if rms < gate {
             return TunerReading {
@@ -436,12 +538,11 @@ impl Analyzer {
             };
         }
 
-        // Windowed FFT.
-        let mut buf: Vec<Complex<f32>> = samples
-            .iter()
-            .zip(&self.hann)
-            .map(|(&s, &w)| Complex::new((s - mean) * w, 0.0))
-            .collect();
+        // Windowed FFT (reusing the shared scratch buffer).
+        let mut buf = self.scratch.lock().unwrap();
+        for (slot, (&s, &w)) in buf.iter_mut().zip(samples.iter().zip(&self.hann)) {
+            *slot = Complex::new((s - mean) * w, 0.0);
+        }
         self.fft.process(&mut buf);
 
         let bin_hz = self.sample_rate / FFT_SIZE as f32;
@@ -451,8 +552,8 @@ impl Analyzer {
         // Find the strongest bin in range.
         let mut peak_i = lo;
         let mut peak_mag = 0.0_f32;
-        for i in lo..hi {
-            let m = buf[i].norm();
+        for (i, sample) in buf.iter().enumerate().take(hi).skip(lo) {
+            let m = sample.norm();
             if m > peak_mag {
                 peak_mag = m;
                 peak_i = i;
@@ -498,4 +599,32 @@ fn nearest_string(freq: f32) -> (&'static str, f32) {
         }
     }
     (best.0, best_cents)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nearest_string_reports_zero_cents_on_open_strings() {
+        let (name, cents) = nearest_string(196.0);
+        assert_eq!(name, "G3");
+        assert!(cents.abs() < 0.01);
+    }
+
+    #[test]
+    fn tuner_detects_synthetic_g3() {
+        let analyzer = Analyzer::new(44_100.0);
+        let samples: Vec<f32> = (0..FFT_SIZE)
+            .map(|n| {
+                let t = n as f32 / 44_100.0;
+                (2.0 * std::f32::consts::PI * 196.0 * t).sin() * 0.25
+            })
+            .collect();
+
+        let reading = analyzer.analyze_tuner(&samples, 0.001);
+        assert!(reading.active);
+        assert_eq!(reading.nearest, "G3");
+        assert!(reading.cents.abs() < 5.0, "cents={}", reading.cents);
+    }
 }

@@ -248,6 +248,25 @@ body {
   transform: translateY(0);
 }
 
+/* active view + active diagnostics toggle */
+.util-btn.active {
+  color: var(--bg);
+  background: var(--teal);
+  border-color: var(--teal);
+  font-weight: 600;
+  box-shadow: 0 0 18px rgba(25, 227, 196, 0.35);
+}
+.util-btn.active:hover {
+  color: var(--bg);
+  transform: none;
+}
+#diag-btn.on {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+  background: rgba(245, 196, 81, 0.08);
+  box-shadow: 0 0 14px rgba(245, 196, 81, 0.18);
+}
+
 .util-icon {
   margin-right: 5px;
   opacity: 0.85;
@@ -399,6 +418,10 @@ body {
   color: var(--text-faint);
   text-shadow: none;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 58%;
 }
 
 .meter-panel {
@@ -606,76 +629,319 @@ body {
 }
 
 /* ---------- Play / chord view ---------- */
+/* "Practice teleprompter" layout: a mode bar on top, a centered core-loop
+   CLUSTER (now-fingering · chord letter+cleanliness · next-fingering) as the
+   hero, and a bottom band (song strip/lyrics + transition coaching). The
+   analyzer instrumentation lives in a toggleable Diagnostics drawer. */
 .play-view {
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) 1.5fr;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 16px;
-  min-height: 0;
-}
-
-/* two stacks side by side: [detected/fingering] | [song/chromagram] */
-.col-center {
-  grid-column: 2;
-  grid-row: 1;
-  display: grid;
-  grid-template-columns: minmax(200px, 0.85fr) 1fr;
-  gap: 16px;
-  min-height: 0;
-}
-
-.center-left,
-.center-right {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   min-height: 0;
 }
 
-/* detected chord: compact hero card, fingering grows to fill below */
-.center-left .chord-panel {
-  flex: 0 0 auto;
-}
-.center-left .finger-panel {
+/* the foveal cluster: the three things you watch while strumming, together */
+.cluster {
   flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 1.7fr 1fr;
+  gap: 14px;
+  min-height: 0;
 }
 
-/* song strip + lyrics: grows to share space, chromagram stays compact below */
-.center-right .song-panel {
-  flex: 1 1 auto;
+.cluster .highway-panel {
+  min-height: 0;
+}
+
+/* bottom band: chord strip/lyrics (wide) + transition coaching (narrow) */
+.bottom-band {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 14px;
+  max-height: 38vh;
+  min-height: 0;
+  /* hard backstop: a tall grid row (e.g. long lyrics) must never escape the
+     band and push the app past the viewport. WKWebView doesn't always clamp a
+     grid row to the container's max-height, so clip here too. */
+  overflow: hidden;
+}
+.bottom-band .song-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-.center-right .chroma-panel {
-  flex: 0 0 auto;
-}
-
-.fft-row {
-  grid-column: 1 / -1;
-  grid-row: 2;
+.bottom-band .transition-panel {
+  min-height: 0;
 }
 
 .finger-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
+  overflow: hidden;
+  isolation: isolate;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+}
+
+.finger-panel .panel-title {
+  letter-spacing: 2px;
+  width: 100%;
+}
+
+.finger-panel .panel-title .tag {
+  flex: 0 0 auto;
+  max-width: none;
+  letter-spacing: 0.6px;
+}
+
+.shape-controls {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shape-btn,
+.arr-shape-btn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(25, 227, 196, 0.32);
+  border-radius: 7px;
+  background: rgba(25, 227, 196, 0.055);
+  color: var(--teal);
+  cursor: pointer;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.shape-btn:hover,
+.arr-shape-btn:hover {
+  border-color: var(--teal);
+  background: rgba(25, 227, 196, 0.12);
+}
+
+.shape-btn:disabled,
+.arr-shape-btn:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.shape-count {
+  min-width: 28px;
+  text-align: center;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
 }
 
 .fretboard {
   width: 100%;
-  max-width: 150px;
+  max-width: 148px;
   height: auto;
-  margin-top: 10px;
+  margin-top: 6px;
+  filter: drop-shadow(0 0 8px rgba(25, 227, 196, 0.2));
+}
+
+.current-finger-panel {
+  --now-glow: 1;
+  border-color: rgba(245, 196, 81, 0.65);
+  background:
+    radial-gradient(120% 60% at 50% 18%, rgba(245, 196, 81, calc(0.06 + var(--now-glow) * 0.07)), transparent 62%),
+    var(--panel-bg);
+  box-shadow:
+    0 0 calc(16px + var(--now-glow) * 22px) rgba(245, 196, 81, calc(0.08 + var(--now-glow) * 0.18)),
+    inset 0 0 28px rgba(245, 196, 81, calc(0.03 + var(--now-glow) * 0.06));
+}
+
+.current-finger-panel::after {
+  background: linear-gradient(90deg, transparent, rgba(245, 196, 81, 0.72), transparent);
+}
+
+.current-finger-panel .panel-title {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.6);
+}
+
+.current-finger-panel.is-clean {
+  border-color: rgba(25, 227, 196, 0.72);
+  background:
+    radial-gradient(120% 60% at 50% 18%, rgba(25, 227, 196, 0.13), transparent 62%),
+    var(--panel-bg);
+  box-shadow:
+    0 0 34px rgba(25, 227, 196, 0.24),
+    inset 0 0 30px rgba(25, 227, 196, 0.08);
+}
+
+.current-finger-panel.is-clean .panel-title {
+  color: var(--teal);
+  text-shadow: 0 0 12px rgba(25, 227, 196, 0.58);
+}
+
+.next-finger-panel {
+  --next-glow: 0;
+  border-color: rgba(25, 227, 196, calc(0.18 + var(--next-glow) * 0.48));
+  background:
+    radial-gradient(120% 64% at 50% 16%, rgba(25, 227, 196, calc(var(--next-glow) * 0.11)), transparent 66%),
+    var(--panel-bg);
+  box-shadow:
+    0 0 calc(8px + var(--next-glow) * 30px) rgba(25, 227, 196, calc(0.04 + var(--next-glow) * 0.2)),
+    inset 0 0 28px rgba(25, 227, 196, calc(0.02 + var(--next-glow) * 0.06));
+}
+
+.next-finger-panel .panel-title {
+  color: rgba(207, 232, 230, 0.74);
+  text-shadow: 0 0 calc(5px + var(--next-glow) * 12px) rgba(25, 227, 196, calc(0.15 + var(--next-glow) * 0.4));
+}
+
+.next-finger-panel.has-upcoming .fretboard {
+  filter: drop-shadow(0 0 calc(5px + var(--next-glow) * 11px) rgba(25, 227, 196, calc(0.18 + var(--next-glow) * 0.36)));
+}
+
+.next-finger-panel.is-close {
+  border-color: rgba(245, 196, 81, calc(0.42 + var(--next-glow) * 0.42));
+  box-shadow:
+    0 0 calc(16px + var(--next-glow) * 34px) rgba(245, 196, 81, calc(0.08 + var(--next-glow) * 0.22)),
+    inset 0 0 30px rgba(245, 196, 81, calc(0.03 + var(--next-glow) * 0.07));
+}
+
+.next-finger-panel.is-close .panel-title {
+  color: var(--gold);
+  text-shadow: 0 0 calc(8px + var(--next-glow) * 12px) rgba(245, 196, 81, calc(0.28 + var(--next-glow) * 0.36));
+}
+
+.transition-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-bottom: 12px;
+}
+
+.transition-coach {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 92px;
+}
+
+.transition-summary {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(245, 196, 81, 0.34);
+}
+
+.transition-empty {
+  min-height: 72px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.9px;
+  color: var(--text-dim);
+}
+
+.transition-strings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.transition-string {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px 24px 14px 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 1px solid rgba(25, 227, 196, 0.14);
+  border-radius: 7px;
+  background: rgba(10, 15, 18, 0.42);
+}
+
+.transition-string-name,
+.transition-arrow,
+.transition-hint,
+.transition-fret {
+  font-family: "JetBrains Mono", monospace;
+}
+
+.transition-string-name {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.transition-fret {
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid rgba(25, 227, 196, 0.2);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.transition-arrow {
+  color: var(--text-faint);
+  font-size: 10px;
+  text-align: center;
+}
+
+.transition-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.transition-string.anchor {
+  border-color: rgba(25, 227, 196, 0.28);
+}
+
+.transition-string.anchor .transition-fret.to {
+  color: var(--teal);
+  border-color: rgba(25, 227, 196, 0.46);
+  background: rgba(25, 227, 196, 0.06);
+}
+
+.transition-string.move,
+.transition-string.add {
+  border-color: rgba(245, 196, 81, 0.28);
+}
+
+.transition-string.move .transition-fret.to,
+.transition-string.add .transition-fret.to {
+  color: var(--gold);
+  border-color: rgba(245, 196, 81, 0.5);
+  background: rgba(245, 196, 81, 0.07);
+}
+
+.transition-string.lift .transition-fret.to {
+  color: var(--red);
+  border-color: rgba(255, 93, 108, 0.36);
 }
 
 /* ---------- LEFT: cleanliness gauge ---------- */
 .clean-panel {
-  grid-column: 1;
-  grid-row: 1;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+}
+
+.clean-body {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: 16px;
   align-items: center;
 }
 
@@ -689,8 +955,8 @@ body {
 }
 
 .gauge-canvas {
-  width: 240px;
-  height: 240px;
+  width: 158px;
+  height: 158px;
   display: block;
 }
 
@@ -706,7 +972,7 @@ body {
 .gauge-val {
   font-family: "Chakra Petch", sans-serif;
   font-weight: 700;
-  font-size: 52px;
+  font-size: 34px;
   line-height: 1;
   color: var(--teal);
   font-variant-numeric: tabular-nums;
@@ -715,14 +981,14 @@ body {
 }
 
 .gauge-val .pct {
-  font-size: 22px;
+  font-size: 15px;
   opacity: 0.6;
 }
 
 .gauge-status {
   font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
-  letter-spacing: 4px;
+  font-size: 10px;
+  letter-spacing: 2.4px;
   text-transform: uppercase;
   color: var(--teal);
   margin-top: 4px;
@@ -732,10 +998,125 @@ body {
 
 .gauge-sub {
   font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  letter-spacing: 2px;
+  font-size: 9px;
+  letter-spacing: 1px;
   color: var(--text-dim);
   margin-top: 4px;
+}
+
+/* ---------- note breakdown (target chord-tones: present / missing) ---------- */
+.breakdown {
+  width: 100%;
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.target-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  min-height: 4px;
+}
+
+.note-tok {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  width: 40px;
+  min-width: 40px;
+  min-height: 28px;
+  padding: 4px 0;
+  text-align: center;
+  border-radius: 7px;
+  border: 1.2px solid var(--line-teal);
+  color: var(--text-dim);
+  position: relative;
+  transition: all 0.35s;
+}
+
+.note-tok.extra {
+  width: 54px;
+  min-width: 54px;
+}
+
+.note-tok .nm {
+  display: block;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  opacity: 0.55;
+}
+
+.note-tok.present {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.07);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.22);
+}
+.note-tok.present .nm {
+  color: var(--teal);
+  opacity: 0.8;
+}
+
+.note-tok.missing {
+  color: var(--gold);
+  border-color: rgba(245, 196, 81, 0.5);
+  border-style: dashed;
+  animation: missBlink 1.6s ease-in-out infinite;
+}
+
+.note-tok.extra {
+  color: var(--amber);
+  border-color: rgba(255, 157, 77, 0.5);
+}
+
+.note-tok .mark {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-family: "JetBrains Mono", monospace;
+}
+.note-tok.present .mark {
+  background: var(--teal);
+  color: var(--bg);
+  box-shadow: 0 0 8px var(--teal);
+}
+.note-tok.missing .mark {
+  background: var(--gold);
+  color: var(--bg);
+  box-shadow: 0 0 8px var(--gold);
+}
+.note-tok.extra .mark {
+  background: var(--amber);
+  color: var(--bg);
+  box-shadow: 0 0 8px var(--amber);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-tok.missing {
+    animation: none;
+  }
+}
+
+@keyframes missBlink {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .coach {
@@ -747,7 +1128,6 @@ body {
   border-radius: 9px;
   min-height: 40px;
   width: 100%;
-  margin-top: auto;
   border-left: 2px solid var(--gold);
   background: rgba(245, 196, 81, 0.06);
   color: var(--gold);
@@ -779,25 +1159,32 @@ body {
   text-align: center;
 }
 
-/* ---------- CENTER: detected chord ---------- */
-.chord-panel {
+/* ---------- CENTER: chord highway (NOW + upcoming lane) ---------- */
+.highway-panel {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding-top: 30px;
+  overflow: hidden;
 }
 
-/* the detected-chord readout is the hero */
-.chord-readout {
-  flex: 0 0 auto;
+.highway-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* the scrolling chord highway is drawn on a canvas filling the stage */
+.highway-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .now-tag {
   position: absolute;
-  top: 12px;
+  top: 4px;
   left: 50%;
   transform: translateX(-50%);
   font-family: "JetBrains Mono", monospace;
@@ -806,20 +1193,391 @@ body {
   color: var(--gold);
   text-shadow: 0 0 10px rgba(245, 196, 81, 0.6);
   text-transform: uppercase;
+  z-index: 4;
 }
 
-.chord-readout {
+/* =====================================================================
+   Practice-teleprompter chrome: mode bar, slim cleanliness, drawer
+   ===================================================================== */
+
+/* ---------- MODE BAR (free-play vs. song + transport) ---------- */
+.modebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--panel-bg);
+  border: 1.2px solid var(--line);
+  border-left: 4px solid var(--gold); /* gold = song mode */
+  box-shadow: 0 0 24px rgba(245, 196, 81, 0.06);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+/* free-play mode: teal edge */
+.play-view.free .modebar {
+  border-left-color: var(--teal-dim);
+  box-shadow: 0 0 24px rgba(25, 227, 196, 0.06);
+}
+
+.modebar-song-btn {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  background: rgba(10, 15, 18, 0.6);
+  color: var(--teal);
+  border: 1px solid var(--teal-dim);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.modebar-song-btn:hover {
+  background: rgba(25, 227, 196, 0.1);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.22);
+  transform: translateY(-1px);
+}
+
+.mode-tag {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--gold);
+  white-space: nowrap;
+}
+.play-view.free .mode-tag {
+  color: var(--teal);
+}
+
+.mode-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mode-title {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mode-meta {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.mode-stats #practice-next {
+  color: var(--teal);
+}
+
+.mode-spacer {
+  flex: 1 1 auto;
+}
+
+.listen-btn.slim {
+  width: auto;
+  padding: 8px 16px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* transport lives inline in the mode bar (overrides the old absolute pin) */
+.modebar .transport {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kbd {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+/* ---------- slim inline cleanliness (replaces gauge in the cluster) ---------- */
+.clean-inline {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px 2px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.clean-val {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--teal);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgba(25, 227, 196, 0.6);
+  transition: color 0.4s, text-shadow 0.4s;
+}
+.clean-val .pct {
+  font-size: 13px;
+  opacity: 0.6;
+}
+.clean-status {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+  color: var(--teal);
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.5);
+  transition: color 0.4s;
+}
+.clean-target {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+/* note tokens laid out horizontally beside the readout */
+.clean-inline .target-notes {
+  flex-direction: row;
+  gap: 9px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* coach line sits compact under the cluster's center panel */
+.highway-panel .coach {
+  flex: 0 0 auto;
+  margin-top: 6px;
+  min-height: 0;
   text-align: center;
+  border-left: none;
+  border-top: 2px solid var(--gold);
+  background: rgba(245, 196, 81, 0.05);
+}
+.highway-panel .coach.good {
+  border-top-color: var(--teal);
+  background: rgba(25, 227, 196, 0.05);
+}
+
+/* ---------- DIAGNOSTICS DRAWER ---------- */
+.drawer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  padding: 16px 22px 22px;
+  background: linear-gradient(180deg, rgba(8, 13, 15, 0.97), rgba(6, 10, 12, 0.99));
+  border-top: 1px solid var(--line-teal);
+  box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.6);
+  transform: translateY(0);
+  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.drawer[hidden] {
+  display: block !important; /* keep it laid out so canvases keep their size */
+  transform: translateY(102%);
+  pointer-events: none;
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.drawer-close {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--gold);
+  background: transparent;
+  border: 1px solid var(--gold-dim);
+  border-radius: 7px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.drawer-close:hover {
+  background: rgba(245, 196, 81, 0.1);
+}
+.diag-grid {
+  display: grid;
+  grid-template-columns: 0.8fr 1.4fr 1fr;
+  gap: 16px;
+  height: 30vh;
+  min-height: 220px;
+}
+.diag-grid .panel {
+  min-height: 0;
+}
+.diag-grid .gauge-wrap {
+  margin-top: 0;
+  flex: 1 1 auto;
+}
+
+/* transport (only shown when a timed song is loaded) */
+.transport {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 6;
+}
+
+.tp-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  background: rgba(10, 15, 18, 0.7);
+  color: var(--teal);
+  border: 1.3px solid var(--teal-dim);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.tp-btn:hover {
+  background: rgba(25, 227, 196, 0.12);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.25);
+}
+.tp-btn.play {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+}
+.tp-btn.play.on {
+  background: rgba(245, 196, 81, 0.12);
+  box-shadow: 0 0 14px rgba(245, 196, 81, 0.3);
+}
+.tp-time,
+.tp-bpm {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.tp-bpm {
+  color: var(--teal);
+}
+
+/* backing-track controls (band picker + wait mode) */
+.backing-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tp-chip {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(10, 15, 18, 0.7);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.tp-chip:hover {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+}
+.tp-chip.on {
+  color: var(--gold);
+  border-color: var(--gold-dim);
+  background: rgba(245, 196, 81, 0.1);
+  box-shadow: 0 0 12px rgba(245, 196, 81, 0.25);
+}
+
+/* dropdown list of MIDI channels to toggle on/off */
+.track-picker {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(8, 13, 15, 0.96);
+  border: 1px solid var(--line-teal);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 18px rgba(25, 227, 196, 0.12);
+}
+.track-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text);
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.track-opt:hover {
+  background: rgba(25, 227, 196, 0.07);
+}
+.track-opt input {
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.track-opt .t-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* the big current chord sits at the NOW line, pinned to lower-center */
+.current-chord {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .chord-name {
   font-family: "Chakra Petch", sans-serif;
   font-weight: 700;
-  font-size: 110px;
+  font-size: clamp(56px, 9vw, 96px);
   line-height: 0.9;
   color: #fff;
   text-shadow: 0 0 16px var(--teal), 0 0 44px rgba(25, 227, 196, 0.4);
   transition: text-shadow 0.4s;
+  white-space: nowrap;
 }
 
 .chord-name.clean {
@@ -841,33 +1599,120 @@ body {
   margin-top: 6px;
 }
 
-.target-row {
+/* ---------- Inline analyzer metrics ---------- */
+.inline-metrics {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
   justify-content: center;
-  gap: 10px;
+  padding-left: 14px;
+  border-left: 1px solid rgba(25, 227, 196, 0.18);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.metric-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.metric-head .k {
   font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  letter-spacing: 2px;
+  font-size: 10px;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--text-dim);
 }
 
-#target-select {
-  font-family: "Chakra Petch", sans-serif;
+.metric-head .v {
+  font-family: "JetBrains Mono", monospace;
   font-size: 14px;
-  background: var(--bg-panel-2);
-  color: var(--gold);
-  border: 1px solid var(--gold-dim);
-  border-radius: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
+  font-weight: 600;
+  color: var(--teal);
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+.mbar {
+  height: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(25, 227, 196, 0.14);
+  overflow: hidden;
+}
+
+.mbar .mf {
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--teal-dim), var(--teal));
+  box-shadow: 0 0 10px var(--teal);
+  transition: width 0.25s;
+}
+
+.mbar .mf.gold {
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+  box-shadow: 0 0 10px var(--gold);
+}
+
+.peaks-list {
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.peak-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+
+.peak-row .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.peak-row .dot.t {
+  background: var(--gold);
+  box-shadow: 0 0 7px var(--gold);
+}
+.peak-row .dot.h {
+  background: var(--teal);
+  box-shadow: 0 0 7px var(--teal);
+}
+.peak-row .pn {
+  color: var(--text);
+  min-width: 32px;
+}
+.peak-row .pf {
+  color: var(--text-dim);
+  margin-left: auto;
 }
 
 /* ---------- chromagram (horizontal bars, mockup style) ---------- */
 .chroma-panel {
   display: flex;
   flex-direction: column;
+}
+
+.chroma-analyzer {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(156px, 0.42fr);
+  gap: 14px;
+  align-items: stretch;
 }
 
 .chroma {
@@ -930,7 +1775,7 @@ body {
 .fft-canvas-wrap {
   position: relative;
   width: 100%;
-  height: 150px;
+  height: 118px;
 }
 
 .fft-canvas {
@@ -946,6 +1791,312 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   min-height: 0;
+}
+
+/* ---------- Arrangement view ---------- */
+.arrangement-view {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.arrangement-panel,
+.arrangement-chords-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.arrangement-status {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(190px, auto) repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.arr-transport {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 15, 18, 0.48);
+}
+
+.arr-stat {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 15, 18, 0.48);
+}
+
+.arr-k {
+  display: block;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.arr-v {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+#arr-now {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.45);
+}
+
+#arr-next {
+  color: var(--teal);
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.36);
+}
+
+.arrangement-empty {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  border: 1px dashed var(--line-teal);
+  border-radius: 10px;
+  background: rgba(25, 227, 196, 0.03);
+}
+
+.arrangement-sheet {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 4px 16px;
+}
+
+.arr-section {
+  margin: 18px 0 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(25, 227, 196, 0.14);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--teal);
+  text-shadow: 0 0 8px rgba(25, 227, 196, 0.28);
+}
+
+.arr-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.arr-line {
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.arr-line.now {
+  border-color: rgba(245, 196, 81, 0.5);
+  background: rgba(245, 196, 81, 0.045);
+  box-shadow: inset 0 0 18px rgba(245, 196, 81, 0.04);
+}
+
+.arr-line.lyric-only {
+  padding: 6px 10px;
+}
+
+.arr-chord-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 7px;
+}
+
+.arr-bar {
+  min-height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-left: 2px solid rgba(25, 227, 196, 0.35);
+  border-right: 1px solid rgba(25, 227, 196, 0.12);
+  background: rgba(10, 15, 18, 0.42);
+}
+
+.arr-chord {
+  min-width: 42px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(25, 227, 196, 0.24);
+  border-radius: 7px;
+  background: rgba(25, 227, 196, 0.045);
+  color: var(--teal);
+  cursor: pointer;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  transition: color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.arr-chord:hover {
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.09);
+}
+
+.arr-chord.done {
+  color: var(--text-dim);
+  opacity: 0.55;
+}
+
+.arr-chord.now {
+  color: var(--bg);
+  border-color: var(--gold);
+  background: var(--gold);
+  box-shadow: 0 0 18px rgba(245, 196, 81, 0.45);
+}
+
+.arr-chord.next {
+  border-color: rgba(25, 227, 196, 0.72);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.22);
+}
+
+.arr-lyric {
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+.arr-line.now .arr-lyric {
+  color: var(--text);
+}
+
+.arrangement-chords {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.arr-chord-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(25, 227, 196, 0.2);
+  border-radius: 8px;
+  background: rgba(10, 15, 18, 0.5);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.arr-chord-card:hover {
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.055);
+}
+
+.arr-chord-card:focus-visible {
+  outline: 2px solid rgba(25, 227, 196, 0.6);
+  outline-offset: 2px;
+}
+
+.arr-chord-card.now {
+  border-color: rgba(245, 196, 81, 0.72);
+  box-shadow: 0 0 20px rgba(245, 196, 81, 0.18), inset 0 0 18px rgba(245, 196, 81, 0.045);
+}
+
+.arr-chord-card.next {
+  border-color: rgba(25, 227, 196, 0.58);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.14);
+}
+
+.arr-card-head {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arr-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.arr-chord-card.now .arr-card-name {
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(245, 196, 81, 0.5);
+}
+
+.arr-chord-card.next .arr-card-name {
+  color: var(--teal);
+  text-shadow: 0 0 10px rgba(25, 227, 196, 0.38);
+}
+
+.arr-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.arr-card-count,
+.arr-card-shape {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+.arr-card-shape {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arr-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.arr-shape-btn {
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.arr-mini-fret {
+  width: 86px;
+  height: 112px;
+  justify-self: end;
+  filter: drop-shadow(0 0 6px rgba(245, 196, 81, 0.18));
 }
 
 .lib-add-panel,
@@ -1002,6 +2153,66 @@ body {
   box-shadow: 0 0 20px rgba(25, 227, 196, 0.18), inset 0 0 14px rgba(25, 227, 196, 0.04);
 }
 
+/* secondary lyrics paste (shown only after a MIDI import); fixed short height */
+.lyrics-box {
+  flex: 0 0 auto;
+  height: 96px;
+  margin-top: 10px;
+}
+
+/* MIDI channel picker (which parts chords are read from) */
+.chan-picker {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 15, 18, 0.4);
+}
+.chan-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-top: 5px;
+  white-space: nowrap;
+}
+.chan-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chan-chip {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.chan-chip:hover {
+  border-color: var(--teal-dim);
+  color: var(--teal);
+}
+.chan-chip.on {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.1);
+  box-shadow: 0 0 12px rgba(25, 227, 196, 0.18);
+}
+.chan-chip .ch-score {
+  opacity: 0.55;
+  margin-left: 5px;
+  font-size: 9px;
+}
+
 .lib-add-row {
   display: flex;
   align-items: center;
@@ -1011,6 +2222,20 @@ body {
 
 .lib-add-row .listen-btn {
   margin-top: 0;
+}
+
+/* secondary action button (Load MIDI): quieter than the primary Add button */
+.listen-btn.ghost {
+  background: rgba(10, 15, 18, 0.5);
+  color: var(--text-dim);
+  border-color: var(--line);
+  box-shadow: none;
+}
+.listen-btn.ghost:hover {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: rgba(25, 227, 196, 0.06);
+  box-shadow: 0 0 16px rgba(25, 227, 196, 0.18);
 }
 
 .ai-toggle {
@@ -1136,6 +2361,81 @@ body {
   margin-top: 30px;
 }
 
+/* ---------- Practice status strip ---------- */
+.practice-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 10px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 15, 18, 0.45);
+}
+
+.practice-song-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--teal-dim);
+  background: rgba(25, 227, 196, 0.08);
+  color: var(--teal);
+  cursor: pointer;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  transition: all 0.16s ease;
+}
+
+.practice-song-btn:hover {
+  background: rgba(25, 227, 196, 0.16);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.22);
+}
+
+.practice-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.practice-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.practice-sub,
+.practice-stats {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+}
+
+.practice-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+#practice-pos {
+  color: var(--gold);
+}
+
+#practice-next {
+  color: var(--teal);
+}
+
 /* ---------- Loaded-song chord strip (in Play) ---------- */
 .song-bar {
   margin-top: 12px;
@@ -1227,12 +2527,19 @@ body {
 .song-panel .song-bar {
   flex: 0 0 auto;
   max-height: 96px;
+  overflow: hidden; /* the strip (max-height 120) must not spill past the bar */
 }
 
 /* ---------- Lyrics view (chord cues above syllables) ---------- */
 .lyrics-view {
   flex: 1 1 auto;
   min-height: 0;
+  /* Own hard height cap so the scroll engages regardless of whether the
+     flex/grid ancestors clamp their height (they don't in WKWebView). Without
+     this, long lyrics grow the box unbounded and push the app off-screen with
+     no scrollbar. The band's max-height (38vh) minus the strip/title is the
+     budget; floor it so it never collapses to nothing on short windows. */
+  max-height: max(64px, calc(38vh - 140px));
   overflow-y: auto;
   margin-top: 12px;
   padding: 8px 4px 6px;
@@ -1256,11 +2563,12 @@ body {
 
 .lyric-line {
   font-family: "Space Grotesk", sans-serif;
-  font-size: 18px;
+  font-size: 21px;
   font-weight: 500;
-  line-height: 1.9;
+  line-height: 1.5;
   color: var(--text-faint);
   transition: color 0.25s;
+  padding-top: 0.5em; /* room for the chord cue sitting above */
 }
 /* the line containing the current target chord is full brightness */
 .lyric-line.now {
@@ -1384,4 +2692,134 @@ body {
   padding: 6px 9px;
   background: rgba(8, 13, 15, 0.6);
   text-shadow: 0 0 6px rgba(25, 227, 196, 0.35);
+}
+
+/* ---- SoundFont install overlay ---- */
+.sf-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 6, 7, 0.78);
+  backdrop-filter: blur(3px);
+}
+.sf-overlay[hidden] {
+  display: none;
+}
+.sf-modal {
+  position: relative;
+  width: min(460px, 90vw);
+  padding: 26px 28px 24px;
+  background: var(--panel-bg);
+  border: 1.2px solid var(--line-teal);
+  border-radius: 14px;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6), inset 0 0 24px rgba(25, 227, 196, 0.05);
+  color: var(--text);
+  text-align: center;
+}
+.sf-title {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: 0.5px;
+  color: var(--teal);
+}
+.sf-text {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.sf-modal .listen-btn {
+  margin-top: 16px;
+}
+.sf-progress {
+  display: block;
+  width: 100%;
+  height: 8px;
+  margin: 16px 0 6px;
+  appearance: none;
+  border: none;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(25, 227, 196, 0.08);
+}
+.sf-progress[hidden] {
+  display: none;
+}
+.sf-progress::-webkit-progress-bar {
+  background: rgba(25, 227, 196, 0.08);
+}
+.sf-progress::-webkit-progress-value {
+  background: var(--teal);
+}
+.sf-progress::-moz-progress-bar {
+  background: var(--teal);
+}
+.sf-status {
+  display: block;
+  min-height: 16px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.sf-status.err {
+  color: var(--red);
+}
+.sf-more {
+  margin-top: 18px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.sf-more summary {
+  cursor: pointer;
+  color: var(--teal);
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.sf-more a {
+  color: var(--gold);
+}
+.sf-more code {
+  font-family: "Chakra Petch", monospace;
+  color: var(--amber);
+  background: rgba(255, 157, 77, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.sf-path {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  font-family: "Chakra Petch", monospace;
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--text);
+  background: rgba(8, 13, 15, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.sf-more .listen-btn {
+  margin-top: 4px;
+  padding: 8px 18px;
+  font-size: 12px;
+}
+.sf-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.sf-close:hover {
+  color: var(--teal);
 }

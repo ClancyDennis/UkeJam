@@ -1,75 +1,97 @@
 # ukejam
 
-A play-along practice tool for **baritone ukulele** (and guitar). You load a
-song, it shows you the chord to play, and it **listens to your playing** to tell
-you whether your fingers are right — flagging which notes are missing or wrong.
+ukejam is a play-along practice app for **baritone ukulele**. Load a song, see
+the chord timeline, play along, and let the app listen for what is actually
+ringing. The feedback is practical: which target notes are present, which are
+missing, and which extra notes are getting into the chord.
 
-This repo is the **Python research prototype**. It proves the whole product is
-feasible — detection, coaching, song import, and the play-along scoring loop —
-before building the real [Tauri](https://tauri.app) app. The detection core is
-deliberately plain array math so it ports cleanly to Rust later.
+The repo now has two active layers:
 
-## Status
+- `app/` is the Tauri app: tuner, live chord detection, song library, timed
+  chord highway, MIDI import, backing-track playback, and LLM tab cleanup.
+- The root Python files are the research/reference prototype for detection,
+  coaching, ChordPro parsing, persistence, and scorer behavior.
 
-| Piece | State |
-|-------|-------|
-| Chord detection (FFT → chroma → template match) | ✅ proven, 7/7 on synthetic chords |
-| Finger-error feedback (missing / extra notes) | ✅ working |
-| Robustness over a backing track | ✅ characterized — **headphone mode** is the default |
-| Tab import (any format → ChordPro, via LLM) | ✅ proven on real Foo Fighters tabs |
-| Song database (SQLite) | ✅ |
-| Play-along scorer (timeline + tolerant scoring) | ✅ working |
-| Tuning on a **real** ukulele | ⏳ the one thing left that needs the instrument |
-| Rust port + Tauri UI | ⏳ not started |
+There is also an untracked `experiments/` area for the next ingestion path:
+audio file → Demucs stems → basic-pitch MIDI/chords.
 
-Everything except real-uke tuning was built and tested without the instrument,
-using synthesized audio.
+## Current Status
 
-## How it works
+| Area | State |
+|------|-------|
+| Tauri shell + Vite UI | Working |
+| Live tuner | Working via `cpal` + FFT |
+| Live chord detection | Working native Rust port: FFT → chroma → template match |
+| Missing / extra note feedback | Working for target chords |
+| Song library | Working in frontend `localStorage`; Python prototype uses SQLite |
+| Pasted tab / ChordPro import | Working, with local LLM proxy enhancement |
+| MIDI import | Working: parses SMF, derives timed chord chart, selects chord-source channels |
+| MIDI backing playback | Working via `rustysynth` + a user-installed SoundFont |
+| Timed chord highway | Working for MIDI/timed songs |
+| Wait-for-me mode | Present for timed practice |
+| Arbitrary audio import | Research-proven in `experiments/`, not wired into app |
+| Automated coverage | Minimal; mostly smoke/demo scripts today |
+
+The previous “Rust port + Tauri UI not started” README status is stale. The
+app is now the main product surface.
+
+## SoundFont (backing playback)
+
+Backing-track playback renders MIDI through a General MIDI SoundFont. None is
+bundled — good GM banks aren't free to redistribute — so the app resolves one
+from disk at runtime. The first time you play a backing track with none
+installed, a panel offers a one-click download of
+[GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS) (free, ~30 MB,
+redistributable) into the app data dir.
+
+To use your own instead, set `UKEJAM_SOUNDFONT` to a `.sf2` path, or drop one as
+`soundfont.sf2` in the app data dir (the panel shows the exact path and has an
+"Open folder" button). Other good free banks: FluidR3_GM, MuseScore MS Basic.
+Everything except backing playback works without a SoundFont.
+
+## Product Shape
 
 ```
-            ┌─────────── IMPORT ───────────┐     ┌──────── PLAY-ALONG ────────┐
- paste tab → LLM normalize → ChordPro → SQLite → chord sequence → timeline
- (any           (importer)    (song.py)  (db.py)                  (scorer.py)
-  format)                                                              │
-                                                          you play ────┤
-                                                                       ▼
-                          mic → FFT → chroma → template match → detected chord
-                          (live.py)        (chords.py)                 │
-                                                                       ▼
-                                          compare vs. expected → HIT / WRONG
-                                          (feedback.py)        + missing/extra notes
+          IMPORT                         PRACTICE
+
+ paste tab / ChordPro ─┐
+ MIDI file ────────────┼─> ChordPro song + timing ─> library ─> chord highway
+ audio file (research) ┘                                      + lyrics / strip
+                                                                + backing track
+                                                                       │
+                                                     mic ─> FFT/chroma detector
+                                                                       │
+                                             expected chord vs heard notes
+                                                                       │
+                                                     clean / missing / extra
 ```
 
-**Detection** turns audio into a 12-bin *chromagram* (energy per pitch class,
-C…B) via one FFT, then cosine-matches it against chord templates. No ML, no
-training data — robust and fast, and the core is ~30 lines of numpy.
+Songs stay instrument-agnostic: a `G` is stored as a chord name and pitch-class
+target, while the app decides how to show that shape on baritone uke.
 
-**Coaching** diffs the chroma against the target chord's expected pitch classes:
-notes that should sound but don't are **missing** (string muted / not fretted);
-notes that sound but shouldn't are **extra** (finger on the wrong fret).
+## App
 
-**Scoring** is tolerant on purpose: a chord counts as a HIT if all its target
-notes are present and at most one extra rings, so harmonic overtones and added
-color notes don't trigger false alarms — but genuinely wrong chords are caught.
+```bash
+cd app
+pnpm install
+pnpm build
+pnpm tauri dev
+```
 
-## Modules
+Useful app checks:
 
-| File | Responsibility |
-|------|----------------|
-| `chords.py` | Chroma computation + chord templates + cosine matcher (the detection core) |
-| `fretboard.py` | Baritone uke model (tuning **D3 G3 B3 E4**); fingerings → sounding notes |
-| `feedback.py` | Finger-error feedback; synthesizes fingerings for testing |
-| `robustness.py` | Mixes a backing track in and tests spectral subtraction |
-| `song.py` | Song model + ChordPro parser (chords, lyrics, sections) |
-| `db.py` | SQLite song library (add / list / get / update / delete) |
-| `importer.py` | Any tab → ChordPro: deterministic column parser **+ LLM normalizer** |
-| `scorer.py` | Play-along loop: builds a timeline, scores a performance |
-| `live.py` | Real-time chord detection from the mic |
-| `record.py` | Record short clips for offline tuning |
-| `test_synthetic.py` | Proves the detector on synthesized chords |
+```bash
+pnpm --dir app build
+cargo test --manifest-path app/src-tauri/Cargo.toml
+cargo check --manifest-path app/src-tauri/Cargo.toml --examples
+```
 
-## Setup
+The Rust app currently has no meaningful unit-test coverage, so `cargo test`
+mainly proves the crate compiles.
+
+## Python Prototype
+
+Setup:
 
 ```bash
 python3.13 -m venv .venv
@@ -77,80 +99,103 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Try it
+Smoke scripts:
 
 ```bash
-# Prove the detector on synthetic chords (no mic needed)
-python test_synthetic.py
-
-# See finger-error feedback on right vs. wrong fingerings
-python feedback.py
-
-# How a backing track affects detection
-python robustness.py
-
-# The full play-along loop with injected mistakes
-python scorer.py
-
-# Live detection from your mic — play a chord
-python live.py
-
-# Record a clip for tuning (3-2-1 countdown, then strum)
-python record.py G
+.venv/bin/python test_synthetic.py
+.venv/bin/python feedback.py
+.venv/bin/python robustness.py
+.venv/bin/python scorer.py
 ```
 
-### Tab import
+Current observed results in this workspace:
 
-The importer turns messy real-world tabs into clean ChordPro. Single-note
-tablature staves are discarded (the app listens for **chords**, not lead riffs);
-chord charts and chord names written above staves are kept.
+- `scorer.py` behaves as intended on injected mistakes.
+- `robustness.py` confirms headphone/backing isolation is still the reliable
+  mode; speaker mix remains weak.
+- `test_synthetic.py` currently reports **5/7**, not the old README's 7/7
+  claim. The misses are extended/ambiguous chords (`A7`, `Dmaj7`).
 
-It uses a local OpenAI-compatible LLM proxy at `http://localhost:4000` for the
-robust path, with a deterministic column-parser fallback for clean charts.
+## Important Files
 
-```python
-from importer import normalize, proxy_llm_caller
-from db import connect, add_song
+| Path | Role |
+|------|------|
+| `app/src/main.ts` | Main frontend state/UI: views, library, import, practice flow |
+| `app/src/song.ts` | TypeScript ChordPro/tab parser |
+| `app/src/midi.ts` | Dependency-free SMF parser + timed chord chart generation |
+| `app/src/library.ts` | Browser-local song library |
+| `app/src-tauri/src/audio.rs` | Mic capture, tuner, chroma chord detector |
+| `app/src-tauri/src/chords.rs` | Chord templates, pitch classes, missing/extra diff |
+| `app/src-tauri/src/backing.rs` | MIDI backing playback through `rustysynth` |
+| `app/src-tauri/src/enhance.rs` | Local OpenAI-compatible proxy calls for tab cleanup |
+| `chords.py` | Python detector reference |
+| `feedback.py` | Python missing/extra feedback reference |
+| `scorer.py` | Python play-along scoring loop |
+| `robustness.py` | Backing-track bleed characterization |
 
-chordpro = normalize(open("some_tab.txt").read(), llm_caller=proxy_llm_caller)
-conn = connect()
-add_song(conn, chordpro)
+## LLM Proxy
+
+Tab cleanup uses a local OpenAI-compatible endpoint:
+
+```text
+http://localhost:4000/v1/chat/completions
 ```
 
-## Design decisions
+The app calls it from Rust so browser CORS and frontend key exposure are
+avoided. If the proxy is down, the UI falls back to saving the raw chart.
 
-- **Instrument-agnostic songs.** A G is {G, B, D} on any instrument, so songs
-  store chord *names* + lyrics. The instrument only changes the fingering
-  diagram shown — one song works for uke or guitar.
-- **ChordPro is the canonical format.** Human-editable, re-parsable, and what
-  most chord sites export. The raw source is the source of truth in the DB.
-- **Headphone mode first.** With a backing track over speakers, the mic hears a
-  mix and raw detection degrades badly; naive spectral subtraction only partly
-  helps (great when uke and backing diverge, poor when they share notes). The
-  reliable default is to route backing audio to headphones so the mic hears
-  only the instrument. Speaker mode with echo cancellation is a later, advanced
-  mode.
+## Experiments
 
-## Known limitations
+`experiments/` is intentionally isolated from the app. It validates whether
+ukejam can eventually ingest arbitrary audio files instead of requiring a MIDI
+or tab.
 
-- **Tuned on synthetic audio.** Thresholds (`RMS_GATE`, `MIN_SCORE`, harmonic
-  range, scorer tolerance) still need tuning against a real ukulele and mic.
-- **Missing-root errors can be masked.** A string's harmonics can reconstruct a
-  muted root, so a missing root is harder to detect than a wrong color note.
-  Fix: per-string fundamental tracking (needs real audio to tune).
-- **Single sustained-chord analysis.** Fast strumming / arpeggios within one
-  chord window are averaged, not tracked note-by-note.
+Key findings so far:
 
-## Path to the Tauri app
+- Spotify basic-pitch's `nmp.onnx` runs in Burn and matches ONNX Runtime within
+  tolerance.
+- HTDemucs separates stems through a vendored, Burn 0.21-patched
+  `demucs-core`.
+- Combined Demucs + basic-pitch on one Burn backend works as an offline import
+  pipeline.
+- Realtime transcription is not the right goal for that stack: Demucs and
+  basic-pitch are non-causal. Keep the current chroma detector for live play
+  feedback; use Demucs/basic-pitch for offline song ingestion.
 
-The detection core (`chords.py`) is plain array math and ports directly to Rust:
+Useful checks:
 
-- **Audio capture:** [`cpal`](https://crates.io/crates/cpal) (replaces `sounddevice`)
-- **FFT:** [`rustfft`](https://crates.io/crates/rustfft) (replaces `numpy.fft`)
-- **Database:** `rusqlite` / `sqlx` — the schema in `db.py` carries over directly
-- **Tab import:** the Tauri frontend calls an LLM with the prompt in
-  `importer.LLM_SYSTEM`; storage stays ChordPro
-- **Frontend:** renders the current chord + fingering diagram, the lyric
-  timeline, and live HIT/WRONG feedback from the Rust backend
+```bash
+cd experiments/basic-pitch-test
+cargo run --release
 
-The Python prototype stays as the reference implementation and test oracle.
+cd ../demucs-test
+cargo run --release
+```
+
+Demucs weights are large and should stay out of git.
+
+## Known Gaps
+
+- The README and app state have moved faster than tests. The next hardening
+  step should be fixture tests for `song.ts`, `midi.ts`, `backing.rs` MIDI
+  filtering, and Rust/Python detector parity.
+- Live chord detection still needs more real-instrument tuning across mics,
+  strum strengths, muting, and room noise.
+- Speaker playback contaminates mic input. Headphones/backing isolation should
+  remain the default practice path.
+- The frontend library is currently `localStorage`; a native persisted store is
+  still a likely app milestone.
+- Extended chord naming and simplified playable chord naming can diverge,
+  especially from MIDI extraction.
+
+## Direction
+
+The practical target is:
+
+1. Make adding a playable song fast.
+2. Prefer timed MIDI/imported charts when available.
+3. Let the user choose backing instruments, usually bass + drums.
+4. Show current and upcoming chord shapes clearly enough to play without
+   reading the whole screen.
+5. Keep live feedback causal and low-latency.
+6. Add offline audio ingestion once the import flow is stable.

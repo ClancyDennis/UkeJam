@@ -21,6 +21,11 @@ export interface Song {
   // `|` bar marker in the source). Empty/false when the song has no bar info.
   barStart: boolean[];
   uniqueChords: string[];
+  // Timing (from {tempo:}/{time:} directives, e.g. a MIDI import). Present when
+  // the source carries real timing — this is what drives the timed highway.
+  // 0 / undefined for plain pasted tabs with no timing info.
+  tempo: number; // beats per minute (0 if unknown)
+  timeSig: [number, number]; // [numerator, denominator], default [4,4]
 }
 
 // A token that looks like a chord: root + optional accidental + quality.
@@ -103,6 +108,8 @@ function parseInline(line: string): SongLine {
 export function parseSong(text: string): Song {
   let title = "Untitled";
   let artist = "";
+  let tempo = 0;
+  let timeSig: [number, number] = [4, 4];
   const lines: SongLine[] = [];
   const rawLines = text.split(/\r?\n/);
 
@@ -117,7 +124,11 @@ export function parseSong(text: string): Song {
       const val = dir[2].trim();
       if (key === "title" || key === "t") title = val;
       else if (key === "artist" || key === "subtitle" || key === "st") artist = val;
-      else if (key === "comment" || key === "c") lines.push({ section: val, chords: [], barStart: [], chordPos: [], lyric: "" });
+      else if (key === "tempo" || key === "bpm") tempo = parseFloat(val) || 0;
+      else if (key === "time") {
+        const m = val.match(/(\d+)\s*\/\s*(\d+)/);
+        if (m) timeSig = [parseInt(m[1], 10), parseInt(m[2], 10)];
+      } else if (key === "comment" || key === "c") lines.push({ section: val, chords: [], barStart: [], chordPos: [], lyric: "" });
       continue;
     }
 
@@ -136,10 +147,22 @@ export function parseSong(text: string): Song {
       continue;
     }
 
-    // chords-above-lyrics: a chord-only line followed by a lyric line
+    // chords-above-lyrics: a chord-only line followed by a plain lyric line.
+    // Guard against consuming the NEXT line when it is itself structural — a
+    // bar/measure line (starts with `|`) or an inline-ChordPro line (has
+    // [chords]) is its own line, not this line's lyric. This keeps
+    // one-bar-per-line timed charts (e.g. from MIDI lyric fusion) intact.
     if (isChordOnlyLine(line)) {
       const next = rawLines[i + 1];
-      if (next !== undefined && next.trim() && !isChordOnlyLine(next) && !isTabStaffLine(next) && !sectionHeader(next)) {
+      const nextIsLyric =
+        next !== undefined &&
+        next.trim() !== "" &&
+        !isChordOnlyLine(next) &&
+        !isTabStaffLine(next) &&
+        !sectionHeader(next) &&
+        !next.trim().startsWith("|") &&
+        !/\[[^\]]+\]/.test(next);
+      if (nextIsLyric) {
         lines.push(mergeChordsAbove(line, next));
         i++; // consume the lyric line
       } else {
@@ -162,5 +185,5 @@ export function parseSong(text: string): Song {
   }
   const uniqueChords = [...new Set(chordSequence)];
 
-  return { title, artist, lines, chordSequence, barStart, uniqueChords };
+  return { title, artist, lines, chordSequence, barStart, uniqueChords, tempo, timeSig };
 }

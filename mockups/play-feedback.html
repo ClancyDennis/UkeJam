@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ukejam · play feedback mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#060a0c; --bg-1:#0a0f12; --bg-panel-2:#0c1316;
+    --line:#16242a; --line-teal:rgba(25,227,196,.3);
+    --teal:#19e3c4; --teal-2:#2fd6c4; --teal-dim:#0f8a78;
+    --gold:#f5c451; --gold-2:#ffcf6b; --gold-dim:#8a6f2a;
+    --amber:#ff9d4d; --text:#cfe8e6; --text-dim:#5d7b78;
+    --text-faint:rgba(207,232,230,.34); --red:#ff5d6c;
+    --green:#48e08b;
+    --panel-bg:linear-gradient(180deg,rgba(12,20,23,.82),rgba(8,13,15,.82));
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--text);overflow-x:hidden;
+    font-family:"Space Grotesk",system-ui,sans-serif}
+  body{
+    background:
+      radial-gradient(120% 80% at 18% 6%, rgba(25,227,196,.06), transparent 52%),
+      radial-gradient(120% 90% at 88% 98%, rgba(245,196,81,.035), transparent 55%),
+      linear-gradient(180deg,var(--bg) 0%,var(--bg-1) 55%,var(--bg) 100%);
+    min-height:100vh;
+  }
+  .labgrid{pointer-events:none;position:fixed;inset:0;z-index:0;opacity:.5;
+    background-image:linear-gradient(rgba(25,227,196,.025) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(25,227,196,.025) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(120% 100% at 50% 30%,#000 30%,transparent 85%);
+    mask-image:radial-gradient(120% 100% at 50% 30%,#000 30%,transparent 85%)}
+  .vignette{pointer-events:none;position:fixed;inset:0;z-index:49;
+    box-shadow:inset 0 0 240px 64px rgba(0,0,0,.72)}
+
+  .app{position:relative;z-index:10;max-width:1080px;margin:0 auto;
+    padding:22px 26px 60px;display:flex;flex-direction:column;gap:18px}
+
+  /* ---------- topbar ---------- */
+  .topbar{display:flex;align-items:center;gap:16px;padding-bottom:4px}
+  .brand{font-family:"Chakra Petch",sans-serif;font-weight:700;letter-spacing:.18em;
+    font-size:15px;color:var(--gold)}
+  .brand b{color:var(--teal)}
+  .crumb{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-dim);
+    letter-spacing:.12em;text-transform:uppercase}
+  .topbar .spacer{flex:1}
+  .pill{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.1em;
+    color:var(--text-dim);border:1px solid var(--line);border-radius:999px;
+    padding:5px 11px;display:flex;align-items:center;gap:7px;background:rgba(10,15,18,.5)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);
+    box-shadow:0 0 8px var(--teal);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .panel{background:var(--panel-bg);border:1px solid var(--line);border-radius:14px;
+    position:relative;overflow:hidden}
+  .panel::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(25,227,196,.28),transparent)}
+  .panel-h{display:flex;align-items:center;gap:10px;padding:13px 18px 0}
+  .panel-h .t{font-family:"Chakra Petch",sans-serif;font-weight:600;font-size:12px;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--text)}
+  .panel-h .sub{font-family:"JetBrains Mono",monospace;font-size:10.5px;
+    color:var(--text-dim);letter-spacing:.08em}
+
+  /* ---------- NOW card ---------- */
+  .now{padding:18px;display:grid;grid-template-columns:230px 1fr;gap:22px;align-items:stretch}
+  .nowchord{position:relative;border-radius:12px;border:1px solid var(--line-teal);
+    background:radial-gradient(120% 120% at 50% 0%,rgba(72,224,139,.10),transparent 70%),
+      rgba(8,13,15,.6);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:14px 10px;gap:6px}
+  .nowchord .lbl{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.22em;
+    color:var(--text-dim);text-transform:uppercase}
+  .nowchord .name{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:74px;
+    line-height:.92;color:var(--green);text-shadow:0 0 26px rgba(72,224,139,.45)}
+  .nowchord .qual{font-family:"Space Grotesk";font-size:13px;color:var(--text-dim);
+    letter-spacing:.05em}
+  .verdict{margin-top:4px;font-family:"JetBrains Mono",monospace;font-size:11px;
+    letter-spacing:.1em;padding:3px 10px;border-radius:999px;
+    color:var(--green);border:1px solid rgba(72,224,139,.4);background:rgba(72,224,139,.08)}
+
+  .nowmeta{display:flex;flex-direction:column;gap:14px;justify-content:center}
+  .cleanrow{display:flex;align-items:center;gap:14px}
+  .cleanrow .k{font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--text-dim);width:84px}
+  .meter{flex:1;height:9px;border-radius:6px;background:rgba(10,15,18,.7);
+    border:1px solid var(--line);overflow:hidden;position:relative}
+  .meter>span{position:absolute;inset:0;width:91%;border-radius:6px;
+    background:linear-gradient(90deg,var(--teal-dim),var(--green));
+    box-shadow:0 0 12px rgba(72,224,139,.4)}
+  .cleanrow .v{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--green);width:42px;text-align:right}
+
+  .notes{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-family:"JetBrains Mono",monospace;font-size:12px;padding:5px 10px;border-radius:8px;
+    border:1px solid var(--line);color:var(--text-dim);background:rgba(10,15,18,.5)}
+  .chip.have{color:var(--teal);border-color:var(--line-teal);background:rgba(25,227,196,.07)}
+  .chip.miss{color:var(--red);border-color:rgba(255,93,108,.4);background:rgba(255,93,108,.07)}
+  .chip .h{opacity:.55;margin-right:4px}
+
+  /* ---------- strum strip ---------- */
+  .strum{padding:14px 18px 20px}
+  .grid{position:relative;height:104px;border-radius:10px;border:1px solid var(--line);
+    background:rgba(8,13,15,.55);overflow:hidden}
+  .beat{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
+  .beat.strong{background:rgba(245,196,81,.32)}
+  .beatlbl{position:absolute;top:7px;font-family:"JetBrains Mono",monospace;font-size:10px;
+    color:var(--text-dim);transform:translateX(6px)}
+  .beatlbl.strong{color:var(--gold)}
+  /* baseline where strums sit */
+  .axis{position:absolute;left:0;right:0;top:58%;height:1px;background:var(--line-teal);opacity:.5}
+  .strumhit{position:absolute;top:calc(58% - 22px);display:flex;flex-direction:column;
+    align-items:center;gap:3px;transform:translateX(-50%)}
+  .strumhit .arrow{font-size:26px;line-height:1;font-weight:700}
+  .strumhit.down .arrow{color:var(--teal)}
+  .strumhit.up .arrow{color:var(--gold)}
+  .strumhit .tick{width:2px;height:20px;border-radius:2px;background:currentColor;opacity:.55}
+  .strumhit.down{color:var(--teal)}
+  .strumhit.up{color:var(--gold)}
+  .strumhit .lab{font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.05em}
+  /* playhead */
+  .playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--gold);
+    box-shadow:0 0 12px var(--gold);left:64%}
+  .playhead::after{content:"";position:absolute;top:-1px;left:-4px;width:10px;height:10px;
+    border-radius:50%;background:var(--gold);box-shadow:0 0 10px var(--gold)}
+
+  .legendrow{display:flex;gap:18px;margin-top:12px;flex-wrap:wrap}
+  .lg{display:flex;align-items:center;gap:7px;font-family:"JetBrains Mono",monospace;
+    font-size:10.5px;color:var(--text-dim);letter-spacing:.06em}
+  .sw{width:13px;height:13px;border-radius:4px}
+  .pattern{font-family:"JetBrains Mono",monospace;font-size:15px;letter-spacing:.32em;
+    color:var(--text);margin-left:auto;display:flex;align-items:center;gap:10px}
+  .pattern .dn{color:var(--teal)} .pattern .upx{color:var(--gold)} .pattern .rest{color:var(--text-faint)}
+
+  /* ---------- history row ---------- */
+  .takebar{display:flex;align-items:center;gap:12px;padding:0 2px}
+  .takebar .t{font-family:"Chakra Petch",sans-serif;font-weight:600;font-size:12px;
+    letter-spacing:.16em;text-transform:uppercase}
+  .takebar .sub{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--text-dim)}
+  .hist{display:grid;grid-template-columns:repeat(8,1fr);gap:10px}
+  .bar{border:1px solid var(--line);border-radius:11px;background:rgba(8,13,15,.5);
+    padding:11px 8px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;position:relative}
+  .bar .num{position:absolute;top:6px;left:8px;font-family:"JetBrains Mono",monospace;
+    font-size:9.5px;color:var(--text-faint)}
+  .bar .c{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:30px;line-height:1;margin-top:6px}
+  .bar .pat{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.18em;color:var(--text-dim)}
+  .bar.ok{border-color:rgba(72,224,139,.38);background:rgba(72,224,139,.06)}
+  .bar.ok .c{color:var(--green)}
+  .bar.dirty{border-color:rgba(255,157,77,.42);background:rgba(255,157,77,.06)}
+  .bar.dirty .c{color:var(--amber)}
+  .bar.wrong{border-color:rgba(255,93,108,.42);background:rgba(255,93,108,.06)}
+  .bar.wrong .c{color:var(--red)}
+  .bar.now{box-shadow:0 0 0 1px var(--gold),0 0 18px rgba(245,196,81,.25)}
+  .bar.now .num{color:var(--gold)}
+  .bar .badge{font-family:"JetBrains Mono",monospace;font-size:9px;padding:1px 6px;border-radius:6px;
+    color:var(--text-dim);border:1px solid var(--line)}
+
+  .foot{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--text-faint);
+    letter-spacing:.06em;text-align:center;line-height:1.7;padding-top:4px}
+  .foot b{color:var(--gold)} .foot i{color:var(--amber);font-style:normal}
+</style>
+</head>
+<body>
+<div class="labgrid"></div>
+<div class="vignette"></div>
+
+<div class="app">
+  <!-- topbar -->
+  <div class="topbar">
+    <div class="brand"><b>UKE</b>JAM</div>
+    <div class="crumb">/ play feedback</div>
+    <div class="spacer"></div>
+    <div class="pill"><span class="dot"></span>LISTENING · mic</div>
+    <div class="pill">♩ = 96 · 4/4</div>
+    <div class="pill">BAR 6 · BEAT 3</div>
+  </div>
+
+  <!-- NOW card -->
+  <div class="panel">
+    <div class="panel-h"><span class="t">Now playing</span>
+      <span class="sub">— what we hear right now vs. the chart</span></div>
+    <div class="now">
+      <div class="nowchord">
+        <div class="lbl">detected</div>
+        <div class="name">Am</div>
+        <div class="qual">A minor · target: Am</div>
+        <div class="verdict">✓ MATCH</div>
+      </div>
+      <div class="nowmeta">
+        <div class="cleanrow">
+          <div class="k">cleanliness</div>
+          <div class="meter"><span></span></div>
+          <div class="v">0.91</div>
+        </div>
+        <div>
+          <div class="cleanrow" style="margin-bottom:9px">
+            <div class="k">voicing</div>
+            <div class="notes">
+              <span class="chip have"><span class="h">●</span>A</span>
+              <span class="chip have"><span class="h">●</span>C</span>
+              <span class="chip have"><span class="h">●</span>E</span>
+              <span class="chip miss"><span class="h">○</span>+B♭ extra</span>
+            </div>
+          </div>
+          <div class="cleanrow">
+            <div class="k">verdict</div>
+            <div class="sub" style="font-family:'Space Grotesk';color:var(--text-dim);font-size:13px">
+              Right chord, slightly muddy — one extra string ringing (B♭). Mute the C-string side.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- strum strip -->
+  <div class="panel">
+    <div class="panel-h"><span class="t">Strum rhythm · this bar</span>
+      <span class="sub">— onset timing detected live (spectral flux). Direction is best-effort.</span></div>
+    <div class="strum">
+      <div class="grid" id="grid">
+        <div class="axis"></div>
+        <!-- beat gridlines: 4 beats + & subdivisions -->
+        <!-- beats at 6% , 29% , 52% , 75% ; subdivisions midway -->
+        <div class="beat strong" style="left:6%"></div>
+        <div class="beatlbl strong" style="left:6%">1</div>
+        <div class="beat" style="left:17.5%"></div><div class="beatlbl" style="left:17.5%">&amp;</div>
+        <div class="beat strong" style="left:29%"></div>
+        <div class="beatlbl strong" style="left:29%">2</div>
+        <div class="beat" style="left:40.5%"></div><div class="beatlbl" style="left:40.5%">&amp;</div>
+        <div class="beat strong" style="left:52%"></div>
+        <div class="beatlbl strong" style="left:52%">3</div>
+        <div class="beat" style="left:63.5%"></div><div class="beatlbl" style="left:63.5%">&amp;</div>
+        <div class="beat strong" style="left:75%"></div>
+        <div class="beatlbl strong" style="left:75%">4</div>
+        <div class="beat" style="left:86.5%"></div><div class="beatlbl" style="left:86.5%">&amp;</div>
+
+        <!-- detected strums:  D  D  U  U  D  U  D  -> island strum -->
+        <div class="strumhit down" style="left:6%"><div class="arrow">↓</div><div class="tick"></div><div class="lab">D</div></div>
+        <div class="strumhit down" style="left:29%"><div class="arrow">↓</div><div class="tick"></div><div class="lab">D</div></div>
+        <div class="strumhit up"   style="left:40.5%"><div class="arrow">↑</div><div class="tick"></div><div class="lab">U</div></div>
+        <div class="strumhit up"   style="left:63.5%"><div class="arrow">↑</div><div class="tick"></div><div class="lab">U</div></div>
+        <div class="strumhit down" style="left:75%"><div class="arrow">↓</div><div class="tick"></div><div class="lab">D</div></div>
+
+        <div class="playhead"></div>
+      </div>
+
+      <div class="legendrow">
+        <span class="lg"><span class="sw" style="background:var(--teal)"></span>down-strum</span>
+        <span class="lg"><span class="sw" style="background:var(--gold)"></span>up-strum</span>
+        <span class="lg"><span class="sw" style="background:var(--gold);opacity:.5"></span>playhead</span>
+        <span class="pattern">
+          <span style="color:var(--text-dim);font-size:10px;letter-spacing:.14em">PATTERN&nbsp;</span>
+          <span class="dn">D</span><span class="rest">·</span><span class="dn">D</span><span class="upx">U</span><span class="rest">·</span><span class="upx">U</span><span class="dn">D</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- take history -->
+  <div class="takebar">
+    <span class="t">This take</span>
+    <span class="sub">— bars 1–8 · what you actually played</span>
+  </div>
+  <div class="hist">
+    <div class="bar ok"><span class="num">1</span><div class="c">C</div><div class="pat">D·DU·UD</div><span class="badge" style="color:var(--green);border-color:rgba(72,224,139,.3)">clean</span></div>
+    <div class="bar ok"><span class="num">2</span><div class="c">C</div><div class="pat">D·DU·UD</div><span class="badge" style="color:var(--green);border-color:rgba(72,224,139,.3)">clean</span></div>
+    <div class="bar dirty"><span class="num">3</span><div class="c">G</div><div class="pat">D·D·—UD</div><span class="badge" style="color:var(--amber);border-color:rgba(255,157,77,.35)">muddy</span></div>
+    <div class="bar ok"><span class="num">4</span><div class="c">G</div><div class="pat">D·DU·UD</div><span class="badge" style="color:var(--green);border-color:rgba(72,224,139,.3)">clean</span></div>
+    <div class="bar wrong"><span class="num">5</span><div class="c">Em</div><div class="pat">D·DU·U·</div><span class="badge" style="color:var(--red);border-color:rgba(255,93,108,.35)">≠ G</span></div>
+    <div class="bar now"><span class="num">6</span><div class="c" style="color:var(--green)">Am</div><div class="pat">D·DU·UD</div><span class="badge" style="color:var(--gold);border-color:var(--gold-dim)">now</span></div>
+    <div class="bar" style="opacity:.4"><span class="num">7</span><div class="c" style="color:var(--text-dim)">F</div><div class="pat" style="color:var(--text-faint)">— — —</div></div>
+    <div class="bar" style="opacity:.4"><span class="num">8</span><div class="c" style="color:var(--text-dim)">C</div><div class="pat" style="color:var(--text-faint)">— — —</div></div>
+  </div>
+
+  <div class="foot">
+    <b>Green</b> = right chord, clean voicing · <i>Amber</i> = right chord but muddy/missing strings · <span style="color:var(--red)">Red</span> = wrong chord<br/>
+    Chord name, cleanliness &amp; voicing chips come from the existing live FFT→chroma detector · strum onsets from a spectral-flux onset detector ·
+    <span style="color:var(--text-dim)">↓/↑ direction shown best-effort — heuristic, not guaranteed</span>
+  </div>
+</div>
+</body>
+</html>
