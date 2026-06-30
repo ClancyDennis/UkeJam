@@ -161,8 +161,17 @@ body {
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(25, 227, 196, 0.28);
+  box-shadow: 0 0 14px rgba(25, 227, 196, 0.24);
 }
 
 .logo {

@@ -32,3 +32,9 @@ experiments/
 
 # Loose dev screenshots in repo root
 /*.png
+
+# Generated docs/decks (kept local)
+outputs/
+
+# Large icon design master (generated icons are committed; master is not)
+app/src/assets/ukejam-app-icon-master.png
