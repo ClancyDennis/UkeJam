@@ -98,9 +98,37 @@ pub enum Mode {
     Fuse,
 }
 
+/// Resolve the proxy endpoint: env var > saved setting (Setup screen) >
+/// compiled-in localhost default. Saved settings matter most on iOS, where a
+/// localhost proxy can't exist and env vars can't be set.
+pub fn resolve_proxy(saved: &crate::settings::Settings) -> (String, String) {
+    let pick = |env: &str, saved: &str, default: &str| {
+        std::env::var(env)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                if saved.trim().is_empty() {
+                    default.to_string()
+                } else {
+                    saved.trim().to_string()
+                }
+            })
+    };
+    (
+        pick("UKEJAM_PROXY_URL", &saved.proxy_url, DEFAULT_PROXY_URL),
+        pick("UKEJAM_PROXY_KEY", &saved.proxy_key, DEFAULT_PROXY_KEY),
+    )
+}
+
 /// Send tab text to the proxy; return cleaned ChordPro (or an error string).
 /// `mode` selects the system prompt; `lyrics` is the second payload for Fuse.
-pub fn enhance_tab(raw: &str, mode: Mode, lyrics: Option<&str>) -> Result<String, String> {
+pub fn enhance_tab(
+    raw: &str,
+    mode: Mode,
+    lyrics: Option<&str>,
+    proxy_url: &str,
+    proxy_key: &str,
+) -> Result<String, String> {
     let (system, user) = match mode {
         Mode::Midi => (
             SYSTEM_MIDI,
@@ -124,11 +152,6 @@ pub fn enhance_tab(raw: &str, mode: Mode, lyrics: Option<&str>) -> Result<String
         ]
     });
 
-    let proxy_url =
-        std::env::var("UKEJAM_PROXY_URL").unwrap_or_else(|_| DEFAULT_PROXY_URL.to_string());
-    let proxy_key =
-        std::env::var("UKEJAM_PROXY_KEY").unwrap_or_else(|_| DEFAULT_PROXY_KEY.to_string());
-
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -139,7 +162,7 @@ pub fn enhance_tab(raw: &str, mode: Mode, lyrics: Option<&str>) -> Result<String
         .header("Authorization", format!("Bearer {proxy_key}"))
         .json(&body)
         .send()
-        .map_err(|e| format!("request failed (is the proxy at localhost:4000 running?): {e}"))?;
+        .map_err(|e| format!("request to {proxy_url} failed (endpoint reachable? configurable in Setup): {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("proxy returned {}", resp.status()));

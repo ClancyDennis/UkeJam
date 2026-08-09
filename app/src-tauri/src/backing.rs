@@ -511,6 +511,9 @@ fn push_vlq(out: &mut Vec<u8>, mut v: u64) -> Result<(), String> {
 
 /// Build the cpal output stream; runs on the dedicated playback thread.
 fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cpal::Stream, String> {
+    // iOS: route playback to the speaker (not the earpiece) and keep the
+    // session valid alongside mic capture; no-op on desktop.
+    crate::ios_audio::configure_session()?;
     let host = cpal::default_host();
     let device = host
         .default_output_device()
