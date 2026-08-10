@@ -38,7 +38,8 @@
       "minimumSystemVersion": "10.15"
     },
     "iOS": {
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "frameworks": ["CoreAudio", "AudioToolbox", "AVFoundation"]
     }
   }
 }

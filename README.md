@@ -119,6 +119,14 @@ pnpm tauri ios dev    # run on simulator or a plugged-in device
 pnpm tauri ios build  # archive/IPA
 ```
 
+Xcode does the final link against the Rust static lib, so the audio system
+frameworks cpal needs (CoreAudio, AudioToolbox, plus AVFoundation for the
+session glue) are declared in `tauri.conf.json > bundle > iOS > frameworks` —
+cargo-side link flags don't survive into a `.a`. If that list changes after
+the project was generated, delete `src-tauri/gen/apple` and re-run
+`pnpm tauri ios init` (undefined `_AudioComponent*` / `_AudioUnit*` symbols at
+link time mean the generated project predates the list).
+
 Note the simulator has no useful mic input — test the tuner/detector on a real
 device. Known follow-up: AVAudioSession interruption events (phone calls,
 Siri) currently rely on the user restarting listening/playback, which
