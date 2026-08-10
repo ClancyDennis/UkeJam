@@ -29,6 +29,19 @@ const CHROMA_FMIN: f32 = 65.0;
 const CHROMA_FMAX: f32 = 1050.0; // cut high harmonic bleed (see detection tuning)
 const PRESENCE: f32 = 0.18; // chroma bin above this counts as "sounding"
 
+// --- onset (attack) detection ---
+// A strum is a sudden rise in energy across the whole chord band, so we track
+// spectral flux (summed positive frame-to-frame magnitude change) rather than
+// RMS: RMS also rises when a held chord swells, and barely moves when a new
+// chord is strummed at the same volume as the one decaying under it.
+//
+// Flux is normalized against its own slow mean so the threshold is a *ratio*,
+// not an absolute level — the same setting works for a quiet fingerpick and a
+// loud strum without recalibrating.
+const FLUX_SMOOTH: f32 = 0.05; // EMA weight for the slow flux baseline
+const ONSET_RATIO: f32 = 2.2; // flux must exceed this multiple of the baseline
+const ONSET_REFRACTORY: Duration = Duration::from_millis(60); // one strum = one onset
+
 /// What the capture thread analyzes each window into.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -36,13 +49,40 @@ pub enum Mode {
     Chord,
 }
 
-/// Baritone ukulele open strings (low -> high): D3 G3 B3 E4.
-const STRINGS: [(&str, f32); 4] = [
-    ("D3", 146.83),
-    ("G3", 196.00),
-    ("B3", 246.94),
-    ("E4", 329.63),
-];
+/// Which ukulele the tuner is listening for.
+///
+/// Only the tuner cares: chord detection works off a 12-bin chroma, which is
+/// octave- and tuning-agnostic, so the detector needs no change to follow a
+/// re-tuned instrument.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum Tuning {
+    /// Standard soprano/concert/tenor re-entrant tuning: G4 C4 E4 A4.
+    #[default]
+    Standard,
+    /// Baritone: D3 G3 B3 E4.
+    Baritone,
+}
+
+impl Tuning {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "baritone" => Tuning::Baritone,
+            _ => Tuning::Standard,
+        }
+    }
+
+    /// Open strings in playing order (string 1 last), with their frequencies.
+    ///
+    /// Standard tuning is re-entrant — the 4th string G4 sounds *above* C4 —
+    /// so this is deliberately not sorted by pitch; the frontend draws the
+    /// strings in this order.
+    fn strings(self) -> &'static [(&'static str, f32)] {
+        match self {
+            Tuning::Standard => &[("G4", 392.00), ("C4", 261.63), ("E4", 329.63), ("A4", 440.00)],
+            Tuning::Baritone => &[("D3", 146.83), ("G3", 196.00), ("B3", 246.94), ("E4", 329.63)],
+        }
+    }
+}
 
 #[derive(Serialize, Clone)]
 pub struct TunerReading {
@@ -75,6 +115,15 @@ pub struct ChordReading {
     /// Notes heard but not in the target chord.
     pub extra: Vec<String>,
     pub rms: f32,
+    /// True when an attack (strum/pluck) began since the last emitted reading.
+    /// Latched, not instantaneous: emits are coalesced (see MIN_EMIT_INTERVAL)
+    /// but analysis runs every window, so an onset detected in a window that
+    /// wasn't emitted would otherwise be lost — which is exactly the window a
+    /// strum lands in.
+    pub onset: bool,
+    /// Spectral flux as a multiple of its slow baseline (1.0 = steady state).
+    /// Exposed for tuning the onset threshold from the diagnostics drawer.
+    pub flux: f32,
 }
 
 /// Runtime-adjustable analysis settings, shared with the capture thread.
@@ -82,6 +131,7 @@ struct Shared {
     mode: Mode,
     target: Option<Vec<usize>>, // target chord's pitch classes, for the diff
     gate: f32,                  // RMS silence gate (set by mic calibration)
+    tuning: Tuning,             // which open strings the tuner snaps to
 }
 
 struct CaptureRuntime {
@@ -116,6 +166,7 @@ impl Default for AudioState {
                 mode: Mode::Tuner,
                 target: None,
                 gate: RMS_GATE,
+                tuning: Tuning::default(),
             })),
             thread: Mutex::new(None),
         }
@@ -185,6 +236,12 @@ impl AudioState {
     /// Set the RMS silence gate (from mic calibration).
     pub fn set_gate(&self, gate: f32) {
         self.shared.lock().unwrap().gate = gate.max(0.0);
+    }
+
+    /// Set the instrument tuning the tuner snaps to. Takes effect on the next
+    /// analyzed window, so it can be changed while listening.
+    pub fn set_tuning(&self, tuning: Tuning) {
+        self.shared.lock().unwrap().tuning = tuning;
     }
 
     pub fn stop(&self) {
@@ -348,14 +405,14 @@ fn drain_and_emit(
         return;
     }
     let window = &buf[buf.len() - FFT_SIZE..];
-    let (mode, target, gate) = {
+    let (mode, target, gate, tuning) = {
         let s = shared.lock().unwrap();
-        (s.mode, s.target.clone(), s.gate)
+        (s.mode, s.target.clone(), s.gate, s.tuning)
     };
     let due = last_emit.elapsed() >= MIN_EMIT_INTERVAL;
     match mode {
         Mode::Tuner => {
-            let reading = analyzer.analyze_tuner(window, gate);
+            let reading = analyzer.analyze_tuner(window, gate, tuning);
             if due {
                 *last_emit = Instant::now();
                 let _ = app.emit("tuner", reading);
@@ -365,6 +422,10 @@ fn drain_and_emit(
             let reading = analyzer.analyze_chord(window, target.as_deref(), gate);
             if due {
                 *last_emit = Instant::now();
+                // The onset latch is released only once a reading carrying it has
+                // been handed to the frontend; dropping this reading would
+                // otherwise swallow the strum it was set for.
+                analyzer.clear_onset();
                 let _ = app.emit("chord", reading);
             }
         }
@@ -383,6 +444,21 @@ struct Analyzer {
     /// Reusable FFT scratch (length FFT_SIZE), so each window doesn't allocate a
     /// fresh complex buffer. Single capture thread, so contention is nil.
     scratch: Mutex<Vec<Complex<f32>>>,
+    /// Onset detector state: previous window's magnitudes, the slow flux
+    /// baseline, when the last onset fired (refractory gate), and the latch that
+    /// carries an onset across coalesced emits.
+    onset: Mutex<OnsetState>,
+}
+
+struct OnsetState {
+    prev_mag: Vec<f32>,
+    baseline: f32,
+    last_onset: Option<Instant>,
+    /// Set when an attack is detected, cleared when a reading carrying it is
+    /// actually emitted (see `Analyzer::clear_onset`).
+    latched: bool,
+    /// Last computed flux ratio, reported for diagnostics.
+    ratio: f32,
 }
 
 const CHROMA_SMOOTH: f32 = 0.4; // EMA weight for the newest frame
@@ -404,7 +480,76 @@ impl Analyzer {
             book: ChordBook::build(),
             smooth: Mutex::new([0.0; 12]),
             scratch: Mutex::new(vec![Complex::new(0.0, 0.0); FFT_SIZE]),
+            onset: Mutex::new(OnsetState {
+                prev_mag: vec![0.0; FFT_SIZE / 2],
+                baseline: 0.0,
+                last_onset: None,
+                latched: false,
+                ratio: 0.0,
+            }),
         }
+    }
+
+    /// Bin range of the chord band, shared by `chroma` and the onset detector so
+    /// both judge the same frequencies.
+    fn chroma_bins(&self, len: usize) -> (usize, usize) {
+        let bin_hz = self.sample_rate / FFT_SIZE as f32;
+        let lo = (CHROMA_FMIN / bin_hz).floor().max(1.0) as usize;
+        let hi = ((CHROMA_FMAX / bin_hz).ceil() as usize).min(len);
+        (lo, hi)
+    }
+
+    /// Update the onset detector from this window's magnitudes. Returns
+    /// (latched_onset, flux_ratio).
+    ///
+    /// `now` is passed in rather than read here so the tests can drive the
+    /// refractory gate deterministically.
+    fn track_onset(&self, mag: &[f32], now: Instant) -> (bool, f32) {
+        let (lo, hi) = self.chroma_bins(mag.len());
+        let mut st = self.onset.lock().unwrap();
+        let flux: f32 = (lo..hi)
+            .map(|i| (mag[i] - st.prev_mag[i]).max(0.0))
+            .sum::<f32>();
+        st.prev_mag[..mag.len()].copy_from_slice(mag);
+
+        // Ratio against the slow baseline. Until the baseline has any energy at
+        // all (first windows, or after silence) there is nothing to compare
+        // against, so report a steady state rather than firing on the ramp-up.
+        let ratio = if st.baseline > 1e-6 {
+            flux / st.baseline
+        } else {
+            0.0
+        };
+        st.ratio = ratio;
+
+        let clear_of_refractory = st
+            .last_onset
+            .is_none_or(|t| now.duration_since(t) >= ONSET_REFRACTORY);
+        if ratio >= ONSET_RATIO && clear_of_refractory {
+            st.last_onset = Some(now);
+            st.latched = true;
+        }
+
+        // Baseline tracks flux *after* the decision, so a strum doesn't raise the
+        // bar it was just measured against.
+        st.baseline = FLUX_SMOOTH * flux + (1.0 - FLUX_SMOOTH) * st.baseline;
+        (st.latched, ratio)
+    }
+
+    /// Clear the onset latch — called once a reading carrying it has been emitted.
+    fn clear_onset(&self) {
+        self.onset.lock().unwrap().latched = false;
+    }
+
+    /// Forget onset history (on silence): the next note is a fresh attack, and a
+    /// stale baseline from before the gap would mis-scale it.
+    fn reset_onset(&self) {
+        let mut st = self.onset.lock().unwrap();
+        st.prev_mag.iter_mut().for_each(|m| *m = 0.0);
+        st.baseline = 0.0;
+        st.last_onset = None;
+        st.latched = false;
+        st.ratio = 0.0;
     }
 
     /// Windowed FFT magnitudes + mean-removed RMS.
@@ -425,8 +570,7 @@ impl Analyzer {
     fn chroma(&self, mag: &[f32]) -> [f32; 12] {
         let bin_hz = self.sample_rate / FFT_SIZE as f32;
         let mut chroma = [0.0f32; 12];
-        let lo = (CHROMA_FMIN / bin_hz).floor().max(1.0) as usize;
-        let hi = ((CHROMA_FMAX / bin_hz).ceil() as usize).min(mag.len());
+        let (lo, hi) = self.chroma_bins(mag.len());
         for (i, &magnitude) in mag.iter().enumerate().take(hi).skip(lo) {
             let f = i as f32 * bin_hz;
             let midi = 69.0 + 12.0 * (f / 440.0).log2();
@@ -479,6 +623,7 @@ impl Analyzer {
         let (mag, rms) = self.spectrum(samples);
         if rms < gate {
             *self.smooth.lock().unwrap() = [0.0; 12]; // reset on silence
+            self.reset_onset();
             return ChordReading {
                 active: false,
                 detected: String::new(),
@@ -488,8 +633,11 @@ impl Analyzer {
                 missing: vec![],
                 extra: vec![],
                 rms,
+                onset: false,
+                flux: 0.0,
             };
         }
+        let (onset, flux) = self.track_onset(&mag, Instant::now());
         let raw = self.chroma(&mag);
 
         // Exponential moving average so a quiet third (e.g. Am's C) builds up
@@ -523,10 +671,12 @@ impl Analyzer {
             missing,
             extra,
             rms,
+            onset,
+            flux,
         }
     }
 
-    fn analyze_tuner(&self, samples: &[f32], gate: f32) -> TunerReading {
+    fn analyze_tuner(&self, samples: &[f32], gate: f32, tuning: Tuning) -> TunerReading {
         // RMS for the silence gate / level meter.
         let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
         let rms =
@@ -580,7 +730,7 @@ impl Analyzer {
             peak_i as f32 * bin_hz
         };
 
-        let (nearest, cents) = nearest_string(freq);
+        let (nearest, cents) = nearest_string(freq, tuning);
         TunerReading {
             active: true,
             freq,
@@ -591,11 +741,12 @@ impl Analyzer {
     }
 }
 
-/// Snap a frequency to the nearest baritone open string; return (name, cents).
-fn nearest_string(freq: f32) -> (&'static str, f32) {
-    let mut best = STRINGS[0];
+/// Snap a frequency to the nearest open string of `tuning`; return (name, cents).
+fn nearest_string(freq: f32, tuning: Tuning) -> (&'static str, f32) {
+    let strings = tuning.strings();
+    let mut best = strings[0];
     let mut best_cents = f32::MAX;
-    for &(name, f0) in &STRINGS {
+    for &(name, f0) in strings {
         let cents = 1200.0 * (freq / f0).log2();
         if cents.abs() < best_cents.abs() {
             best_cents = cents;
@@ -609,26 +760,157 @@ fn nearest_string(freq: f32) -> (&'static str, f32) {
 mod tests {
     use super::*;
 
+    /// A pure sine at `hz`, one FFT window long.
+    fn sine(hz: f32) -> Vec<f32> {
+        sine_amp(hz, 0.25)
+    }
+
+    /// A pure sine at `hz` and the given amplitude, one FFT window long.
+    fn sine_amp(hz: f32, amp: f32) -> Vec<f32> {
+        (0..FFT_SIZE)
+            .map(|n| {
+                let t = n as f32 / 44_100.0;
+                (2.0 * std::f32::consts::PI * hz * t).sin() * amp
+            })
+            .collect()
+    }
+
+    /// Feed a window through the onset detector at a given virtual time.
+    fn onset_at(analyzer: &Analyzer, samples: &[f32], at: Instant) -> bool {
+        let (mag, _) = analyzer.spectrum(samples);
+        let (latched, _) = analyzer.track_onset(&mag, at);
+        analyzer.clear_onset(); // one "emit" per window in these tests
+        latched
+    }
+
     #[test]
     fn nearest_string_reports_zero_cents_on_open_strings() {
-        let (name, cents) = nearest_string(196.0);
+        let (name, cents) = nearest_string(196.0, Tuning::Baritone);
         assert_eq!(name, "G3");
         assert!(cents.abs() < 0.01);
+
+        let (name, cents) = nearest_string(261.63, Tuning::Standard);
+        assert_eq!(name, "C4");
+        assert!(cents.abs() < 0.01);
+    }
+
+    /// The same pitch must snap to different strings per tuning — 392 Hz is
+    /// standard's open 4th, but on a baritone it is nothing (nearest is E4).
+    #[test]
+    fn nearest_string_follows_the_tuning() {
+        assert_eq!(nearest_string(392.0, Tuning::Standard).0, "G4");
+        assert_eq!(nearest_string(392.0, Tuning::Baritone).0, "E4");
     }
 
     #[test]
     fn tuner_detects_synthetic_g3() {
         let analyzer = Analyzer::new(44_100.0);
-        let samples: Vec<f32> = (0..FFT_SIZE)
-            .map(|n| {
-                let t = n as f32 / 44_100.0;
-                (2.0 * std::f32::consts::PI * 196.0 * t).sin() * 0.25
-            })
-            .collect();
-
-        let reading = analyzer.analyze_tuner(&samples, 0.001);
+        let reading = analyzer.analyze_tuner(&sine(196.0), 0.001, Tuning::Baritone);
         assert!(reading.active);
         assert_eq!(reading.nearest, "G3");
         assert!(reading.cents.abs() < 5.0, "cents={}", reading.cents);
+    }
+
+    #[test]
+    fn tuner_detects_synthetic_a4_in_standard_tuning() {
+        let analyzer = Analyzer::new(44_100.0);
+        let reading = analyzer.analyze_tuner(&sine(440.0), 0.001, Tuning::Standard);
+        assert!(reading.active);
+        assert_eq!(reading.nearest, "A4");
+        assert!(reading.cents.abs() < 5.0, "cents={}", reading.cents);
+    }
+
+    /// A held tone is not a strum: after the note has settled, the flux baseline
+    /// catches up and no further onsets fire.
+    #[test]
+    fn sustained_tone_fires_at_most_one_onset() {
+        let analyzer = Analyzer::new(44_100.0);
+        let tone = sine(261.63);
+        let t0 = Instant::now();
+        // Windows are ~186ms of audio at 8192/44.1k, so space them well past the
+        // refractory period — any onset here is the detector's own decision.
+        let onsets = (0..12)
+            .filter(|i| onset_at(&analyzer, &tone, t0 + Duration::from_millis(200 * i)))
+            .count();
+        assert!(onsets <= 1, "steady tone produced {onsets} onsets");
+    }
+
+    /// The case the feature exists for: a new attack over an already-sounding
+    /// note. A second, louder note entering must register even though the first
+    /// one never stopped — this is what RMS alone would miss.
+    #[test]
+    fn new_attack_over_a_sounding_note_fires_an_onset() {
+        let analyzer = Analyzer::new(44_100.0);
+        let held = sine_amp(261.63, 0.25);
+        let t0 = Instant::now();
+        // Let the baseline settle on the held note.
+        for i in 0..8 {
+            onset_at(&analyzer, &held, t0 + Duration::from_millis(200 * i));
+        }
+        // Now strum: the C keeps ringing and an E joins it.
+        let strum: Vec<f32> = held
+            .iter()
+            .zip(sine_amp(329.63, 0.3).iter())
+            .map(|(a, b)| a + b)
+            .collect();
+        assert!(onset_at(
+            &analyzer,
+            &strum,
+            t0 + Duration::from_millis(1600)
+        ));
+    }
+
+    /// Two windows in quick succession are one strum, not two: the refractory
+    /// gate suppresses the second. Without it a single strum's attack spans
+    /// several overlapping windows and would be counted repeatedly.
+    #[test]
+    fn refractory_period_collapses_one_strum_into_one_onset() {
+        let analyzer = Analyzer::new(44_100.0);
+        let quiet = sine_amp(261.63, 0.02);
+        let t0 = Instant::now();
+        for i in 0..8 {
+            onset_at(&analyzer, &quiet, t0 + Duration::from_millis(200 * i));
+        }
+        let loud = sine_amp(261.63, 0.5);
+        let first = onset_at(&analyzer, &loud, t0 + Duration::from_millis(1600));
+        // 20ms later — inside ONSET_REFRACTORY (60ms).
+        let second = onset_at(&analyzer, &loud, t0 + Duration::from_millis(1620));
+        assert!(first, "expected the attack to register");
+        assert!(!second, "refractory period should have suppressed this");
+    }
+
+    /// Silence resets the detector, so the first note after a gap is an attack
+    /// rather than being scaled against a stale baseline.
+    #[test]
+    fn silence_resets_the_onset_detector() {
+        let analyzer = Analyzer::new(44_100.0);
+        let tone = sine(261.63);
+        for _ in 0..8 {
+            analyzer.analyze_chord(&tone, None, 0.001);
+        }
+        // Below the gate: this is the silence path.
+        let silent = analyzer.analyze_chord(&sine_amp(261.63, 0.0001), None, 0.01);
+        assert!(!silent.active);
+        assert!(!silent.onset);
+        assert_eq!(silent.flux, 0.0);
+
+        let st = analyzer.onset.lock().unwrap();
+        assert_eq!(st.baseline, 0.0);
+        assert!(st.last_onset.is_none());
+    }
+
+    /// A string 30 cents flat should still identify as that string, and report
+    /// the offset — that is the whole job of the tuner.
+    #[test]
+    fn tuner_reports_flat_string_as_negative_cents() {
+        let analyzer = Analyzer::new(44_100.0);
+        let flat = 261.63 * 2f32.powf(-30.0 / 1200.0);
+        let reading = analyzer.analyze_tuner(&sine(flat), 0.001, Tuning::Standard);
+        assert_eq!(reading.nearest, "C4");
+        assert!(
+            (reading.cents + 30.0).abs() < 5.0,
+            "expected ~-30 cents, got {}",
+            reading.cents
+        );
     }
 }

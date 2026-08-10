@@ -10,7 +10,7 @@ mod soundfont;
 use audio::{AudioState, Mode};
 use backing::{BackingState, BackingStatus};
 use base64::Engine as _;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 fn start_tuner(app: AppHandle, state: State<AudioState>) -> Result<(), String> {
@@ -52,6 +52,13 @@ fn stop_audio(state: State<AudioState>) {
     state.stop();
 }
 
+/// Set the instrument tuning ("standard" | "baritone") the tuner snaps to.
+/// Applies mid-stream, so switching while listening is fine.
+#[tauri::command]
+fn set_tuning(tuning: String, state: State<AudioState>) {
+    state.set_tuning(audio::Tuning::from_str(&tuning));
+}
+
 /// Normalize a messy pasted tab into clean ChordPro via the LLM proxy.
 /// Runs on a blocking thread so the UI stays responsive.
 #[tauri::command]
@@ -66,12 +73,26 @@ async fn enhance_tab(
         Some("fuse") => enhance::Mode::Fuse,
         _ => enhance::Mode::Messy,
     };
-    let (proxy_url, proxy_key) = enhance::resolve_proxy(&settings::load(&app));
+    let ep = enhance::resolve_proxy(&settings::load(&app));
     tauri::async_runtime::spawn_blocking(move || {
-        enhance::enhance_tab(&raw, m, lyrics.as_deref(), &proxy_url, &proxy_key)
+        enhance::enhance_tab(&raw, m, lyrics.as_deref(), &ep.url, &ep.key)
     })
     .await
     .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Turn a digest of graded bars into short practice advice via the LLM proxy.
+///
+/// Same shape as `enhance_tab`: the request is made from Rust so the API key
+/// never reaches the webview, and on a blocking thread so a slow proxy can't
+/// stall the UI mid-song. `reason` is what triggered the request (section
+/// boundary, pause, rough patch) and is passed to the model as context.
+#[tauri::command]
+async fn coach_bars(app: AppHandle, digest: String, reason: String) -> Result<String, String> {
+    let ep = enhance::resolve_proxy(&settings::load(&app));
+    tauri::async_runtime::spawn_blocking(move || enhance::coach_bars(&digest, &ep, &reason))
+        .await
+        .map_err(|e| format!("task join: {e}"))?
 }
 
 /// The OS the native side was compiled for ("ios", "android", "macos",
@@ -136,12 +157,33 @@ fn backing_status(state: State<BackingState>) -> BackingStatus {
     state.status()
 }
 
+/// Keep the screen awake while the transport is running. A play-along app goes
+/// untouched for whole songs, so the default auto-lock would black out the
+/// chord highway mid-verse. No-op off iOS.
+#[tauri::command]
+fn set_keep_awake(app: AppHandle, awake: bool) {
+    ios_audio::set_idle_timer_disabled(&app, awake);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AudioState::default())
         .manage(BackingState::default())
+        .setup(|app| {
+            // Watch for interruptions (calls, Siri) and route changes
+            // (headphones unplugged) so audio recovers without the user
+            // restarting by hand.
+            ios_audio::install_observers(app.handle().clone());
+            // Apply the saved tuning before the first stream starts, so the
+            // tuner is right on a cold launch rather than after the frontend
+            // gets around to telling us.
+            let saved = settings::load(app.handle());
+            app.state::<AudioState>()
+                .set_tuning(audio::Tuning::from_str(&saved.tuning));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             start_tuner,
             stop_tuner,
@@ -150,7 +192,9 @@ pub fn run() {
             set_target,
             set_gate,
             stop_audio,
+            set_tuning,
             enhance_tab,
+            coach_bars,
             load_backing,
             set_backing_channels,
             play_backing,
@@ -158,6 +202,7 @@ pub fn run() {
             stop_backing,
             set_backing_loop,
             backing_status,
+            set_keep_awake,
             platform,
             library::library_load,
             library::library_save,

@@ -12,6 +12,15 @@ import {
   channelChordScores,
   type MidiData,
 } from "./midi";
+import {
+  VerdictBuffer,
+  accumulate,
+  newAccumulator,
+  seal,
+  timingLabel,
+  type BarAccumulator,
+  type BarVerdict,
+} from "./verdict";
 
 const nativeRuntime =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -49,18 +58,70 @@ interface ChordReading {
   missing: string[];
   extra: string[];
   rms: number;
+  // An attack (strum/pluck) began since the last reading. Latched on the Rust
+  // side across coalesced emits, so it is safe to treat every `true` as one
+  // strum — see ChordReading::onset in audio.rs.
+  onset: boolean;
+  // Spectral flux as a multiple of its slow baseline (1.0 = steady state).
+  flux: number;
 }
 
 const PITCH_CLASSES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 type AppMode = "tuner" | "play" | "arrangement" | "cal-mic" | "library";
 
-// Baritone open strings, low -> high.
-const STRINGS = [
-  { note: "D3", hz: 146.83 },
-  { note: "G3", hz: 196.0 },
-  { note: "B3", hz: 246.94 },
-  { note: "E4", hz: 329.63 },
-];
+// --- instrument tuning ---
+// Two ukuleles are supported: the standard G-C-E-A most instruments ship with
+// (soprano/concert/tenor) and the baritone D-G-B-E. The choice drives the tuner
+// strings, the chord-diagram open strings, and every fret label; it is
+// persisted in settings.json and mirrored to Rust via `set_tuning`.
+//
+// `strings` is in playing order (4th string first), NOT pitch order — standard
+// tuning is re-entrant, so its 4th string G4 sounds above the 3rd string C4.
+// `openPc` is the pitch class of each open string, used by the voicing search.
+type TuningId = "standard" | "baritone";
+
+interface TuningSpec {
+  id: TuningId;
+  label: string;
+  /// Short form for the header tagline and diagram tags, e.g. "G C E A".
+  spelling: string;
+  strings: { note: string; hz: number }[];
+  openPc: number[];
+  stringLabels: string[];
+}
+
+const TUNINGS: Record<TuningId, TuningSpec> = {
+  standard: {
+    id: "standard",
+    label: "Standard (soprano · concert · tenor)",
+    spelling: "G C E A",
+    strings: [
+      { note: "G4", hz: 392.0 },
+      { note: "C4", hz: 261.63 },
+      { note: "E4", hz: 329.63 },
+      { note: "A4", hz: 440.0 },
+    ],
+    openPc: [7, 0, 4, 9],
+    stringLabels: ["G", "C", "E", "A"],
+  },
+  baritone: {
+    id: "baritone",
+    label: "Baritone",
+    spelling: "D G B E",
+    strings: [
+      { note: "D3", hz: 146.83 },
+      { note: "G3", hz: 196.0 },
+      { note: "B3", hz: 246.94 },
+      { note: "E4", hz: 329.63 },
+    ],
+    openPc: [2, 7, 11, 4],
+    stringLabels: ["D", "G", "B", "E"],
+  },
+};
+
+// Standard is the default: it's what most ukuleles are. Replaced by the saved
+// setting during startup (see applyTuning), before the user can play anything.
+let tuning: TuningSpec = TUNINGS.standard;
 
 const IN_TUNE_CENTS = 5; // within +/- this many cents counts as in tune
 
@@ -88,18 +149,23 @@ function noteRms(rms: number) {
   if (calibrating) calibSamples.push(rms);
 }
 
-// --- build per-string rows ---
+// --- build per-string rows (rebuilt when the tuning changes) ---
 const stringRows = new Map<string, HTMLElement>();
-for (const s of STRINGS) {
-  const row = document.createElement("div");
-  row.className = "string-row";
-  row.innerHTML = `
-    <span class="string-note">${s.note[0]}</span>
-    <span class="string-meta">${s.note} · ${s.hz.toFixed(1)} Hz</span>
-    <span class="string-check">○</span>`;
-  stringsEl.appendChild(row);
-  stringRows.set(s.note, row);
+function buildStringRows() {
+  stringsEl.textContent = "";
+  stringRows.clear();
+  for (const s of tuning.strings) {
+    const row = document.createElement("div");
+    row.className = "string-row";
+    row.innerHTML = `
+      <span class="string-note">${s.note[0]}</span>
+      <span class="string-meta">${s.note} · ${s.hz.toFixed(1)} Hz</span>
+      <span class="string-check">○</span>`;
+    stringsEl.appendChild(row);
+    stringRows.set(s.note, row);
+  }
 }
+buildStringRows();
 
 // --- listen toggle ---
 listenBtn.addEventListener("click", async () => {
@@ -110,6 +176,7 @@ listenBtn.addEventListener("click", async () => {
       listenBtn.textContent = "Stop listening";
       listenBtn.classList.add("on");
       setConn(false);
+      syncKeepAwake();
     } catch (e) {
       verdictEl.textContent = `mic error: ${e}`;
     }
@@ -119,6 +186,7 @@ listenBtn.addEventListener("click", async () => {
     listenBtn.textContent = "Start listening";
     listenBtn.classList.remove("on");
     setConn(false);
+    syncKeepAwake();
   }
 });
 
@@ -133,6 +201,19 @@ nativeListen<TunerReading>("tuner", (event) => {
 function setConn(live: boolean) {
   connEl.classList.toggle("live", live);
   connText.textContent = live ? "live" : listening ? "listening…" : "idle";
+}
+
+// --- keep the screen awake while the app is actually in use ---
+// On iOS the idle timer would lock the screen mid-song: you play for minutes
+// without touching the glass. Anything that changes `listening`,
+// `chordListening` or `playing` calls this, and the native side is only poked
+// when the combined state flips (setIdleTimerDisabled is a main-thread hop).
+let keepAwake = false;
+function syncKeepAwake() {
+  const want = listening || chordListening || playing;
+  if (want === keepAwake) return;
+  keepAwake = want;
+  nativeInvoke("set_keep_awake", { awake: want }).catch(() => {});
 }
 
 // --- render loop ---
@@ -331,10 +412,14 @@ const nextShapeNextBtn = document.getElementById("next-shape-next") as HTMLButto
 const nextShapeCountEl = document.getElementById("next-shape-count")!;
 const transitionTagEl = document.getElementById("transition-tag")!;
 const transitionCoachEl = document.getElementById("transition-coach")!;
+const coachTagEl = document.getElementById("coach-tag")!;
+const coachAdviceEl = document.getElementById("coach-advice")!;
 // analyzer panel (right column)
 const mMatchEl = document.getElementById("m-match")!;
 const mfMatchEl = document.getElementById("mf-match") as HTMLElement;
 const mPeakCountEl = document.getElementById("m-peakcount")!;
+const mFluxEl = document.getElementById("m-flux")!;
+const mOnsetEl = document.getElementById("m-onset")!;
 const peaksListEl = document.getElementById("peaks-list")!;
 const arrangementTagEl = document.getElementById("arrangement-tag")!;
 const arrangementNowEl = document.getElementById("arr-now")!;
@@ -351,7 +436,7 @@ type Voicing = (number | null)[];
 // null = string not played. Every shape is checked to produce the correct
 // chord tones (see the generator in the prototype). Covers all 12 majors,
 // minors, plus common 7ths/maj7s/m7s.
-const VOICINGS: Record<string, Voicing> = {
+const BARITONE_VOICINGS: Record<string, Voicing> = {
   C: [2, 0, 1, 0],
   "C#": [null, 1, 2, 1],
   D: [0, 2, 3, 2],
@@ -428,12 +513,116 @@ const VOICINGS: Record<string, Voicing> = {
   Bsus2: [null, 6, 7, 7], Bsus4: [4, 4, 0, 0], B6: [4, 4, 4, 4], Bm6: [0, 1, 0, 2],
   Badd9: [1, 4, 2, 2], B7sus4: [2, 2, 0, 2],
 };
-const STRING_LABELS = ["D", "G", "B", "E"];
+
+// Standard G-C-E-A voicings: fret per string [G, C, E, A]. These are the
+// shapes ukulele players actually learn, so they're worth pinning rather than
+// leaving to the generator (which optimises for coverage and low frets, not
+// familiarity — it would offer a technically-correct C that nobody plays).
+// Every shape here is checked against the chord's pitch classes by
+// `voicingsCoverChordTones` in the test below. Qualities beyond this set fall
+// through to the generator, which follows whatever tuning is active.
+const STANDARD_VOICINGS: Record<string, Voicing> = {
+  C: [0, 0, 0, 3],
+  "C#": [1, 1, 1, 4],
+  D: [2, 2, 2, 0],
+  "D#": [3, 3, 3, 1],
+  E: [1, 4, 0, 2],
+  F: [2, 0, 1, 0],
+  "F#": [3, 1, 2, 1],
+  G: [0, 2, 3, 2],
+  "G#": [5, 3, 4, 3],
+  A: [2, 1, 0, 0],
+  "A#": [3, 2, 1, 1],
+  B: [4, 3, 2, 2],
+  Cm: [0, 3, 3, 3],
+  "C#m": [1, 4, 4, 4],
+  Dm: [2, 2, 1, 0],
+  "D#m": [3, 3, 2, 1],
+  Em: [0, 4, 3, 2],
+  Fm: [1, 0, 1, 3],
+  "F#m": [2, 1, 2, 0],
+  Gm: [0, 2, 3, 1],
+  "G#m": [1, 3, 4, 2],
+  Am: [2, 0, 0, 0],
+  "A#m": [3, 1, 1, 1],
+  Bm: [4, 2, 2, 2],
+  C7: [0, 0, 0, 1],
+  "C#7": [1, 1, 1, 2],
+  D7: [2, 2, 2, 3],
+  "D#7": [3, 3, 3, 4],
+  E7: [1, 2, 0, 2],
+  F7: [2, 3, 1, 3],
+  "F#7": [3, 4, 2, 4],
+  G7: [0, 2, 1, 2],
+  "G#7": [1, 3, 2, 3],
+  A7: [0, 1, 0, 0],
+  "A#7": [1, 2, 1, 1],
+  B7: [2, 3, 2, 2],
+  Cm7: [3, 3, 3, 3],
+  Dm7: [2, 2, 1, 3],
+  Em7: [0, 2, 0, 2],
+  Fm7: [1, 3, 1, 3],
+  Gm7: [0, 2, 1, 1],
+  Am7: [0, 0, 0, 0],
+  Bm7: [2, 2, 2, 2],
+  Cmaj7: [0, 0, 0, 2],
+  Dmaj7: [2, 2, 2, 4],
+  Emaj7: [1, 3, 0, 2],
+  Fmaj7: [2, 4, 1, 3],
+  Gmaj7: [0, 2, 2, 2],
+  Amaj7: [1, 1, 0, 0],
+  Csus2: [0, 2, 3, 3],
+  Csus4: [0, 0, 1, 3],
+  Dsus4: [0, 2, 3, 0],
+  Esus4: [4, 4, 0, 0],
+  Fsus2: [0, 0, 1, 3],
+  Gsus4: [0, 2, 3, 3],
+  Asus2: [2, 4, 5, 2],
+  Asus4: [2, 2, 0, 0],
+  C6: [0, 0, 0, 0],
+  D6: [2, 2, 2, 2],
+  F6: [2, 2, 1, 3],
+  G6: [0, 2, 0, 2],
+  A6: [2, 4, 2, 4],
+  Am6: [2, 4, 2, 3],
+  Dm6: [2, 2, 1, 2],
+  Em6: [0, 1, 0, 2],
+  Cadd9: [0, 2, 0, 3],
+  Dadd9: [2, 4, 2, 5],
+  Gadd9: [2, 2, 3, 2],
+  Cdim: [5, 3, 2, 3],
+  Ddim: [1, 2, 1, 5],
+  Edim: [0, 4, 0, 1],
+  Fdim: [4, 5, 4, 2],
+  Gdim: [0, 1, 3, 1],
+  Adim: [5, 3, 5, 0],
+  Bdim: [4, 2, 1, 2],
+  Caug: [1, 0, 0, 3],
+  Daug: [3, 2, 2, 1],
+  Eaug: [1, 0, 0, 3],
+  Faug: [2, 1, 1, 0],
+  Gaug: [0, 3, 3, 2],
+  Aaug: [2, 1, 1, 0],
+  Am7b5: [2, 3, 3, 3],
+  Bm7b5: [2, 2, 1, 2],
+  Cm7b5: [3, 3, 2, 3],
+  Dm7b5: [1, 2, 1, 3],
+  Em7b5: [0, 2, 0, 1],
+  "F#m7b5": [2, 4, 2, 3],
+};
+
+/// The active tuning's verified table, keyed by normalized chord name.
+function verifiedVoicings(): Record<string, Voicing> {
+  return tuning.id === "baritone" ? BARITONE_VOICINGS : STANDARD_VOICINGS;
+}
 
 let mode: AppMode = "play";
 let chordListening = false;
 let chord: ChordReading | null = null;
 let lastChordAt = 0;
+// When the last attack was seen, so the diagnostics lamp can stay lit long
+// enough to perceive — an onset is true for one reading only.
+let lastOnsetAt = 0;
 let smoothClean = 0;
 let targetChord = "";
 
@@ -482,6 +671,7 @@ modeBtns.forEach((btn) => {
       listenBtn2.textContent = "Start listening";
       listenBtn2.classList.remove("on");
       setConn(false);
+      syncKeepAwake();
     }
     if (fromPractice && !toPractice) {
       stopTransport();
@@ -516,6 +706,7 @@ listenBtn2.addEventListener("click", async () => {
       listenBtn2.textContent = "Stop listening";
       listenBtn2.classList.add("on");
       setConn(false);
+      syncKeepAwake();
     } catch (e) {
       coachEl.textContent = `mic error: ${e}`;
     }
@@ -525,6 +716,7 @@ listenBtn2.addEventListener("click", async () => {
     listenBtn2.textContent = "Start listening";
     listenBtn2.classList.remove("on");
     setConn(false);
+    syncKeepAwake();
   }
   updatePracticeUi(); // mic live/idle text is no longer refreshed every frame
 });
@@ -611,6 +803,25 @@ let songTime = 0; // seconds elapsed in the song
 let lastTickAt = 0; // performance.now() of last transport tick
 const LOOKAHEAD_BEATS = 6; // how many beats ahead the highway shows
 
+// --- per-bar scoring ---
+// The detector judges each window in isolation; this turns that stream into one
+// graded verdict per bar, which is what both the highway trail and the coach
+// read. See verdict.ts for the model and the grading rule.
+const verdicts = new VerdictBuffer();
+let barAccum: BarAccumulator = newAccumulator();
+let beatsPerBar = 4; // set by setupTiming from the song's time signature
+let currentBar = -1; // bar ordinal the accumulator is filling (-1 = none yet)
+let currentBarChordIdx = 0; // chord the bar was opened on, for the verdict
+let currentBarStartedAt: number | null = null; // performance.now() of its downbeat
+// Whether wait-mode parked the playhead during this bar. If it did, the strum's
+// distance from the downbeat is an artifact of the mode, not the player.
+let currentBarWaited = false;
+// Section label per chord index, so a verdict knows where in the song it sits
+// (and so the coach can be triggered on section boundaries).
+let sectionOfIdx: string[] = [];
+// How many bars the highway keeps tinted behind the NOW line.
+const VERDICT_TRAIL_BARS = 3;
+
 // backing-track (MIDI audio) state. When a song has backing audio, the Rust
 // playback position drives the highway playhead (no drift); otherwise the
 // wall clock does. selectedChannels = which MIDI channels sound (bass+drums
@@ -696,10 +907,15 @@ function updatePracticeUi() {
     : "play-to-advance";
   const micText = chordListening ? "mic live" : "mic idle";
   const backingText = hasBacking ? "backing" : "no backing";
+  // Rolling score over the last 16 bars: enough history to mean something,
+  // short enough that fixing a rough patch shows up while you're still on it.
+  const score = verdicts.hitCount(16);
+  const scoreText = score.total ? ` · ${score.hits}/${score.total} bars` : "";
 
   songTagEl.textContent = artist ? `${title} · ${artist}` : title;
   practiceTitleEl.textContent = artist ? `${title} — ${artist}` : title;
-  practiceSubEl.textContent = timed ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`;
+  practiceSubEl.textContent =
+    (timed ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) + scoreText;
   practicePosEl.textContent = `${songIdx + 1}/${loadedSong.chordSequence.length} · ${current}`;
   practiceNextEl.textContent = next ? `next ${next}` : "last chord";
 }
@@ -987,9 +1203,18 @@ function loadSongIntoPlay(rec: SongRecord) {
     libAddStatus.textContent = "that song has no detectable chords";
     return;
   }
+  // Drop the outgoing song's score BEFORE swapping loadedSong: setupTiming()
+  // below calls stopTransport(), which would otherwise coach the old song's bars
+  // against the new song's tempo and chord names.
+  resetScoring();
+  // Advice about the previous song is worse than none. Not folded into
+  // resetScoring(), which also runs on a loop — where the advice the player just
+  // read is still about the part they're replaying.
+  resetCoaching();
   loadedSong = song;
   loadedRecord = rec;
   songIdx = 0;
+  buildSectionMap(song); // before setupTiming: a sealed bar reads this
   setupTiming(song);
   setupBacking(rec);
   buildSongStrip();
@@ -1049,6 +1274,7 @@ function applyChannelSelection() {
 function setupTiming(song: Song) {
   stopTransport();
   songTime = 0;
+  resetScoring();
   const seq = song.chordSequence;
   timed = song.tempo > 0 && seq.length > 0;
   chordBeat = [];
@@ -1056,11 +1282,16 @@ function setupTiming(song: Song) {
     transportEl.hidden = true;
     arrTransportEl.hidden = true;
     songBeats = 0;
+    // Untimed songs score per chord advance, and sealUntimedChord files the
+    // chord we're leaving — so open the first one here or chord 0 is never
+    // graded (resetScoring left currentBar at -1, meaning "nothing open").
+    currentBar = 0;
+    currentBarChordIdx = 0;
     updatePracticeUi();
     return;
   }
   secPerBeat = 60 / song.tempo;
-  const beatsPerBar = (song.timeSig?.[0] ?? 4) * (4 / (song.timeSig?.[1] ?? 4));
+  beatsPerBar = (song.timeSig?.[0] ?? 4) * (4 / (song.timeSig?.[1] ?? 4));
   // each chord begins at a new bar when barStart[i]; chords sharing a bar split
   // it evenly. Walk the sequence accumulating bar positions.
   const hasBars = song.barStart.some(Boolean);
@@ -1100,6 +1331,211 @@ function fmtTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// --- per-bar scoring ---
+
+// Map every chord index to the section it sits in, so a verdict can say "the
+// bridge falls apart" rather than just "bar 34". Sections come from {comment:}
+// directives, which a lot of songs simply don't have — an empty label is normal.
+function buildSectionMap(song: Song) {
+  sectionOfIdx = [];
+  let section = "";
+  let idx = 0;
+  for (const line of song.lines) {
+    if (line.section) {
+      section = line.section;
+      continue;
+    }
+    for (let i = 0; i < line.chords.length; i++) sectionOfIdx[idx++] = section;
+  }
+}
+
+function resetScoring() {
+  verdicts.clear();
+  barAccum = newAccumulator();
+  currentBar = -1;
+  currentBarChordIdx = 0;
+  currentBarStartedAt = null;
+  currentBarWaited = false;
+  // This counts bars in the buffer we just emptied, so it has to go with it —
+  // otherwise it stays ahead of verdicts.length and the sectionless trigger
+  // stops firing for a whole extra window.
+  coachBarsAtLastRequest = 0;
+}
+
+// Close out the bar the accumulator has been filling and file its verdict.
+// `nextBar`/`nextChordIdx` open the following bar in the same step, so the
+// downbeat timestamp used for the timing offset is the one we actually crossed.
+function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number | null) {
+  let sealed: BarVerdict | null = null;
+  if (currentBar >= 0 && loadedSong) {
+    sealed = seal(barAccum, {
+      bar: currentBar + 1, // 1-based for anything a human or the LLM reads
+      chordIdx: currentBarChordIdx,
+      expected: loadedSong.chordSequence[currentBarChordIdx] ?? "",
+      section: sectionOfIdx[currentBarChordIdx] ?? "",
+      // Wait-mode holds the playhead until the chord is found, so the gap
+      // between downbeat and strum is the mode working as intended, not the
+      // player being late. Report no timing rather than a false accusation.
+      barStartAt: currentBarWaited ? null : currentBarStartedAt,
+    });
+    verdicts.push(sealed);
+  }
+  barAccum = newAccumulator();
+  currentBar = nextBar;
+  currentBarChordIdx = nextChordIdx;
+  currentBarStartedAt = at;
+  currentBarWaited = false;
+  // After the state swap, and with the verdict passed explicitly: the triggers
+  // must reason about the bar that was just graded, not whichever bar happens to
+  // be open by the time they run.
+  if (sealed) onVerdictSealed(sealed);
+}
+
+// Untimed songs have no bar clock, so a "bar" is one chord: seal when the player
+// advances. There is no downbeat to measure against, hence no timing claims.
+function sealUntimedChord(chordIdx: number) {
+  if (timed) return;
+  sealCurrentBar(chordIdx, chordIdx, null);
+}
+
+/// Bar ordinal for a beat position. Bars are uniform (beatsPerBar), which is how
+/// setupTiming already lays out chordBeat.
+function barOfBeat(beat: number): number {
+  return Math.floor(beat / beatsPerBar);
+}
+
+// --- LLM coaching ---
+// Everything above this line is local and instant. This part asks the model for
+// the one thing the app can't compute: the pattern across bars. It fires on its
+// own, so the guards below matter as much as the call — an eager coach that
+// interrupts every few seconds is worse than no coach.
+
+const COACH_WINDOW_BARS = 16; // how many graded bars the model sees
+const COACH_MIN_BARS = 4; // below this there's no pattern to find
+const COACH_COOLDOWN_MS = 20_000; // floor between calls, whatever triggered them
+const COACH_ROUGH_WINDOW = 8; // bars the rough-patch check looks at
+const COACH_ROUGH_RATE = 0.5; // hit rate below which the player is struggling
+const COACH_SECTIONLESS_BARS = 16; // fallback cadence when a song has no sections
+
+let coachInFlight = false;
+let coachLastAt = 0;
+let coachLastSection = "";
+let coachBarsAtLastRequest = 0;
+// Shown once per session, not per failure: a player without an endpoint
+// configured would otherwise get the same error at every section boundary.
+let coachEndpointWarned = false;
+
+/// Ask for advice on the bars just played. Called from several triggers, all of
+/// which can fire close together, so this is the single place the guards live.
+function requestCoaching(reason: string) {
+  if (!nativeRuntime || !loadedSong || coachInFlight) return;
+  if (verdicts.length < COACH_MIN_BARS) return;
+  const now = performance.now();
+  if (coachLastAt && now - coachLastAt < COACH_COOLDOWN_MS) return;
+
+  const window = verdicts.recent(COACH_WINDOW_BARS);
+  // Nothing sounded at all: the player is holding the instrument, not playing
+  // it. Coaching silence produces advice about a performance that didn't happen.
+  if (window.every((v) => v.status === "MISS")) return;
+
+  const digest = verdicts.digest(COACH_WINDOW_BARS, {
+    tempo: timed ? loadedSong.tempo : 0,
+    timeSig: loadedSong.timeSig ?? [4, 4],
+  });
+  if (!digest) return;
+
+  coachInFlight = true;
+  coachLastAt = now;
+  coachBarsAtLastRequest = verdicts.length;
+  renderCoachThinking(reason);
+  nativeInvoke<string>("coach_bars", { digest, reason })
+    .then((text) => renderCoachAdvice(text))
+    .catch((e) => renderCoachError(e))
+    .finally(() => {
+      coachInFlight = false;
+    });
+}
+
+/// Called after each bar is graded: the automatic triggers that depend on how
+/// the playing is going, rather than on a transport event.
+function onVerdictSealed(v: BarVerdict) {
+  if (!loadedSong) return;
+
+  // Section boundary — the natural unit of "how did that bit go". Songs without
+  // {comment:} markers get a fixed cadence instead.
+  if (v.section) {
+    if (coachLastSection && v.section !== coachLastSection) {
+      requestCoaching(`finished the ${coachLastSection}`);
+    }
+    coachLastSection = v.section;
+  } else if (verdicts.length - coachBarsAtLastRequest >= COACH_SECTIONLESS_BARS) {
+    requestCoaching(`${COACH_SECTIONLESS_BARS} bars in`);
+  }
+
+  // Rough patch — coaching arrives while the player is still in the trouble,
+  // which is the only time it can actually help.
+  const rate = verdicts.hitRate(COACH_ROUGH_WINDOW);
+  if (
+    rate !== null &&
+    rate < COACH_ROUGH_RATE &&
+    verdicts.length >= COACH_ROUGH_WINDOW
+  ) {
+    requestCoaching("struggling with this part");
+  }
+}
+
+function renderCoachThinking(reason: string) {
+  coachTagEl.textContent = reason;
+  coachAdviceEl.innerHTML = `<span class="coach-thinking">thinking…</span>`;
+}
+
+/// Render the model's lines. Per SYSTEM_COACH it returns at most three short
+/// sentences, fixes first and the encouraging one last, so the final line gets
+/// the green rule. Anything longer is truncated rather than allowed to overflow
+/// the panel — the prompt asks for three lines but can't be relied on for it.
+function renderCoachAdvice(text: string) {
+  const lines = text
+    .split("\n")
+    .map((l) => l.replace(/^[-*•\d.\s]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!lines.length) {
+    coachAdviceEl.innerHTML = `<span class="coach-idle">Nothing to add — keep going.</span>`;
+    return;
+  }
+  coachAdviceEl.innerHTML = lines
+    .map((l, i) => {
+      const good = lines.length > 1 && i === lines.length - 1;
+      return `<div class="coach-line${good ? " good" : ""}">${escapeHtml(l)}</div>`;
+    })
+    .join("");
+}
+
+/// A failed coaching call must never interrupt practice. The most likely cause
+/// by far is no configured endpoint (there is no localhost proxy on a phone), so
+/// say that once and then stay quiet.
+function renderCoachError(e: unknown) {
+  if (coachEndpointWarned) {
+    coachAdviceEl.innerHTML = `<span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>`;
+    coachTagEl.textContent = "across bars";
+    return;
+  }
+  coachEndpointWarned = true;
+  console.warn("coaching unavailable", e);
+  coachTagEl.textContent = "unavailable";
+  coachAdviceEl.innerHTML =
+    `<span class="coach-note">Coaching needs an AI endpoint — set one on the Setup screen. ` +
+    `Bar-by-bar scoring keeps working without it.</span>`;
+}
+
+function resetCoaching() {
+  coachLastSection = "";
+  coachBarsAtLastRequest = 0;
+  coachTagEl.textContent = "across bars";
+  coachAdviceEl.innerHTML =
+    `<span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>`;
+}
+
 // Wait-mode: hold the playhead at each chord boundary until the player has
 // played that chord cleanly, then resume. Encourages smooth, accurate playing.
 let waitMode = false;
@@ -1119,20 +1555,29 @@ function startTransport() {
   waiting = false;
   lastTickAt = performance.now();
   setPlayBtn(true);
+  syncKeepAwake();
   if (hasBacking) playBacking();
 }
 
 function stopTransport() {
+  const wasPlaying = playing;
   playing = false;
   waiting = false;
   setPlayBtn(false);
+  syncKeepAwake();
   if (hasBacking) nativeInvoke("pause_backing").catch(() => {});
+  // Stopping is when the player wants to know how that went. The buffer is left
+  // intact so pressing play again continues the same run. Gated on wasPlaying
+  // because setupTiming() calls this on every song load — coaching the player
+  // about the song they just navigated away from would be nonsense.
+  if (wasPlaying) requestCoaching("paused");
 }
 
 function restartTransport() {
   songTime = 0;
   songIdx = 0;
   waiting = false;
+  resetScoring(); // a fresh run from the top is a fresh score
   tpTimeEl.textContent = "0:00";
   arrTimeEl.textContent = "0:00";
   updateStrip();
@@ -1146,11 +1591,24 @@ function restartTransport() {
 }
 
 // Move songIdx to the chord whose beat window contains `beat`; updates target.
+// Also the single place bars are closed out: both the wall-clock tick and the
+// backing-audio sync funnel through here, so scoring can't miss a bar or
+// double-count one depending on which clock is driving the playhead.
 function applyBeat(beat: number) {
   if (!loadedSong) return;
   let idx = songIdx;
   while (idx + 1 < chordBeat.length && chordBeat[idx + 1] <= beat) idx++;
   while (idx > 0 && chordBeat[idx] > beat) idx--;
+
+  const bar = barOfBeat(beat);
+  if (bar !== currentBar) {
+    // We notice the boundary a frame or two after it passed. Back out that
+    // overshoot so the timing offset measures the player against the downbeat,
+    // not against when the render loop happened to look.
+    const overshootMs = (beat - bar * beatsPerBar) * secPerBeat * 1000;
+    sealCurrentBar(bar, idx, performance.now() - overshootMs);
+  }
+
   if (idx !== songIdx) {
     songIdx = idx;
     updateStrip();
@@ -1199,8 +1657,12 @@ function tickTransport() {
   if (!waiting) applyBeat(beat);
   // loop at the end
   if (beat >= songBeats) {
+    // A full pass through the song is the natural moment for a review, and the
+    // buffer is about to be rewound — so ask before clearing it.
+    requestCoaching("song end");
     songTime = 0;
     songIdx = 0;
+    resetScoring();
     updateStrip();
     setTarget(loadedSong.chordSequence[0]);
   }
@@ -1213,6 +1675,7 @@ function maybeWaitAtBoundary(beat: number) {
   const next = songIdx + 1;
   if (next < chordBeat.length && beat >= chordBeat[next] && !currentChordSatisfied()) {
     waiting = true;
+    currentBarWaited = true; // suppresses this bar's timing offset (see sealCurrentBar)
     // clamp the playhead just before the boundary so we don't advance
     songTime = chordBeat[next] * secPerBeat - 0.001;
     if (hasBacking) nativeInvoke("pause_backing").catch(() => {});
@@ -1224,6 +1687,13 @@ function maybeWaitAtBoundary(beat: number) {
 // when audio is playing, so map it onto the highway playhead.
 function syncBackingPos(pos: number) {
   if (!timed || !loadedSong || !hasBacking) return;
+  // The backing engine owns looping, so a position that jumps backwards is the
+  // song wrapping. Review the pass and start a fresh score, mirroring what the
+  // wall-clock path does at `beat >= songBeats`.
+  if (pos + 0.5 < songTime) {
+    requestCoaching("song end");
+    resetScoring();
+  }
   songTime = pos;
   const beat = pos / secPerBeat;
   tpTimeEl.textContent = fmtTime(pos);
@@ -1309,6 +1779,12 @@ function updateStrip() {
   stripChordEls.forEach((el, i) => {
     el.classList.toggle("done", i < songIdx);
     el.classList.toggle("current", i === songIdx);
+    // Verdict tint persists for the whole run, so the strip doubles as a map of
+    // where the song went wrong — the highway trail only shows the last few bars.
+    const v = verdicts.forChordIdx(i);
+    el.classList.toggle("hit", v?.status === "HIT");
+    el.classList.toggle("wrong", v?.status === "WRONG");
+    el.classList.toggle("miss", v?.status === "MISS");
   });
   // keep the current chord in view
   stripChordEls[songIdx]?.scrollIntoView({ block: "nearest", inline: "center" });
@@ -1344,7 +1820,7 @@ function buildArrangement() {
 
   if (!loadedSong) {
     arrangementTagEl.textContent = "no song";
-    arrangementChordTagEl.textContent = "baritone";
+    arrangementChordTagEl.textContent = tuning.spelling;
     arrangementEmptyEl.hidden = false;
     arrangementSheetEl.hidden = true;
     updateArrangementState();
@@ -1513,6 +1989,14 @@ function drawHighway() {
   const topY = 28;
   const TEAL = "25,227,196";
   const GOLD = "245,196,81";
+  // Verdict colours for the trail behind NOW. Green/amber/grey reads at a glance
+  // without needing the legend a fourth colour would. These mirror
+  // --verdict-hit/-wrong/-miss in styles.css, which tint the same bars on the
+  // song strip; canvas needs the components separately for rgba(), hence the
+  // duplication.
+  const HIT = "76,222,128"; // --verdict-hit  #4cde80
+  const WRONG = "245,158,66"; // --verdict-wrong #f59e42
+  const MISS = "120,132,146"; // --verdict-miss  #788492
 
   if (!loadedSong) return;
   const seq = loadedSong.chordSequence;
@@ -1530,12 +2014,24 @@ function drawHighway() {
   // playhead beat (timed) or a synthetic position from songIdx (untimed)
   const headBeat = timed ? songTime / secPerBeat : (chordBeat[songIdx] ?? songIdx);
 
-  // draw upcoming tokens from nearest-future back, mapping beat-distance to y
+  // How far behind NOW the graded trail extends, in beats.
+  const trailBeats = timed ? VERDICT_TRAIL_BARS * beatsPerBar : VERDICT_TRAIL_BARS;
+
+  // draw upcoming tokens from nearest-future back, mapping beat-distance to y.
+  // Bars the playhead has already crossed stay on screen for a few beats, tinted
+  // by their verdict — the player sees how the last bars went without looking
+  // away from where they're going.
   for (let i = 0; i < seq.length; i++) {
     const tb = timed ? chordBeat[i] : i;
     const rel = tb - headBeat; // beats ahead of the playhead (0 = at NOW)
-    if (rel < -0.6) continue; // already passed
     if (rel > LOOKAHEAD_BEATS) break; // too far ahead
+    const passed = rel < -0.6;
+    const verdict = passed ? verdicts.forChordIdx(i) : undefined;
+    if (passed && (!verdict || rel < -trailBeats)) continue; // off the trail
+    if (passed) {
+      drawTrailToken(hctx, cx, nowY, verdict!, -rel / trailBeats, seq[i], { HIT, WRONG, MISS });
+      continue;
+    }
     const prog = Math.max(0, Math.min(1, rel / LOOKAHEAD_BEATS)); // 0 near .. 1 far
     const y = nowY - prog * (nowY - topY);
     const scale = 1 - prog * 0.55;
@@ -1572,6 +2068,50 @@ function drawHighway() {
   hctx.lineTo(w * 0.88, nowY);
   hctx.stroke();
   hctx.shadowBlur = 0;
+}
+
+// A bar the playhead has passed, drawn below the NOW line and tinted by its
+// verdict. `fade` runs 0 (just passed) -> 1 (leaving the trail); the token
+// shrinks and dims as it goes so it never competes with what's coming.
+//
+// The timing arrow is the point of the whole onset detector: ▲ = you strummed
+// early, ▼ = late. Only drawn past TIMING_TOLERANCE_MS, since below that the
+// number is mostly detector latency rather than the player.
+function drawTrailToken(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  nowY: number,
+  v: BarVerdict,
+  fade: number,
+  label: string,
+  cols: { HIT: string; WRONG: string; MISS: string }
+) {
+  const f = Math.max(0, Math.min(1, fade));
+  const col = v.status === "HIT" ? cols.HIT : v.status === "WRONG" ? cols.WRONG : cols.MISS;
+  const y = nowY + 20 + f * 26;
+  const scale = 0.72 - f * 0.22;
+  const alpha = 0.85 * (1 - f);
+  const tw = 56 * scale;
+  const th = 26 * scale;
+  ctx.globalAlpha = alpha;
+  roundRect(ctx, cx - tw / 2, y - th / 2, tw, th, 7 * scale);
+  ctx.strokeStyle = `rgba(${col},0.7)`;
+  ctx.lineWidth = 1.2 * scale;
+  ctx.stroke();
+  ctx.fillStyle = `rgba(${col},0.1)`;
+  ctx.fill();
+  ctx.fillStyle = `rgba(${col},0.95)`;
+  ctx.font = `700 ${Math.round(16 * scale)}px "Chakra Petch", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, cx, y + 1);
+
+  const timing = timingLabel(v.offsetMs);
+  if (timing) {
+    ctx.font = `700 ${Math.round(13 * scale)}px "Chakra Petch", sans-serif`;
+    ctx.fillText(timing === "early" ? "▲" : "▼", cx + tw / 2 + 9 * scale, y + 1);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -1715,6 +2255,7 @@ function maybeAdvance(reading: ChordReading) {
     if (advanceHold >= 4 && songIdx < loadedSong.chordSequence.length - 1) {
       songIdx++;
       advanceHold = 0;
+      sealUntimedChord(songIdx);
       updateStrip();
       setTarget(loadedSong.chordSequence[songIdx]);
     }
@@ -1728,6 +2269,15 @@ nativeListen<ChordReading>("chord", (event) => {
   lastChordAt = performance.now();
   setConn(true);
   noteRms(event.payload.rms);
+  // Fold this window into the bar being scored. Gated on the transport being
+  // engaged so noodling with the song paused isn't graded — but NOT on `waiting`:
+  // wait-for-me parks the playhead mid-bar precisely so the player can find the
+  // chord, and that strum is the one the bar should be scored on. (Its timing
+  // offset is meaningless in wait mode, which is the point of the mode.)
+  if (loadedSong && (!timed || playing)) {
+    accumulate(barAccum, event.payload, lastChordAt);
+  }
+  if (event.payload.onset) lastOnsetAt = lastChordAt;
   maybeAdvance(event.payload);
 });
 
@@ -1740,6 +2290,78 @@ interface BackingStatus {
 }
 nativeListen<BackingStatus>("backing", (event) => {
   if (event.payload.playing) syncBackingPos(event.payload.pos);
+});
+
+// ---- iOS audio-session interruptions and route changes ----
+// A phone call, Siri, or another app taking the session kills our streams and
+// iOS does not hand them back. The native observer re-activates the session and
+// tells us; only the frontend knows what the user was doing, so resuming is our
+// job. Nothing fires on desktop.
+//
+// Playback does NOT auto-resume: having a backing track burst out of the
+// speaker the instant you hang up is worse than pressing play yourself. The
+// transport pauses and the mic — passive — comes back on its own.
+let wasListeningBeforeInterruption = false;
+let wasChordListeningBeforeInterruption = false;
+
+nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
+  if (event.payload.began) {
+    wasListeningBeforeInterruption = listening;
+    wasChordListeningBeforeInterruption = chordListening;
+    // The streams are already dead; drop our own state so the buttons and the
+    // "live" dot don't lie, and pause the transport so we don't silently run
+    // the playhead past the whole song while the audio is gone.
+    listening = false;
+    chordListening = false;
+    listenBtn.textContent = "Start listening";
+    listenBtn.classList.remove("on");
+    listenBtn2.textContent = "Start listening";
+    listenBtn2.classList.remove("on");
+    setConn(false);
+    if (playing) stopTransport();
+    await nativeInvoke("stop_audio").catch(() => {});
+    syncKeepAwake();
+    coachEl.textContent = "audio interrupted — resuming when the call ends";
+    updatePracticeUi();
+    return;
+  }
+
+  // Interruption over: the native side has re-activated the session, so put
+  // the mic back exactly where it was.
+  try {
+    if (wasChordListeningBeforeInterruption) {
+      await nativeInvoke("start_chords");
+      await nativeInvoke("set_target", { chord: targetChord || null });
+      chordListening = true;
+      listenBtn2.textContent = "Stop listening";
+      listenBtn2.classList.add("on");
+    } else if (wasListeningBeforeInterruption) {
+      await nativeInvoke("start_tuner");
+      listening = true;
+      listenBtn.textContent = "Stop listening";
+      listenBtn.classList.add("on");
+    }
+    if (chordListening || listening) coachEl.textContent = "";
+  } catch (e) {
+    coachEl.textContent = `mic didn't come back: ${e} — press Start listening`;
+  }
+  wasListeningBeforeInterruption = false;
+  wasChordListeningBeforeInterruption = false;
+  setConn(false);
+  syncKeepAwake();
+  updatePracticeUi();
+});
+
+// Headphones pulled out (reason 2 = old device unavailable). Apple's guidance
+// is to pause rather than blast the built-in speaker; the mic keeps going since
+// the native side has already re-routed it.
+nativeListen<{ reason: number }>("audio_route_change", (event) => {
+  if (event.payload.reason !== 2) return;
+  if (playing) {
+    stopTransport();
+    coachEl.textContent = "output device disconnected — playback paused";
+  }
+  updatePracticeUi();
 });
 
 // ---- SoundFont install/download ----
@@ -1848,36 +2470,108 @@ sfDownloadBtn.addEventListener("click", async () => {
   }
 });
 
-// --- AI enhance endpoint (Setup screen) ---
-// Saved through the Rust side into app-data settings.json; env vars
-// UKEJAM_PROXY_URL/KEY still override saved values at request time.
-interface ProxySettings {
+// --- persisted settings (Setup screen) ---
+// Saved through the Rust side into app-data settings.json. `set_settings`
+// replaces the whole record, so every writer sends the full object — hence the
+// shared `settings` mirror rather than reading the inputs at save time.
+interface AppSettings {
   proxy_url: string;
   proxy_key: string;
+  // Model for live practice coaching ("" = the Rust-side default). Separate from
+  // tab enhancement's model: coaching is a short turn the player waits on
+  // mid-song, enhancement is one long offline conversion.
+  coach_model: string;
+  tuning: string;
 }
 const proxyUrlInput = document.getElementById("proxy-url") as HTMLInputElement;
 const proxyKeyInput = document.getElementById("proxy-key") as HTMLInputElement;
+const coachModelInput = document.getElementById("coach-model") as HTMLInputElement;
 const proxySaveBtn = document.getElementById("proxy-save") as HTMLButtonElement;
 const proxyStatus = document.getElementById("proxy-status")!;
+const taglineEl = document.getElementById("tagline")!;
+const tuningChoiceEl = document.getElementById("tuning-choice")!;
+const tuningStatus = document.getElementById("tuning-status")!;
 
-void nativeInvoke<ProxySettings>("get_settings")
+let settings: AppSettings = {
+  proxy_url: "",
+  proxy_key: "",
+  coach_model: "",
+  tuning: "standard",
+};
+
+function saveSettings(): Promise<void> {
+  return nativeInvoke("set_settings", { settings });
+}
+
+/// Switch tuning and refresh everything derived from it: the tuner's target
+/// strings (native + the row list), every cached voicing, and the labels. Safe
+/// to call while listening — the native side swaps on the next window.
+function applyTuning(id: TuningId, persist: boolean) {
+  tuning = TUNINGS[id];
+  settings.tuning = id;
+  taglineEl.textContent = `${id === "baritone" ? "baritone" : "standard"} · ${tuning.spelling}`;
+  tuningChoiceEl
+    .querySelectorAll<HTMLInputElement>('input[name="tuning"]')
+    .forEach((r) => (r.checked = r.value === id));
+
+  buildStringRows();
+  // Voicings and the chosen shape index are per-tuning; a G shape on a
+  // baritone is a different list, so a stale index would point at nothing.
+  voicingCache.clear();
+  shapeChoice.clear();
+  invalidateFretboards();
+  if (loadedSong) buildArrangement();
+  updateArrangementState(true);
+
+  nativeInvoke("set_tuning", { tuning: id }).catch(() => {});
+  if (!persist) return;
+  saveSettings()
+    .then(() => {
+      tuningStatus.classList.add("done");
+      tuningStatus.textContent = `saved — tuning to ${tuning.spelling}`;
+    })
+    .catch((e) => {
+      tuningStatus.classList.remove("done");
+      tuningStatus.textContent = `save failed: ${e}`;
+    });
+}
+
+tuningChoiceEl.addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  if (input.name !== "tuning") return;
+  applyTuning(input.value === "baritone" ? "baritone" : "standard", true);
+});
+
+void nativeInvoke<AppSettings>("get_settings")
   .then((s) => {
-    proxyUrlInput.value = s.proxy_url;
-    proxyKeyInput.value = s.proxy_key;
+    settings = {
+      proxy_url: s.proxy_url,
+      proxy_key: s.proxy_key,
+      // Absent in settings.json written before coaching existed.
+      coach_model: s.coach_model ?? "",
+      tuning: s.tuning,
+    };
+    proxyUrlInput.value = settings.proxy_url;
+    proxyKeyInput.value = settings.proxy_key;
+    coachModelInput.value = settings.coach_model;
+    // Rust already applied the saved tuning at startup; this aligns the UI
+    // (and is a no-op re-send when the setting is absent/standard).
+    applyTuning(s.tuning === "baritone" ? "baritone" : "standard", false);
   })
   .catch(() => {});
 
 proxySaveBtn.addEventListener("click", async () => {
   try {
-    await nativeInvoke("set_settings", {
-      settings: {
-        proxy_url: proxyUrlInput.value.trim(),
-        proxy_key: proxyKeyInput.value.trim(),
-      },
-    });
+    settings.proxy_url = proxyUrlInput.value.trim();
+    settings.proxy_key = proxyKeyInput.value.trim();
+    settings.coach_model = coachModelInput.value.trim();
+    await saveSettings();
+    // A saved endpoint may be the fix for a coaching failure, so let the panel
+    // try again instead of staying on the one-shot warning for the session.
+    coachEndpointWarned = false;
     proxyStatus.classList.add("done");
-    proxyStatus.textContent = proxyUrlInput.value.trim()
-      ? "saved — AI enhance will use this endpoint"
+    proxyStatus.textContent = settings.proxy_url
+      ? "saved — AI enhance and the coach will use this endpoint"
       : "saved — using the default local proxy";
   } catch (e) {
     proxyStatus.classList.remove("done");
@@ -1974,7 +2668,7 @@ function renderChords() {
   }
   const now = performance.now();
   if (chordListening && now - lastChordAt > 300) {
-    chord = { active: false, detected: "", cleanliness: 0, chroma: new Array(12).fill(0), spectrum: new Array(FFT_BINS).fill(0), missing: [], extra: [], rms: 0 };
+    chord = { active: false, detected: "", cleanliness: 0, chroma: new Array(12).fill(0), spectrum: new Array(FFT_BINS).fill(0), missing: [], extra: [], rms: 0, onset: false, flux: 0 };
     if (now - lastChordAt > 1500) setConn(false);
   }
 
@@ -2041,6 +2735,10 @@ function renderChords() {
     mMatchEl.textContent = `${pct}%`;
     mfMatchEl.style.width = `${pct}%`;
     mfMatchEl.classList.toggle("gold", !matched);
+    // onset detector: flux ratio plus a lamp held on for 140ms, since `onset` is
+    // true for a single reading and would otherwise be invisible.
+    mFluxEl.textContent = `${c.flux.toFixed(1)}x`;
+    mOnsetEl.classList.toggle("lit", now - lastOnsetAt < 140);
 
     const nowFb = currentFretboardChord(c.detected, matched);
     const nextFb = nextFretboardChord();
@@ -2071,6 +2769,8 @@ function renderChords() {
     renderBreakdown(null);
     mMatchEl.textContent = "—";
     mfMatchEl.style.width = "0%";
+    mFluxEl.textContent = "—";
+    mOnsetEl.classList.remove("lit");
     for (let i = 0; i < 12; i++) {
       chromaFills[i].style.height = "4%";
       chromaBars[i].classList.toggle("target", targetPcs.includes(i));
@@ -2165,8 +2865,7 @@ function chordPitchClasses(rawName: string): number[] {
   return iv.map((x) => (root + x) % 12);
 }
 
-// Open-string pitch classes for baritone D-G-B-E (low->high).
-const OPEN_PC = [2, 7, 11, 4];
+// Open-string pitch classes come from the active tuning (see TUNINGS).
 
 // Fallback voicing generator: when a chord isn't in the verified VOICINGS
 // table (e.g. F#maj7 and many 7th/m7 qualities the MIDI import surfaces),
@@ -2194,7 +2893,7 @@ function generatedVoicingCandidates(name: string, limit = 8): Voicing[] {
   const tones = [...new Set(pcs)];
   // per-string options: for each chord tone, the lowest fret (0..MAX_FRET)
   // on that string that sounds it; plus the "mute" option (null).
-  const options: Voicing[] = OPEN_PC.map((open) => {
+  const options: Voicing[] = tuning.openPc.map((open) => {
     const opts: Voicing = [];
     for (const t of tones) {
       const fret = (((t - open) % 12) + 12) % 12;
@@ -2211,7 +2910,7 @@ function generatedVoicingCandidates(name: string, limit = 8): Voicing[] {
       const sounded = pick.filter((f): f is number => f !== null);
       if (!sounded.length) return;
       const covered = new Set(
-        pick.map((f, i) => (f === null ? -1 : (OPEN_PC[i] + f) % 12)).filter((x) => x >= 0)
+        pick.map((f, i) => (f === null ? -1 : (tuning.openPc[i] + f) % 12)).filter((x) => x >= 0)
       );
       for (const t of tones) if (!covered.has(t)) return; // require full coverage
       // prefer: more strings sounding, then lower fret span, then lower frets
@@ -2239,22 +2938,25 @@ function generatedVoicingCandidates(name: string, limit = 8): Voicing[] {
   return out;
 }
 
-// Voicings are pure given the normalized chord name, but the render loop asks
-// for them every frame (via chordShapeState -> setShapeControls). Cache the
-// result so the DFS voicing search runs once per chord name, not per frame.
+// Voicings are pure given the normalized chord name and the tuning, but the
+// render loop asks for them every frame (via chordShapeState ->
+// setShapeControls). Cache the result so the DFS voicing search runs once per
+// chord name, not per frame. Keyed by tuning too, since the same name yields
+// entirely different shapes on a baritone.
 const voicingCache = new Map<string, Voicing[]>();
 
 function voicingsForChord(name: string): Voicing[] {
   const norm = normalizeChord(name);
   if (!norm) return [];
-  const cached = voicingCache.get(norm);
+  const key = `${tuning.id}:${norm}`;
+  const cached = voicingCache.get(key);
   if (cached) return cached;
   const out: Voicing[] = [];
   const seen = new Set<string>();
-  const verified = VOICINGS[norm];
+  const verified = verifiedVoicings()[norm];
   if (verified) addUniqueVoicing(out, seen, verified);
   for (const v of generatedVoicingCandidates(norm, 10)) addUniqueVoicing(out, seen, v);
-  voicingCache.set(norm, out);
+  voicingCache.set(key, out);
   return out;
 }
 
@@ -2284,7 +2986,7 @@ function shapeLabel(state: { index: number; count: number }): string {
 }
 
 function shapeTag(name: string, state: { index: number; count: number }, extra = ""): string {
-  if (!name) return "baritone";
+  if (!name) return tuning.spelling;
   const shape = state.count > 1 ? `shape ${shapeLabel(state)}` : "shape 1/1";
   return `${name}${extra} · ${shape}`;
 }
@@ -2433,7 +3135,7 @@ function updateTransitionCoach(force = false) {
   }
 
   transitionTagEl.textContent = `${nowName} -> ${nextName}${eta}`;
-  const actions = STRING_LABELS.map((label, i) => {
+  const actions = tuning.stringLabels.map((label, i) => {
     const from = nowState.voicing![i];
     const to = nextState.voicing![i];
     let kind = "move";
@@ -2505,7 +3207,7 @@ function drawFretboard(
   els.title.textContent = label;
   if (!voicing) {
     els.svg.innerHTML = `<text x="75" y="105" fill="${dim}" font-size="11" font-family="JetBrains Mono, monospace" text-anchor="middle">no diagram</text>`;
-    els.tag.textContent = name ? `${name} · baritone` : "baritone";
+    els.tag.textContent = name ? `${name} · ${tuning.spelling}` : tuning.spelling;
     return key;
   }
   els.tag.textContent = shapeTag(name, state);
@@ -2533,7 +3235,7 @@ function drawFretboard(
   for (let s = 0; s < nS; s++) {
     const x = x0 + s * dx;
     parts.push(`<line x1="${x}" y1="${y0}" x2="${x}" y2="${y0 + h}" stroke="${dim}" stroke-width="1.2"/>`);
-    parts.push(`<text x="${x}" y="${y0 + h + 18}" fill="${dim}" font-size="11" font-family="Chakra Petch, sans-serif" text-anchor="middle">${STRING_LABELS[s]}</text>`);
+    parts.push(`<text x="${x}" y="${y0 + h + 18}" fill="${dim}" font-size="11" font-family="Chakra Petch, sans-serif" text-anchor="middle">${tuning.stringLabels[s]}</text>`);
 
     const fret = voicing[s];
     if (fret === null) {

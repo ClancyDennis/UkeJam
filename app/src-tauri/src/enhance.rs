@@ -1,16 +1,27 @@
-//! AI tab enhancement — normalize a messy pasted tab into clean ChordPro via
-//! an OpenAI-compatible LLM proxy. Ported from the prototype's importer.py.
+//! LLM calls — tab enhancement (messy paste -> clean ChordPro, ported from the
+//! prototype's importer.py) and live practice coaching (graded bars -> advice).
 //!
 //! The call lives in Rust (not the webview) so the API key stays out of the
 //! frontend and we avoid browser CORS to localhost:4000.
 
 use serde_json::json;
+use std::time::Duration;
 
 // Defaults target the local dev proxy; override with env vars so the URL/key
 // aren't baked into the binary (and can point at a different proxy per machine).
 const DEFAULT_PROXY_URL: &str = "http://localhost:4000/v1/chat/completions";
 const DEFAULT_PROXY_KEY: &str = "sk-1234";
 const MODEL: &str = "claude-sonnet-4-6";
+/// Coaching model when nothing is configured. Same default as tab enhancement,
+/// but resolved separately so the two can diverge without a rebuild.
+const DEFAULT_COACH_MODEL: &str = "claude-sonnet-4-6";
+
+/// Tab enhancement converts a whole song and the user is waiting on a screen,
+/// so it can afford minutes.
+const ENHANCE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Coaching fires mid-practice. Advice that arrives two minutes later is about a
+/// part of the song the player has long since left, so give up early instead.
+const COACH_TIMEOUT: Duration = Duration::from_secs(20);
 
 const SYSTEM: &str = "\
 You convert guitar/ukulele tabs and chord charts into ChordPro format for a \
@@ -88,7 +99,38 @@ chorus), repeat the matching lyrics on those bar numbers.\n\
 (5) Keep the words verbatim from B; do not invent or translate lyrics.\n\
 (6) It's fine to leave many bars blank if B is short — only map what the lyrics cover.";
 
-/// What kind of enhancement to run.
+// Live practice coaching. Same split as SYSTEM_FUSE above: the app has already
+// graded every bar (see verdict.ts) and those verdicts are authoritative, so the
+// model is asked ONLY for the thing the app cannot compute — the pattern across
+// bars. It must never re-judge a bar or restate the note names, because it has
+// no audio and would be guessing at facts the app measured.
+const SYSTEM_COACH: &str = "\
+You are a ukulele practice coach. You are given a play-along app's own scoring of \
+the bars a player just performed. Each line is one bar:\n\
+  <barNumber>: expect <chord>, <what was heard> -> HIT | WRONG | MISS\n\
+HIT = played acceptably. WRONG = a different chord or wrong notes sounded. \
+MISS = nothing sounded (silence or a muted hand). 'late 120ms' / 'early 90ms' is \
+when the strum landed relative to the bar's downbeat.\n\
+These verdicts are measured facts. Treat them as correct.\n\
+Rules:\n\
+(1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \
+late' or 'the chorus is solid, the bridge falls apart' is useful. 'Bar 12 was \
+wrong' is not — the player already saw that on screen.\n\
+(2) Output at most 3 lines, each one short sentence, in this order: up to two \
+things to fix (most important first), then one thing that is working. Fewer lines \
+is fine. No line may exceed about 20 words.\n\
+(3) Do NOT restate note names, chord spellings, or bar numbers as a list, and do \
+NOT re-judge any bar. The app already shows all of that.\n\
+(4) Speak to the player in the second person, plainly and without praise padding. \
+No emoji, no markdown, no bullet characters, no headings, no code fences.\n\
+(5) Only mention timing if the lines actually carry early/late figures. If the \
+input says it is untimed, say nothing about timing or rhythm at all.\n\
+(6) If the bars show no clear pattern, say only what is working. Never invent a \
+problem to have something to report.";
+
+/// What kind of tab enhancement to run. Coaching is deliberately not a variant
+/// here: it has its own model and timeout, so it gets its own entry point
+/// (`coach_bars`) rather than a mode that would inherit enhancement's.
 pub enum Mode {
     /// Convert a messy pasted tab into clean ChordPro.
     Messy,
@@ -98,26 +140,41 @@ pub enum Mode {
     Fuse,
 }
 
-/// Resolve the proxy endpoint: env var > saved setting (Setup screen) >
-/// compiled-in localhost default. Saved settings matter most on iOS, where a
-/// localhost proxy can't exist and env vars can't be set.
-pub fn resolve_proxy(saved: &crate::settings::Settings) -> (String, String) {
-    let pick = |env: &str, saved: &str, default: &str| {
-        std::env::var(env)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| {
-                if saved.trim().is_empty() {
-                    default.to_string()
-                } else {
-                    saved.trim().to_string()
-                }
-            })
-    };
-    (
-        pick("UKEJAM_PROXY_URL", &saved.proxy_url, DEFAULT_PROXY_URL),
-        pick("UKEJAM_PROXY_KEY", &saved.proxy_key, DEFAULT_PROXY_KEY),
-    )
+/// Where a request should go and as whom.
+pub struct Endpoint {
+    pub url: String,
+    pub key: String,
+    /// Model for the coaching path. Tab enhancement uses the compiled-in MODEL.
+    pub coach_model: String,
+}
+
+/// env var > saved setting (Setup screen) > compiled-in default. Saved settings
+/// matter most on iOS, where a localhost proxy can't exist and env vars can't be
+/// set.
+fn pick(env: &str, saved: &str, default: &str) -> String {
+    std::env::var(env)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            if saved.trim().is_empty() {
+                default.to_string()
+            } else {
+                saved.trim().to_string()
+            }
+        })
+}
+
+/// Resolve the proxy endpoint from env vars and saved settings.
+pub fn resolve_proxy(saved: &crate::settings::Settings) -> Endpoint {
+    Endpoint {
+        url: pick("UKEJAM_PROXY_URL", &saved.proxy_url, DEFAULT_PROXY_URL),
+        key: pick("UKEJAM_PROXY_KEY", &saved.proxy_key, DEFAULT_PROXY_KEY),
+        coach_model: pick(
+            "UKEJAM_COACH_MODEL",
+            &saved.coach_model,
+            DEFAULT_COACH_MODEL,
+        ),
+    }
 }
 
 /// Send tab text to the proxy; return cleaned ChordPro (or an error string).
@@ -143,8 +200,43 @@ pub fn enhance_tab(
         ),
         Mode::Messy => (SYSTEM, format!("Convert this tab to ChordPro:\n\n{raw}")),
     };
+    chat(system, &user, MODEL, ENHANCE_TIMEOUT, proxy_url, proxy_key)
+}
+
+/// Turn a digest of graded bars (see `VerdictBuffer::digest`) into short practice
+/// advice. Separate entry point from `enhance_tab` because coaching runs on its
+/// own configurable model and a much shorter timeout.
+pub fn coach_bars(
+    digest: &str,
+    endpoint: &Endpoint,
+    reason: &str,
+) -> Result<String, String> {
+    // The reason is context, not an instruction — it tells the model whether the
+    // player just stopped, finished, or is mid-struggle, which changes what is
+    // worth saying.
+    let user = format!("Trigger: {reason}\n\nBars just played:\n\n{digest}");
+    chat(
+        SYSTEM_COACH,
+        &user,
+        &endpoint.coach_model,
+        COACH_TIMEOUT,
+        &endpoint.url,
+        &endpoint.key,
+    )
+}
+
+/// One chat-completions round trip. Returns the assistant's text with any stray
+/// ``` fences stripped.
+fn chat(
+    system: &str,
+    user: &str,
+    model: &str,
+    timeout: Duration,
+    proxy_url: &str,
+    proxy_key: &str,
+) -> Result<String, String> {
     let body = json!({
-        "model": MODEL,
+        "model": model,
         "temperature": 0,
         "messages": [
             { "role": "system", "content": system },
@@ -153,7 +245,7 @@ pub fn enhance_tab(
     });
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(timeout)
         .build()
         .map_err(|e| format!("http client: {e}"))?;
 

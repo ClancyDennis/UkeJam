@@ -28,7 +28,7 @@
         <div class="brand">
           <img class="brand-mark" src="/src/assets/ukejam-mark.png" alt="" aria-hidden="true" />
           <span class="logo">uke<span class="jam">jam</span><span class="brand-dot" aria-hidden="true"></span></span>
-          <span class="tagline">baritone · D G B E</span>
+          <span class="tagline" id="tagline">standard · G C E A</span>
         </div>
         <nav class="utils">
           <button class="util-btn" data-mode="arrangement" title="Arrangement">
@@ -189,6 +189,15 @@
             <div class="panel-title">Transition <span class="tag" id="transition-tag">song mode</span></div>
             <div class="transition-coach" id="transition-coach"></div>
           </div>
+
+          <!-- Coach: advice across bars, from the LLM. Deliberately NOT the
+               #coach line above, which renderChords() rewrites every frame. -->
+          <div class="panel coach-panel" id="coach-panel">
+            <div class="panel-title">Coach <span class="tag" id="coach-tag">across bars</span></div>
+            <div class="coach-advice" id="coach-advice">
+              <span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -219,6 +228,15 @@
                 </div>
                 <div class="metric">
                   <div class="metric-head"><span class="k">Detected peaks</span><span class="v" id="m-peakcount">0</span></div>
+                </div>
+                <!-- Onset detector: flux as a multiple of its own baseline (1.0
+                     = steady state), and a lamp on each detected attack. This is
+                     how the ONSET_RATIO threshold in audio.rs gets tuned. -->
+                <div class="metric">
+                  <div class="metric-head">
+                    <span class="k">Attack <span class="onset-lamp" id="m-onset"></span></span>
+                    <span class="v" id="m-flux">—</span>
+                  </div>
                 </div>
                 <div class="peaks-list" id="peaks-list"></div>
               </div>
@@ -281,6 +299,34 @@
         <div class="panel setup-panel">
           <div class="panel-title">
             <button class="back-btn" data-mode="play">← Play</button>
+            Instrument <span class="tag">tuning</span>
+          </div>
+          <div class="setup-body">
+            <p class="setup-copy">
+              Which ukulele are you playing? This sets the tuner's target notes
+              and every chord diagram. Most ukuleles — soprano, concert, tenor —
+              are standard G-C-E-A.
+            </p>
+            <div class="tuning-choice" id="tuning-choice">
+              <label class="tuning-option">
+                <input type="radio" name="tuning" value="standard" checked />
+                <span class="tuning-name">Standard</span>
+                <span class="tuning-spelling">G C E A</span>
+                <span class="tuning-note">soprano · concert · tenor</span>
+              </label>
+              <label class="tuning-option">
+                <input type="radio" name="tuning" value="baritone" />
+                <span class="tuning-name">Baritone</span>
+                <span class="tuning-spelling">D G B E</span>
+                <span class="tuning-note">larger body, lower pitch</span>
+              </label>
+            </div>
+            <div class="setup-status" id="tuning-status"></div>
+          </div>
+        </div>
+
+        <div class="panel setup-panel">
+          <div class="panel-title">
             Microphone Setup <span class="tag">calibration</span>
           </div>
           <div class="setup-body">
@@ -294,14 +340,15 @@
           </div>
         </div>
 
-        <div class="panel setup-panel ai-settings-panel">
-          <div class="panel-title">AI Enhance <span class="tag">endpoint</span></div>
+        <div class="panel setup-panel">
+          <div class="panel-title">AI <span class="tag">endpoint</span></div>
           <div class="setup-body">
             <p class="setup-copy">
-              ✨ AI enhance sends pasted tabs to an OpenAI-compatible endpoint.
-              Blank uses the default local dev proxy (localhost:4000) — fine on
-              desktop, but on iPhone/iPad there is no local proxy, so point this
-              at a reachable server instead.
+              ✨ AI enhance sends pasted tabs to an OpenAI-compatible endpoint,
+              and the practice coach sends your bar-by-bar score to the same
+              place. Blank uses the default local dev proxy (localhost:4000) —
+              fine on desktop, but on iPhone/iPad there is no local proxy, so
+              point this at a reachable server instead.
             </p>
             <input
               id="proxy-url"
@@ -317,6 +364,15 @@
               class="lib-input proxy-input"
               type="password"
               placeholder="API key (sent as Bearer)"
+            />
+            <input
+              id="coach-model"
+              class="lib-input proxy-input"
+              type="text"
+              placeholder="Coaching model (blank = default)"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
             />
             <button class="listen-btn ghost" id="proxy-save">Save endpoint</button>
             <div class="setup-status" id="proxy-status"></div>

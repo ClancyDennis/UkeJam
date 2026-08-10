@@ -28,7 +28,9 @@ rustfft = "6"
 rustysynth = "1.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
-# AVAudioSession glue (see ios_audio.rs) — cpal alone can't route mic/speaker on iOS.
+# AVAudioSession glue (see ios_audio.rs) — cpal alone can't route mic/speaker on
+# iOS. `block2` supplies the ObjC block type the notification observers take.
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
+block2 = "0.6"
 
