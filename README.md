@@ -227,6 +227,81 @@ Current observed results in this workspace:
 - `test_synthetic.py` currently reports **5/7**, not the old README's 7/7
   claim. The misses are extended/ambiguous chords (`A7`, `Dmaj7`).
 
+## Strum Direction (feasibility study)
+
+The app knows *when* you strummed (onset detection) but not which way your hand
+moved. Direction is the missing half of rhythm coaching — "your upstrokes are
+dragging" is exactly the cross-bar pattern the coach exists to surface.
+
+The proposed method reads the order the strings sound in: a downstroke sweeps
+string 4 → 1, an upstroke 1 → 4. Compare the observed order against those two
+templates and you have the direction.
+
+**The combinatorics work.** `strum_model.py` reads the app's own verified voicing
+tables out of `main.ts` and checks every shape:
+
+```bash
+.venv/bin/python strum_model.py
+```
+
+All 244 shapes are decidable — 76% from the first attack, the remaining 24% from
+the second, none ever ambiguous. The 24% are first-position standard-tuning shapes
+(`Am`, `F`, `D`, `A`, `Bm`…) where string 4 and string 1 land on the *same pitch*.
+That unison is symmetric between the two templates, so it cancels: you don't need
+to know which string made a pitch, only what order the pitches arrived in.
+
+**Whether the physics works is the open question**, and it is a real gate. A strum
+has to stagger the strings by enough time to measure, consistently, or the sequence
+never forms no matter how neat the templates are.
+
+```bash
+.venv/bin/python analyse_strums.py --self-check   # fast path == reference maths
+.venv/bin/python analyse_strums.py --synthetic    # known stagger, no uke needed
+```
+
+The synthetic pass already found the method's resolution floor, and it is **not**
+the estimator: a string sounded alone has its attack located to better than 0.1 ms,
+with near-identical latency across the frequency range (so the latency cancels in a
+difference). The floor comes from strings sounding *together* — each one's
+narrowband envelope picks up its neighbours' leakage and the attack shifts. Measured
+at a true 0 ms stagger: C 2.8 ms, G 2.6 ms, Am 1.9 ms, F 0.8 ms.
+
+So the method needs roughly **8 ms** of real stagger to commit, and reports
+*unknown* below that rather than guessing. That is a much higher bar than the ~3 ms
+originally assumed, and it is what real takes have to beat. **A shorter analysis hop
+will not help** — the limit is spectral overlap between the strings, not time
+resolution.
+
+To run the study with a real ukulele:
+
+```bash
+.venv/bin/python record_strums.py --plan          # what to record and why
+.venv/bin/python record_strums.py Am down 20      # then Am up, C down/up, F down/up
+.venv/bin/python analyse_strums.py 'clips/strums_*.npy'
+```
+
+Record `C`/`G` (decidable from the first attack) *and* `Am`/`F` (decidable only from
+the second) — the latter is the case most likely to break. Play naturally: an
+exaggerated slow sweep produces flattering numbers that won't hold up in real
+playing.
+
+Reading the verdict — it gates on **outcomes**, not on stagger alone:
+
+| Outcome | Meaning |
+|---|---|
+| GATE CLEARED | Rarely wrong and commits often enough to show. Build the detector; use the reported median margin as the confidence floor. |
+| PARTIAL | Not wrong when it commits, but unsure too often for a player-facing glyph. Do **not** lower the confidence floor to raise coverage — that converts "unsure" into "wrong". |
+| GATE NOT CLEARED | Either confidently wrong, or the real stagger sits at the leakage floor. Don't build on it. |
+
+Being *wrong* is disqualifying (a wrong glyph actively misleads a learner); being
+*unsure* is only a coverage limit. The analyser reports those separately for that
+reason. A run also reports what `ONSET_RATIO` real audio supports — the shipped
+value in `audio.rs` is 2.2, calibrated against synthetic sines only, so that is
+worth correcting regardless of what happens with direction.
+
+Recordings land in `clips/` (gitignored) as raw samples, so the analysis can be
+re-run as the algorithm changes without playing everything again.
+
 ## Important Files
 
 | Path | Role |
@@ -240,9 +315,13 @@ Current observed results in this workspace:
 | `app/src-tauri/src/chords.rs` | Chord templates, pitch classes, missing/extra diff |
 | `app/src-tauri/src/backing.rs` | MIDI backing playback through `rustysynth` |
 | `app/src-tauri/src/enhance.rs` | Local OpenAI-compatible proxy calls for tab cleanup |
+| `app/src/verdict.ts` | Per-bar scoring: HIT/WRONG/MISS, strum timing, coach digest |
+| `strum_model.py` | Voicings read from `main.ts`; down/up templates, unison filter |
+| `record_strums.py` | Records labelled strums for the direction study |
+| `analyse_strums.py` | Measures strum stagger; decides whether direction is viable |
 | `chords.py` | Python detector reference |
 | `feedback.py` | Python missing/extra feedback reference |
-| `scorer.py` | Python play-along scoring loop |
+| `scorer.py` | Python play-along scoring loop (ported to `verdict.ts`) |
 | `robustness.py` | Backing-track bleed characterization |
 
 ## LLM Proxy
@@ -292,17 +371,22 @@ Demucs weights are large and should stay out of git.
 
 ## Known Gaps
 
-- The README and app state have moved faster than tests. The next hardening
-  step should be fixture tests for `song.ts`, `midi.ts`, `backing.rs` MIDI
-  filtering, and Rust/Python detector parity.
+- Coverage is still thin. `verify:voicings` and `verify:verdicts` cover the
+  voicing tables and the per-bar scorer; `song.ts`, `midi.ts`, `backing.rs` MIDI
+  filtering, and Rust/Python detector parity still have no fixture tests.
 - Live chord detection still needs more real-instrument tuning across mics,
   strum strengths, muting, and room noise.
+- **Onset detection is uncalibrated.** `ONSET_RATIO = 2.2` in `audio.rs` was set
+  against synthetic sines and has never seen a real ukulele. Run
+  `analyse_strums.py` on real takes to find the value the instrument supports —
+  too high and strums are silently missed, which quietly corrupts every per-bar
+  timing offset built on top of it.
 - Speaker playback contaminates mic input. Headphones/backing isolation should
   remain the default practice path.
-- The frontend library is currently `localStorage`; a native persisted store is
-  still a likely app milestone.
 - Extended chord naming and simplified playable chord naming can diverge,
   especially from MIDI extraction.
+- Strum direction is unresolved — the study above has to run against a real
+  instrument before any of it is built.
 
 ## Direction
 
