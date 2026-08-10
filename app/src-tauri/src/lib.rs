@@ -4,10 +4,154 @@ mod chords;
 mod enhance;
 mod soundfont;
 
+use std::sync::Mutex;
+
 use audio::{AudioState, Mode};
 use backing::{BackingState, BackingStatus};
 use base64::Engine as _;
-use tauri::{AppHandle, State};
+use tauri::{
+    plugin::{Builder as PluginBuilder, TauriPlugin},
+    AppHandle, Runtime, State, Url,
+};
+
+// ---- OpenRouter OAuth return hook (ported from Wormdrop Battleground) ----
+//
+// The OpenRouter PKCE login (src/openrouter.ts) navigates the whole webview to
+// openrouter.ai/auth and asks it to redirect back with ?code=…. OpenRouter only
+// accepts http(s) callback URLs, so the packaged app — whose origin is
+// tauri://localhost (http://tauri.localhost on Windows) — hands it the
+// localhost sentinel below instead. Nothing actually serves that address: this
+// hook catches the redirect before it 404s, cancels it, and re-enters the app
+// at its real origin carrying the same query string, so the JS completion path
+// finishes the code-for-key exchange exactly as it does in a plain browser.
+const OPENROUTER_CALLBACK_PATH: &str = "/openrouter-callback";
+
+// The app URL the webview most recently displayed (dev URL or
+// tauri://localhost). Tracked LIVE, not pinned once: a dev session can host two
+// copies of the app (the dev server and the bundled assets), and the OAuth
+// return must re-enter the copy the login actually started from — its origin
+// holds the PKCE verifier (localStorage is per-origin).
+static APP_URL: Mutex<Option<Url>> = Mutex::new(None);
+
+fn remember_app_url(url: &Url) {
+    *APP_URL.lock().expect("app url lock poisoned") = Some(url.clone());
+}
+
+fn is_openrouter_callback(url: &Url) -> bool {
+    matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+        && url.path() == OPENROUTER_CALLBACK_PATH
+}
+
+// OpenRouter's login stack (Clerk + bot protection) sometimes finishes an
+// embedded-webview sign-in by landing on the openrouter.ai homepage instead of
+// resuming the /auth authorize flow — the webview has no back button, so the
+// player would be stranded outside the app. The webview only ever visits
+// openrouter.ai for this login, so any arrival at its homepage is that strand:
+// bounce back into the app with a marker the JS turns into a "tap Connect
+// again" message (the session cookie survives, so the retry goes straight to
+// the authorize screen).
+const OPENROUTER_STRAND_MARKER_PATH: &str = "/openrouter-stranded";
+
+// Client-side route changes (Next.js) never reach the native navigation hook,
+// so a strand that happens via SPA routing would go unseen. This script,
+// injected into every page, forces a real navigation the hook can intercept
+// whenever an openrouter.ai page settles on the homepage path.
+const OPENROUTER_STRAND_WATCH_JS: &str = r#"
+(function () {
+  if (window.location.hostname !== "openrouter.ai") { return; }
+  setInterval(function () {
+    if (window.location.pathname === "/") {
+      window.location.replace("http://localhost/openrouter-stranded");
+    }
+  }, 500);
+})();
+"#;
+
+fn is_openrouter_strand(url: &Url) -> bool {
+    (url.host_str() == Some("openrouter.ai") && url.path() == "/")
+        || (matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+            && url.path() == OPENROUTER_STRAND_MARKER_PATH)
+}
+
+fn app_reentry_url(query: Option<&str>) -> Url {
+    let mut target = APP_URL
+        .lock()
+        .expect("app url lock poisoned")
+        .clone()
+        .unwrap_or_else(|| {
+            let origin = if cfg!(windows) {
+                "http://tauri.localhost/"
+            } else {
+                "tauri://localhost/"
+            };
+            Url::parse(origin).expect("static app origin must parse")
+        });
+    target.set_path("/");
+    target.set_query(query);
+    target.set_fragment(None);
+    target
+}
+
+fn openrouter_oauth_return<R: Runtime>() -> TauriPlugin<R> {
+    PluginBuilder::new("openrouter-oauth-return")
+        .js_init_script(OPENROUTER_STRAND_WATCH_JS.to_string())
+        .setup(|app, _api| {
+            // Deterministic origin pin: the config knows the dev URL the
+            // webview loads from; in production dev_url is None and the
+            // tauri:// fallback is correct.
+            if let Some(dev_url) = app.config().build.dev_url.clone() {
+                remember_app_url(&dev_url);
+            }
+            Ok(())
+        })
+        .on_webview_ready(|webview| {
+            // Pin the app origin as soon as the webview exists: relying on the
+            // navigation hook to see the very first load is timing-dependent
+            // per platform.
+            if let Ok(url) = webview.url() {
+                if matches!(url.scheme(), "http" | "tauri") {
+                    remember_app_url(&url);
+                }
+            }
+        })
+        .on_navigation(|webview, url| {
+            let target = if is_openrouter_callback(url) {
+                // OpenRouter redirects with ONLY ?code=… — the callback URL's
+                // own query (our openrouter_callback=1 marker) is stripped.
+                // The JS return-leg detection needs marker AND code, so
+                // re-stamp it.
+                let query = match url.query() {
+                    Some(q) if q.contains("openrouter_callback=") => q.to_string(),
+                    Some(q) if !q.is_empty() => format!("openrouter_callback=1&{q}"),
+                    _ => "openrouter_callback=1".to_string(),
+                };
+                Some(app_reentry_url(Some(&query)))
+            } else if is_openrouter_strand(url) {
+                Some(app_reentry_url(Some("openrouter_stranded=1")))
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                let webview = webview.clone();
+                // Deferred: navigating from inside the navigation policy
+                // handler would re-enter the webview while it awaits this
+                // verdict.
+                tauri::async_runtime::spawn(async move {
+                    let _ = webview.navigate(target);
+                });
+                return false;
+            }
+            // Every non-intercepted app-scheme navigation updates the origin
+            // the next OAuth return should land on (https pages are
+            // OpenRouter's side of the flow; about:blank and friends are
+            // noise).
+            if matches!(url.scheme(), "http" | "tauri") {
+                remember_app_url(url);
+            }
+            true
+        })
+        .build()
+}
 
 #[tauri::command]
 fn start_tuner(app: AppHandle, state: State<AudioState>) -> Result<(), String> {
@@ -87,6 +231,14 @@ async fn test_ai(app: AppHandle, config: enhance::AiConfig) -> Result<String, St
         .map_err(|e| format!("task join: {e}"))?
 }
 
+/// Trade an OpenRouter PKCE auth code for an API key (see openrouter.ts).
+#[tauri::command]
+async fn openrouter_exchange(code: String, verifier: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || enhance::openrouter_exchange(&code, &verifier))
+        .await
+        .map_err(|e| format!("task join: {e}"))?
+}
+
 // ---- backing-track playback (rustysynth) ----
 
 /// Load MIDI as the backing track. `midi` is base64 (decoded here, rather than
@@ -144,9 +296,22 @@ fn backing_status(state: State<BackingState>) -> BackingStatus {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The WebContent process can die under memory pressure (field-hit in
+    // Wormdrop right after the OpenRouter OAuth round trip) and tauri's
+    // default leaves a dead view until something reloads it at the start URL —
+    // dropping the query (and with it the one-shot auth code). Reload the URL
+    // the crash happened on instead.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let builder = builder.on_web_content_process_terminate(|webview| {
+        if let Ok(current) = webview.url() {
+            let _ = webview.navigate(current);
+        }
+    });
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_local_llm::init())
+        .plugin(openrouter_oauth_return())
         .manage(AudioState::default())
         .manage(BackingState::default())
         .invoke_handler(tauri::generate_handler![
@@ -160,6 +325,7 @@ pub fn run() {
             enhance_tab,
             ai_models,
             test_ai,
+            openrouter_exchange,
             load_backing,
             set_backing_channels,
             play_backing,

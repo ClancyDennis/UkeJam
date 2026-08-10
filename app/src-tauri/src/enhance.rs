@@ -327,6 +327,32 @@ pub fn list_models(config: &AiConfig) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+const OPENROUTER_KEY_URL: &str = "https://openrouter.ai/api/v1/auth/keys";
+
+/// Finish the OpenRouter PKCE login: trade the one-shot auth code (plus the
+/// verifier the frontend kept) for a long-lived API key. Runs in Rust so the
+/// webview never has to POST cross-origin to openrouter.ai.
+pub fn openrouter_exchange(code: &str, verifier: &str) -> Result<String, String> {
+    let resp = http_client()?
+        .post(OPENROUTER_KEY_URL)
+        .json(&json!({
+            "code": code,
+            "code_verifier": verifier,
+            "code_challenge_method": "S256",
+        }))
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("OpenRouter sign-in failed ({})", resp.status()));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| format!("bad response: {e}"))?;
+    data["key"]
+        .as_str()
+        .or_else(|| data["api_key"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "OpenRouter did not return an API key".into())
+}
+
 /// A live-fire round trip that proves the whole configuration works — key,
 /// model id, endpoint, or the on-device model. Returns the model's reply.
 pub fn test_connection(app: &AppHandle, config: &AiConfig) -> Result<String, String> {

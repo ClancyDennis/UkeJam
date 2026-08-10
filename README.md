@@ -146,9 +146,11 @@ through a provider chosen in the **⚙ Setup** screen:
   `build.rs` compiles a Swift helper binary best-effort; without the macOS 26
   SDK the build still succeeds and the option reports unavailable
   (`UKEJAM_SKIP_LOCALLLM_HELPER=1` skips it explicitly).
-- **OpenRouter** — paste an API key from
-  [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) and pick
-  any model from its catalog.
+- **OpenRouter** — one-tap PKCE sign-in (Connect OpenRouter navigates the
+  webview through openrouter.ai/auth and back; a Rust navigation hook routes
+  the redirect into the packaged app), or paste an API key from
+  [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). Either
+  way, pick any model from its catalog.
 - **OpenAI-compatible endpoint** — any base URL speaking the OpenAI chat
   protocol (OpenAI itself, LiteLLM, LM Studio, Ollama, a local proxy). The
   API key is optional for keyless local servers.

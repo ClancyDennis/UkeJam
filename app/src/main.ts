@@ -12,6 +12,17 @@ import {
   type AiProviderId,
 } from "./ai";
 import {
+  buildOpenRouterLoginUrl,
+  cleanOpenRouterCallbackUrl,
+  cleanOpenRouterStrandUrl,
+  createCodeVerifier,
+  exchangeOpenRouterCodeInBrowser,
+  isOpenRouterCallback,
+  isOpenRouterCodeReturn,
+  isOpenRouterStrand,
+  openRouterCallbackUrl,
+} from "./openrouter";
+import {
   parseMidi,
   midiToChordChart,
   parseChordChart,
@@ -1913,6 +1924,9 @@ const aiModelList = document.getElementById("ai-model-list") as HTMLDataListElem
 const aiScanBtn = document.getElementById("ai-scan-btn") as HTMLButtonElement;
 const aiTestBtn = document.getElementById("ai-test-btn") as HTMLButtonElement;
 const aiStatusEl = document.getElementById("ai-status")!;
+const aiOrActions = document.getElementById("ai-or-actions")!;
+const aiOrLoginBtn = document.getElementById("ai-or-login") as HTMLButtonElement;
+const aiOrDisconnectBtn = document.getElementById("ai-or-disconnect") as HTMLButtonElement;
 
 function aiEnhanceProblem(): string | null {
   return aiConfigProblem(aiConfig, appleStatus);
@@ -1928,7 +1942,7 @@ const AI_PROVIDER_NOTES: Record<AiProviderId, string> = {
   apple:
     "Nothing leaves this device. The on-device model is small — long or messy tabs may come out better on a cloud model.",
   openrouter:
-    'One account, every major model. Create a key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">openrouter.ai/settings/keys</a> and paste it below.',
+    'One account, every major model. Connect with one tap below, or create a key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">openrouter.ai/settings/keys</a> and paste it.',
   openai:
     "Works with OpenAI, LiteLLM, LM Studio, Ollama — anything speaking the OpenAI chat protocol. The API key is optional for keyless local servers.",
 };
@@ -1968,6 +1982,7 @@ function renderAiPanel() {
   aiKeyField.hidden = provider === "apple";
   aiModelField.hidden = provider === "apple";
   aiScanBtn.hidden = provider === "apple";
+  updateOpenRouterButtons();
   aiBaseUrlInput.value = aiConfig.baseUrl || AI_PROVIDERS.openai.defaultBaseUrl;
   aiKeyInput.value = aiConfig.apiKey;
   aiModelInput.value = aiConfig.model;
@@ -1994,6 +2009,7 @@ aiBaseUrlInput.addEventListener("input", () => {
 aiKeyInput.addEventListener("input", () => {
   aiConfig.apiKey = aiKeyInput.value;
   saveAiConfig(aiConfig);
+  updateOpenRouterButtons();
   renderAiStatusLine();
 });
 aiModelInput.addEventListener("input", () => {
@@ -2062,8 +2078,198 @@ async function probeAppleAvailability() {
   renderAiPanel();
 }
 
+// --- OpenRouter one-tap sign-in (PKCE) ---
+// The login navigates the whole webview to openrouter.ai and back, so this
+// module reloads mid-flow: the verifier (and, after the return leg, the code)
+// live in storage until the exchange finishes. Ported from Wormdrop.
+const OPENROUTER_PKCE_STORAGE_KEY = "ukejam.openrouter.pkce.v1";
+const OPENROUTER_PKCE_MAX_AGE_MS = 15 * 60 * 1000;
+
+type PendingPkce = { verifier: string; createdAt?: number; code?: string };
+
+function pendingOpenRouterRecord(): PendingPkce | null {
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      const raw = storage.getItem(OPENROUTER_PKCE_STORAGE_KEY);
+      if (!raw) continue;
+      const saved = JSON.parse(raw) as PendingPkce;
+      if (saved?.verifier && Date.now() - Number(saved.createdAt) < OPENROUTER_PKCE_MAX_AGE_MS) {
+        return saved;
+      }
+    } catch {
+      // Try the other storage implementation.
+    }
+  }
+  return null;
+}
+
+function pendingOpenRouterVerifier(): string {
+  return pendingOpenRouterRecord()?.verifier ?? "";
+}
+
+// The one-shot auth code arrives in the URL, which the return leg cleans
+// immediately — persist it next to the verifier so a webview crash between
+// the return and the exchange can resume at next boot instead of eating the
+// sign-in (field-hit in Wormdrop: WebContent died mid-boot).
+function stampPendingOpenRouterCode(code: string | null) {
+  const record = pendingOpenRouterRecord();
+  if (!record?.verifier || !code) return;
+  const pending = JSON.stringify({ ...record, code });
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      storage.setItem(OPENROUTER_PKCE_STORAGE_KEY, pending);
+    } catch {}
+  }
+}
+
+function clearOpenRouterVerifier() {
+  try {
+    localStorage.removeItem(OPENROUTER_PKCE_STORAGE_KEY);
+  } catch {}
+  try {
+    sessionStorage.removeItem(OPENROUTER_PKCE_STORAGE_KEY);
+  } catch {}
+}
+
+function updateOpenRouterButtons() {
+  const isOpenRouter = aiConfig.provider === "openrouter";
+  const hasKey = Boolean(aiConfig.apiKey.trim());
+  aiOrActions.hidden = !isOpenRouter;
+  aiOrLoginBtn.hidden = hasKey;
+  aiOrDisconnectBtn.hidden = !hasKey;
+}
+
+// Land the player on the Setup screen (where the OpenRouter card and its
+// status line live) — used by every OAuth return path.
+function openSetupView() {
+  (document.querySelector('.util-btn[data-mode="cal-mic"]') as HTMLButtonElement | null)?.click();
+}
+
+async function startOpenRouterLogin() {
+  const verifier = createCodeVerifier();
+  // In the packaged Tauri app this is a localhost sentinel OpenRouter will
+  // accept (the app's own tauri:// origin would be rejected, stranding the
+  // player on openrouter.ai); the Rust hook routes its redirect back here.
+  const callback = openRouterCallbackUrl(window.location.href, nativeRuntime);
+  const pending = JSON.stringify({ verifier, createdAt: Date.now() });
+  // The verifier must survive the round-trip through openrouter.ai. If the
+  // browser blocks BOTH storages (private mode, storage denied), the return
+  // leg could never complete — fail here, before navigating away, instead of
+  // silently after sign-in.
+  let stored = false;
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      storage.setItem(OPENROUTER_PKCE_STORAGE_KEY, pending);
+      stored = true;
+    } catch {
+      // Try the other storage implementation.
+    }
+  }
+  if (!stored) {
+    setAiStatus(
+      "your browser is blocking site storage, so the secure sign-in can't complete — allow storage for this site and try again",
+      "err"
+    );
+    return;
+  }
+  try {
+    window.location.assign(await buildOpenRouterLoginUrl(callback.toString(), verifier));
+  } catch (e) {
+    setAiStatus(`could not start the OpenRouter sign-in: ${e}`, "err");
+  }
+}
+
+async function finishOpenRouterExchange(code: string, verifier: string) {
+  setAiStatus("finishing secure sign-in…");
+  try {
+    const apiKey = nativeRuntime
+      ? await nativeInvoke<string>("openrouter_exchange", { code, verifier })
+      : await exchangeOpenRouterCodeInBrowser(code, verifier);
+    aiConfig.provider = "openrouter";
+    aiConfig.apiKey = apiKey;
+    if (!aiConfig.model.trim()) aiConfig.model = AI_PROVIDERS.openrouter.defaultModel;
+    saveAiConfig(aiConfig);
+    renderAiPanel();
+    setAiStatus("connected to OpenRouter — test the connection to be sure", "done");
+  } catch (e) {
+    setAiStatus(`${e} — please try connecting again`, "err");
+  } finally {
+    clearOpenRouterVerifier();
+  }
+}
+
+// The Rust navigation hook re-entered the app because OpenRouter's login flow
+// dumped the webview on its homepage instead of resuming /auth (its bot
+// protection severs the redirect chain in embedded webviews). The sign-in
+// itself succeeded and the session cookie survived, so a plain retry goes
+// straight to the authorize screen.
+function reportStrandedOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  if (!isOpenRouterStrand(url)) return;
+  window.history.replaceState({}, "", cleanOpenRouterStrandUrl(url));
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  setAiStatus(
+    "OpenRouter signed you in but didn't return to the app — tap Connect OpenRouter again; you're signed in now, so it should go straight to the authorize screen",
+    "err"
+  );
+}
+
+async function completeOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  const verifier = pendingOpenRouterVerifier();
+  if (!isOpenRouterCallback(url) && !isOpenRouterCodeReturn(url, Boolean(verifier))) return;
+  const code = url.searchParams.get("code");
+  stampPendingOpenRouterCode(code);
+  window.history.replaceState({}, "", cleanOpenRouterCallbackUrl(url));
+  // Land back on the OpenRouter card whatever happens next — including the
+  // failure paths, whose messages render there.
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  if (!verifier) {
+    // The return leg arrived but the verifier is gone — expired (15-minute
+    // limit) or dropped by the browser between the two legs. The code can't
+    // be exchanged without it; say so instead of silently doing nothing.
+    setAiStatus(
+      "sign-in returned, but its secure verifier had expired or was lost — tap Connect OpenRouter to try again",
+      "err"
+    );
+    return;
+  }
+  await finishOpenRouterExchange(code ?? "", verifier);
+}
+
+// A webview crash between the return leg and the key exchange reloads the
+// page with a clean URL. The code was persisted next to the verifier, so
+// finish the interrupted exchange instead of losing the sign-in.
+async function resumeInterruptedOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  if (isOpenRouterCallback(url) || isOpenRouterCodeReturn(url, Boolean(pendingOpenRouterVerifier()))) return;
+  const pending = pendingOpenRouterRecord();
+  if (!pending?.code || !pending?.verifier || aiConfig.apiKey.trim()) return;
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  await finishOpenRouterExchange(pending.code, pending.verifier);
+}
+
+aiOrLoginBtn.addEventListener("click", () => void startOpenRouterLogin());
+aiOrDisconnectBtn.addEventListener("click", () => {
+  aiConfig.apiKey = "";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+});
+
 renderAiPanel();
 void probeAppleAvailability();
+reportStrandedOpenRouterLogin();
+void completeOpenRouterLogin();
+void resumeInterruptedOpenRouterLogin();
 
 // Render the target chord-tones as present/missing tokens (the "where your
 // fingers are wrong" visual). Pulls the target chord's pitch classes and marks

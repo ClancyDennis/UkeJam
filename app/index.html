@@ -311,6 +311,11 @@
               <select id="ai-provider" class="lib-input"></select>
             </label>
             <p class="ai-note" id="ai-note"></p>
+            <!-- OpenRouter one-tap PKCE sign-in (alternative to pasting a key) -->
+            <div class="ai-actions" id="ai-or-actions" hidden>
+              <button class="listen-btn" id="ai-or-login">Connect OpenRouter</button>
+              <button class="listen-btn ghost" id="ai-or-disconnect">Disconnect</button>
+            </div>
             <label class="ai-field" id="ai-baseurl-field">
               <span class="ai-label">Base URL</span>
               <input
