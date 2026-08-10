@@ -1,0 +1,5 @@
+# SwiftPM build output. The macOS helper is normally built into Cargo's OUT_DIR by
+# build.rs; this only appears when the package is built in place by hand
+# (`swift build --package-path macos`) while iterating on the helper.
+.build/
+macos/.build/

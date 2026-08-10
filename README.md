@@ -24,7 +24,7 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Live chord detection | Working native Rust port: FFT → chroma → template match |
 | Missing / extra note feedback | Working for target chords |
 | Song library | Working in frontend `localStorage`; Python prototype uses SQLite |
-| Pasted tab / ChordPro import | Working, with local LLM proxy enhancement |
+| Pasted tab / ChordPro import | Working, with AI enhancement (Apple Intelligence on-device, OpenRouter, or any OpenAI-compatible endpoint) |
 | MIDI import | Working: parses SMF, derives timed chord chart, selects chord-source channels |
 | MIDI backing playback | Working via `rustysynth` + a user-installed SoundFont |
 | Timed chord highway | Working for MIDI/timed songs |
@@ -127,22 +127,36 @@ Current observed results in this workspace:
 | `app/src-tauri/src/audio.rs` | Mic capture, tuner, chroma chord detector |
 | `app/src-tauri/src/chords.rs` | Chord templates, pitch classes, missing/extra diff |
 | `app/src-tauri/src/backing.rs` | MIDI backing playback through `rustysynth` |
-| `app/src-tauri/src/enhance.rs` | Local OpenAI-compatible proxy calls for tab cleanup |
+| `app/src-tauri/src/enhance.rs` | Provider-routed chat calls (Apple on-device / remote) for tab cleanup |
+| `app/tauri-plugin-local-llm/` | Tauri plugin bridging Apple Foundation Models (iOS Swift plugin + macOS helper) |
+| `app/src/ai.ts` | AI provider config: persistence + provider registry |
 | `chords.py` | Python detector reference |
 | `feedback.py` | Python missing/extra feedback reference |
 | `scorer.py` | Python play-along scoring loop |
 | `robustness.py` | Backing-track bleed characterization |
 
-## LLM Proxy
+## AI Enhance providers
 
-Tab cleanup uses a local OpenAI-compatible endpoint:
+✨ AI enhance (tab cleanup, MIDI chart simplification, lyric fusion) runs
+through a provider chosen in the **⚙ Setup** screen:
 
-```text
-http://localhost:4000/v1/chat/completions
-```
+- **On this device (Apple Intelligence)** — Apple's on-device Foundation
+  model via `app/tauri-plugin-local-llm/` (iOS 26+ / macOS 26+ with Apple
+  Intelligence enabled). Nothing leaves the device. On macOS the plugin's
+  `build.rs` compiles a Swift helper binary best-effort; without the macOS 26
+  SDK the build still succeeds and the option reports unavailable
+  (`UKEJAM_SKIP_LOCALLLM_HELPER=1` skips it explicitly).
+- **OpenRouter** — paste an API key from
+  [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) and pick
+  any model from its catalog.
+- **OpenAI-compatible endpoint** — any base URL speaking the OpenAI chat
+  protocol (OpenAI itself, LiteLLM, LM Studio, Ollama, a local proxy). The
+  API key is optional for keyless local servers.
 
-The app calls it from Rust so browser CORS and frontend key exposure are
-avoided. If the proxy is down, the UI falls back to saving the raw chart.
+The settings persist in the frontend's `localStorage` and travel with each
+invoke; the remote calls themselves run in Rust so browser CORS against
+arbitrary endpoints is avoided. If the provider is unconfigured or the call
+fails, the UI falls back to saving the raw chart.
 
 ## Experiments
 

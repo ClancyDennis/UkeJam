@@ -2648,15 +2648,20 @@ body {
 .setup-view {
   flex: 1;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .setup-panel {
   max-width: 520px;
   width: 100%;
   margin-top: 40px;
+  /* the view scrolls; panels must not be crushed to fit it */
+  flex-shrink: 0;
 }
 
 .setup-body {
@@ -2684,6 +2689,60 @@ body {
 
 .setup-status.done {
   color: var(--teal);
+}
+
+.setup-status.err {
+  color: var(--red);
+}
+
+/* ---------- AI enhance settings (Setup view) ---------- */
+.ai-setup-panel {
+  margin-top: 0;
+  margin-bottom: 40px;
+}
+
+.ai-setup-body {
+  align-items: stretch;
+  text-align: left;
+  gap: 12px;
+  padding: 20px 14px;
+}
+
+.ai-setup-body .setup-copy {
+  max-width: none;
+}
+
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ai-note {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: -4px 0 0;
+  min-height: 16px;
+}
+
+.ai-note a {
+  color: var(--teal);
+}
+
+.ai-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* ---------- Corner label ---------- */

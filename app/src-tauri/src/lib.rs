@@ -49,20 +49,40 @@ fn stop_audio(state: State<AudioState>) {
     state.stop();
 }
 
-/// Normalize a messy pasted tab into clean ChordPro via the LLM proxy.
-/// Runs on a blocking thread so the UI stays responsive.
+/// Normalize a messy pasted tab into clean ChordPro via the configured AI
+/// provider. Runs on a blocking thread so the UI stays responsive.
 #[tauri::command]
 async fn enhance_tab(
+    app: AppHandle,
     raw: String,
     mode: Option<String>,
     lyrics: Option<String>,
+    config: enhance::AiConfig,
 ) -> Result<String, String> {
     let m = match mode.as_deref() {
         Some("midi") => enhance::Mode::Midi,
         Some("fuse") => enhance::Mode::Fuse,
         _ => enhance::Mode::Messy,
     };
-    tauri::async_runtime::spawn_blocking(move || enhance::enhance_tab(&raw, m, lyrics.as_deref()))
+    tauri::async_runtime::spawn_blocking(move || {
+        enhance::enhance_tab(&app, &raw, m, lyrics.as_deref(), &config)
+    })
+    .await
+    .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Scan a remote endpoint's model catalog for the Setup view's model picker.
+#[tauri::command]
+async fn ai_models(config: enhance::AiConfig) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || enhance::list_models(&config))
+        .await
+        .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Live-fire test of the configured provider; returns the model's reply.
+#[tauri::command]
+async fn test_ai(app: AppHandle, config: enhance::AiConfig) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || enhance::test_connection(&app, &config))
         .await
         .map_err(|e| format!("task join: {e}"))?
 }
@@ -126,6 +146,7 @@ fn backing_status(state: State<BackingState>) -> BackingStatus {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_local_llm::init())
         .manage(AudioState::default())
         .manage(BackingState::default())
         .invoke_handler(tauri::generate_handler![
@@ -137,6 +158,8 @@ pub fn run() {
             set_gate,
             stop_audio,
             enhance_tab,
+            ai_models,
+            test_ai,
             load_backing,
             set_backing_channels,
             play_backing,
