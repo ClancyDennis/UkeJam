@@ -31,6 +31,25 @@ export interface BarVerdict {
   // have no downbeat to measure against.
   offsetMs: number | null;
   section: string; // enclosing {comment:} label, "" when the song has none
+  // Rhythm: how the bar was strummed, independent of whether the chord was right.
+  // `null` for untimed songs, which have no beat grid to score against.
+  rhythm: BarRhythm | null;
+}
+
+/// How a bar's strums landed against its beats.
+///
+/// Deliberately separate from the chord verdict. A player can hold a perfect Am and
+/// strum it once when the bar wanted four; that bar is a chord HIT and a rhythm
+/// failure, and collapsing the two would hide the thing they most need to hear.
+export interface BarRhythm {
+  strums: number;   // attacks detected in the bar
+  beats: number;    // beats the bar contains
+  /// Signed ms from the nearest grid position (half beats — see scoreRhythm) for
+  /// each strum, in order: negative early, positive late. Length matches `strums`.
+  offsets: number[];
+  /// Strums that landed within TIMING_TOLERANCE_MS of a grid position. Named for
+  /// what a player would call it; the grid includes off-beats.
+  onBeat: number;
 }
 
 /// The best moment of a bar, accumulated frame by frame. "Best" = highest
@@ -45,6 +64,11 @@ export interface BarAccumulator {
   missing: string[];
   extra: string[];
   onsetAt: number | null; // performance.now() of the first attack in the bar
+  // Every attack in the bar, not just the first. The first onset answers "were you
+  // late into this chord"; the whole list answers "did you strum the rhythm" —
+  // which is the more basic skill and works on any chord and any tuning, because it
+  // needs only that an attack happened, not which string came first.
+  onsets: number[];
 }
 
 export function newAccumulator(): BarAccumulator {
@@ -55,6 +79,7 @@ export function newAccumulator(): BarAccumulator {
     missing: [],
     extra: [],
     onsetAt: null,
+    onsets: [],
   };
 }
 
@@ -71,7 +96,10 @@ export interface Reading {
 }
 
 export function accumulate(acc: BarAccumulator, r: Reading, now: number): void {
-  if (r.onset && acc.onsetAt === null) acc.onsetAt = now;
+  if (r.onset) {
+    if (acc.onsetAt === null) acc.onsetAt = now;
+    acc.onsets.push(now);
+  }
   if (!r.active) return;
   acc.sounded = true;
   if (r.cleanliness >= acc.cleanliness) {
@@ -101,6 +129,10 @@ export function seal(
     expected: string;
     section: string;
     barStartAt: number | null;
+    // Beat grid for rhythm scoring. Omitted (or 0) for untimed songs, which have
+    // no grid — the bar still gets a chord verdict, just no rhythm.
+    beats?: number;
+    secPerBeat?: number;
   }
 ): BarVerdict {
   // Nothing sounded at all: silence or a muted hand. That is a different
@@ -110,6 +142,13 @@ export function seal(
   const offsetMs =
     ctx.barStartAt !== null && acc.onsetAt !== null
       ? Math.round(acc.onsetAt - ctx.barStartAt)
+      : null;
+  // Rhythm needs a downbeat and a grid. Wait-for-me bars pass barStartAt as null
+  // (the gap between downbeat and strum is the mode working, not the player), and
+  // that correctly suppresses rhythm scoring too.
+  const rhythm =
+    ctx.barStartAt !== null && ctx.beats && ctx.secPerBeat
+      ? scoreRhythm(acc.onsets, ctx.barStartAt, ctx.beats, ctx.secPerBeat)
       : null;
   return {
     bar: ctx.bar,
@@ -122,6 +161,7 @@ export function seal(
     cleanliness: acc.cleanliness,
     offsetMs,
     section: ctx.section,
+    rhythm,
   };
 }
 
@@ -129,6 +169,72 @@ export function seal(
 /// is mostly detector latency and window quantization (~186ms FFT windows, so
 /// onset time is coarse) rather than the player being early or late.
 export const TIMING_TOLERANCE_MS = 70;
+
+/// Score a bar's strums against its rhythmic grid.
+///
+/// The grid is HALF beats, not beats. Essentially every ukulele strumming pattern
+/// places strums on beats and on the "and" between them (D-DU-UDU and friends), so
+/// an off-beat strum is a correct target, not an error. Scoring against whole beats
+/// only, a bar of straight eighths reports every off-beat as 250ms out — and since
+/// rounding pushes them all the same way, four perfectly even eighths came out as
+/// "rushing". Off-beats are legitimate; being off the half-beat grid is what
+/// actually indicates loose time.
+///
+/// Each strum matches its NEAREST grid position rather than being assigned in
+/// order. Order assignment breaks badly on the common case of a missed first strum:
+/// every later strum would then be compared against the wrong position, turning one
+/// mistake into a bar full of them. Nearest keeps errors local.
+export function scoreRhythm(
+  onsets: number[],
+  barStartAt: number,
+  beats: number,
+  secPerBeat: number
+): BarRhythm {
+  const stepMs = (secPerBeat * 1000) / 2; // half-beat grid
+  const steps = beats * 2;
+  // Signed distance to the nearest grid position. The SIGN is only meaningful
+  // within half a step: at 120bpm the grid is every 250ms, so a strum 130ms after a
+  // beat is equally describable as 130ms late for that beat or 120ms early for the
+  // off-beat. Those are the same event, and nothing distinguishes them without
+  // knowing which position the player was aiming at — which needs the song's
+  // strumming pattern, and the Song model has none. So the magnitude is the honest
+  // signal (how loose the time is) and callers must not read drag-vs-rush from it.
+  const offsets = onsets.map((t) => {
+    const rel = t - barStartAt;
+    const nearest = Math.max(0, Math.min(steps - 1, Math.round(rel / stepMs)));
+    return Math.round(rel - nearest * stepMs);
+  });
+  return {
+    strums: onsets.length,
+    beats,
+    offsets,
+    onBeat: offsets.filter((o) => Math.abs(o) < TIMING_TOLERANCE_MS).length,
+  };
+}
+
+/// One-line summary of a bar's rhythm, or "" when there is nothing to say.
+///
+/// Two things are deliberately NOT said here, because the app cannot support either
+/// without knowing the song's strumming pattern (the Song model has no pattern
+/// field):
+///
+///   - whether the strum COUNT was right. Half notes, eighths and syncopation are
+///     all correct playing; "1 of 4 beats" would be an accusation, not feedback.
+///   - whether the player was dragging or rushing. On a half-beat grid a strum
+///     130ms after a beat is equally "130ms late for the beat" and "120ms early for
+///     the off-beat" — the same event, indistinguishable without a known target.
+///     Reporting a direction would be a coin flip presented as a fact.
+///
+/// What survives is how TIGHT the time was: how far strums sat from the nearest grid
+/// position. That holds for any pattern, since every pattern is built on
+/// subdivisions of the beat.
+export function rhythmLabel(r: BarRhythm | null): string {
+  if (!r || !r.beats) return "";
+  if (!r.strums) return "no strum";
+  if (r.onBeat === r.strums) return "in time";
+  if (r.onBeat === 0) return "off the beat";
+  return `${r.onBeat}/${r.strums} in time`;
+}
 
 export function timingLabel(offsetMs: number | null): "early" | "late" | null {
   if (offsetMs === null || Math.abs(offsetMs) < TIMING_TOLERANCE_MS) return null;
@@ -194,6 +300,28 @@ export class VerdictBuffer {
     return { hits: w.filter((v) => v.status === "HIT").length, total: w.length };
   }
 
+  /// Rolling rhythm read over the last `n` bars, or "" when there is nothing to
+  /// say. Prefixed with " · " so it appends to the practice subtitle.
+  ///
+  /// Reports the count problem in preference to the timing one: a player who
+  /// strummed twice where four beats were wanted needs that before they need
+  /// milliseconds, and saying both at once reads as noise.
+  rhythmSummary(n: number): string {
+    const w = this.recent(n).filter((v) => v.rhythm && v.rhythm.beats);
+    if (w.length < 2) return "";
+    let strums = 0;
+    let onBeat = 0;
+    for (const v of w) {
+      strums += v.rhythm!.strums;
+      onBeat += v.rhythm!.onBeat;
+    }
+    if (!strums) return " · no strums";
+    // Only tightness, for the reasons in rhythmLabel: neither the strum count nor
+    // the direction of a timing error is knowable without the song's strumming
+    // pattern, and reporting either would mean scolding correct playing or guessing.
+    return ` · ${onBeat}/${strums} in time`;
+  }
+
   /// Serialize a window for the LLM. One line per bar, facts only.
   ///
   /// The app owns the structure and the verdicts; the model is asked only for
@@ -235,5 +363,13 @@ function describe(v: BarVerdict): string {
   }
   const timing = timingLabel(v.offsetMs);
   if (timing) parts.push(`${timing} ${Math.abs(v.offsetMs!)}ms`);
+  // Rhythm as counts only: strums played, and how many landed on the grid. No
+  // drag/rush claim — see rhythmLabel for why that isn't derivable — and the strum
+  // count is given as raw information, with the prompt told explicitly that a count
+  // below the beat count is not an error.
+  if (v.rhythm && v.rhythm.beats) {
+    const r = v.rhythm;
+    parts.push(`${r.strums} strums in ${r.beats} beats, ${r.onBeat} in time`);
+  }
   return `${parts.join(", ")} -> ${v.status}`;
 }

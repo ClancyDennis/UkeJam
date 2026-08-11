@@ -936,11 +936,15 @@ function updatePracticeUi() {
   // short enough that fixing a rough patch shows up while you're still on it.
   const score = verdicts.hitCount(16);
   const scoreText = score.total ? ` · ${score.hits}/${score.total} bars` : "";
+  // Rhythm alongside the chord score, because they fail independently: a player
+  // can hold every chord perfectly and still strum once where the bar wants four.
+  const rhythmText = timed ? verdicts.rhythmSummary(16) : "";
 
   songTagEl.textContent = artist ? `${title} · ${artist}` : title;
   practiceTitleEl.textContent = artist ? `${title} — ${artist}` : title;
   practiceSubEl.textContent =
-    (timed ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) + scoreText;
+    (timed ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) +
+    scoreText + rhythmText;
   practicePosEl.textContent = `${songIdx + 1}/${loadedSong.chordSequence.length} · ${current}`;
   practiceNextEl.textContent = next ? `next ${next}` : "last chord";
 }
@@ -1557,6 +1561,10 @@ function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number | null
       // between downbeat and strum is the mode working as intended, not the
       // player being late. Report no timing rather than a false accusation.
       barStartAt: currentBarWaited ? null : currentBarStartedAt,
+      // Beat grid for rhythm scoring. Untimed songs pass 0 and get no rhythm
+      // verdict, which is right: there is no grid to have played against.
+      beats: timed ? beatsPerBar : 0,
+      secPerBeat: timed ? secPerBeat : 0,
     });
     verdicts.push(sealed);
   }
@@ -2294,6 +2302,35 @@ function drawTrailToken(
   if (timing) {
     ctx.font = `700 ${Math.round(13 * scale)}px "Chakra Petch", sans-serif`;
     ctx.fillText(timing === "early" ? "▲" : "▼", cx + tw / 2 + 9 * scale, y + 1);
+  }
+
+  // Strum dots, left of the token: one per strum ACTUALLY PLAYED, filled when it
+  // landed on the rhythmic grid (beat or half-beat) and hollow when it drifted.
+  //
+  // Deliberately not one dot per beat with the misses hollow: that would tell a
+  // player strumming sensible half notes they missed two beats, when the app has no
+  // idea what pattern the song wants (the Song model has no pattern field). And no
+  // early/late marker, because on a half-beat grid "130ms late for the beat" and
+  // "120ms early for the off-beat" are the same event. What can be shown honestly
+  // is how many times you strummed and how many were in time.
+  if (v.rhythm && v.rhythm.strums) {
+    const r = v.rhythm;
+    const shown = Math.min(r.strums, 8); // a very busy bar would otherwise sprawl
+    const dot = 2.2 * scale;
+    const step = dot * 2.8;
+    const x0 = cx - tw / 2 - 10 * scale - (shown - 1) * step;
+    for (let i = 0; i < shown; i++) {
+      ctx.beginPath();
+      ctx.arc(x0 + i * step, y + 1, dot, 0, Math.PI * 2);
+      if (i < Math.min(r.onBeat, shown)) {
+        ctx.fillStyle = `rgba(${col},0.9)`;
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = `rgba(${col},0.45)`;
+        ctx.lineWidth = 1 * scale;
+        ctx.stroke();
+      }
+    }
   }
   ctx.globalAlpha = 1;
 }

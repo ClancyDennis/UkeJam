@@ -26,6 +26,7 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Missing / extra note feedback | Working for target chords |
 | Onset (strum) detection | Working: spectral flux, rising-edge gated; validated on real audio |
 | Per-bar scoring | Working: HIT / WRONG / MISS per bar, with strum timing |
+| Rhythm scoring | Working: strums per bar and how many landed on the beat grid |
 | Live practice coaching | Working: graded bars → AI advice across bars (needs a provider) |
 | Chord diagrams | Working: verified shape tables per tuning, generator fallback |
 | Song library | Working as JSON in the app data dir; Python prototype uses SQLite |
@@ -96,6 +97,34 @@ Everything except backing playback works without a SoundFont.
                                                   │      LLM coach: patterns
                                                   ▼      across bars
 ```
+
+### Rhythm
+
+Alongside the chord verdict, each bar records **how it was strummed**: how many
+attacks it got, and how many landed on the rhythmic grid (beats and the half-beats
+between them, since that is where real strumming patterns live). Chord and rhythm
+fail independently — a player can hold a perfect Am and strum it once where the bar
+wanted four — and for a beginner the rhythm is often the more useful thing to hear.
+
+Unlike strum *direction*, this works everywhere: it needs only that an attack
+happened, not which string sounded first, so there is no trackable-string gating, no
+tuning dependence, and no "unknown" state.
+
+Two things are deliberately **not** claimed, because the app cannot support either
+without knowing the song's strumming pattern (the `Song` model has no pattern field):
+
+- **Whether the strum count was right.** Half notes, eighths and syncopation are all
+  correct playing. A first pass reported "8/16 strums" at a player strumming sensible
+  half notes — scolding correct playing, which is how a practice tool loses trust.
+- **Whether a strum was early or late.** On a half-beat grid, a strum 130 ms after a
+  beat is equally "130 ms late for the beat" and "120 ms early for the off-beat" —
+  the same event described two ways, indistinguishable without knowing which position
+  the player aimed at. The same first pass called four perfectly even eighths
+  "rushing".
+
+What survives is how *tight* the time was, which holds for any pattern. If songs ever
+carry a declared strumming pattern, both of those become answerable — and that is the
+main reason to add one.
 
 Two layers of feedback, deliberately split. Everything the app can compute it
 computes locally and shows immediately — the missing note, the bar's HIT / WRONG

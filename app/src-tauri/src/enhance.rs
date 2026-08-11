@@ -100,6 +100,16 @@ the bars a player just performed. Each line is one bar:\n\
 HIT = played acceptably. WRONG = a different chord or wrong notes sounded. \
 MISS = nothing sounded (silence or a muted hand). 'late 120ms' / 'early 90ms' is \
 when the strum landed relative to the bar's downbeat.\n\
+'2 strums in 4 beats, 2 in time' means the player strummed twice in a four-beat \
+bar and both landed on the rhythmic grid. Two rules about this:\n\
+- The strum COUNT is not a score. The app does not know what strumming pattern the \
+song wants, so two strums in four beats may be exactly right. Never tell the player \
+to strum more or fewer times, and never call a low count a mistake.\n\
+- 'in time' counts strums that landed on the beat or the half-beat between beats. \
+Strums NOT in time mean loose timing, which is a real and useful thing to raise — \
+but you cannot tell whether they were early or late, so do not say which.\n\
+Rhythm is often more useful for a beginner than chord shapes, so prefer it when \
+the bars show a pattern in it.\n\
 These verdicts are measured facts. Treat them as correct.\n\
 Rules:\n\
 (1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \

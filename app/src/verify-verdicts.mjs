@@ -18,6 +18,8 @@ import {
   accumulate,
   grade,
   newAccumulator,
+  rhythmLabel,
+  scoreRhythm,
   seal,
   timingLabel,
 } from "./verdict.ts";
@@ -130,6 +132,150 @@ eq("within tolerance is not worth mentioning", timingLabel(60), null);
 eq("past tolerance, late", timingLabel(120), "late");
 eq("past tolerance, early", timingLabel(-120), "early");
 
+// --- rhythm ---
+// The point of rhythm scoring: it needs only that an attack happened, so unlike
+// direction it works on every chord and every tuning.
+//
+// These tests also pin what must NOT be claimed. Without the song's strumming
+// pattern the app cannot know how many strums a bar wants, nor whether a strum was
+// early or late (on a half-beat grid those are the same event described two ways).
+// Both were reported in a first pass and both were wrong: straight eighths came out
+// as "rushing", and sensible half notes were scolded as "8/16 strums".
+console.log("scoreRhythm()");
+{
+  // Four strums, one per beat, dead on.
+  const r = scoreRhythm([0, 500, 1000, 1500], 0, 4, 0.5);
+  eq("counts every strum", r.strums, 4);
+  eq("knows the bar's beats", r.beats, 4);
+  eq("all four on the beat", r.onBeat, 4);
+  eq("no offsets", r.offsets, [0, 0, 0, 0]);
+  eq("in time", rhythmLabel(r), "in time");
+}
+{
+  // Every onset is recorded, not just the first — the whole reason for this change.
+  const acc = newAccumulator();
+  for (const t of [1000, 1500, 2000, 2500]) {
+    accumulate(acc, reading({ onset: true }), t);
+  }
+  eq("accumulator keeps every onset", acc.onsets, [1000, 1500, 2000, 2500]);
+  eq("first onset still recorded separately", acc.onsetAt, 1000);
+  const v = seal(acc, {
+    bar: 1, chordIdx: 0, expected: "C", section: "",
+    barStartAt: 1000, beats: 4, secPerBeat: 0.5,
+  });
+  eq("sealed bar carries rhythm", v.rhythm.strums, 4);
+  eq("and scores it on the beat", v.rhythm.onBeat, 4);
+}
+{
+  // The beginner failure this feature exists for: strumming once where the bar
+  // wants four. The chord can still be perfect, so it must not be graded as WRONG.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true, cleanliness: 0.95 }), 1000);
+  const v = seal(acc, {
+    bar: 1, chordIdx: 0, expected: "C", section: "",
+    barStartAt: 1000, beats: 4, secPerBeat: 0.5,
+  });
+  eq("a clean chord strummed once is still a chord HIT", v.status, "HIT");
+  eq("the strum count is recorded", v.rhythm.strums, 1);
+  // NOT "1 of 4 beats": the app has no pattern for the song, so one strum in a
+  // four-beat bar may be exactly right. Judge alignment, never the count.
+  eq("a single on-beat strum is in time, not a shortfall",
+     rhythmLabel(v.rhythm), "in time");
+}
+{
+  // Nearest-beat matching, not in-order. Miss the downbeat and the remaining
+  // strums must still be judged against the beats they were closest to — in-order
+  // assignment would compare strum 1 to beat 0, strum 2 to beat 1 and so on,
+  // turning one missed beat into a bar of errors.
+  const r = scoreRhythm([500, 1000, 1500], 0, 4, 0.5);
+  eq("three strums map to beats 1,2,3", r.offsets, [0, 0, 0]);
+  eq("all count as on-beat", r.onBeat, 3);
+  eq("three on-beat strums are in time", rhythmLabel(r), "in time");
+}
+{
+  const r = scoreRhythm([120, 620, 1120, 1620], 0, 4, 0.5);
+  eq("consistent lateness is measured", r.offsets, [120, 120, 120, 120]);
+  eq("none on the grid", r.onBeat, 0);
+  // NOT "dragging": on a 250ms grid, 120ms out is equally "late for the beat" and
+  // "early for the off-beat". The magnitude is a fact, the direction isn't.
+  eq("named for tightness, not direction", rhythmLabel(r), "off the beat");
+}
+{
+  // The grid is HALF beats, because that is where real strumming patterns live.
+  // Scored against whole beats, every off-beat here reads as 250ms out and the bar
+  // came out "rushing" — four perfectly even eighths called a mistake.
+  const r = scoreRhythm([0, 250, 500, 750, 1000, 1250, 1500, 1750], 0, 4, 0.5);
+  eq("off-beat strums are on the grid, not 250ms out", r.offsets,
+     [0, 0, 0, 0, 0, 0, 0, 0]);
+  eq("all eight count as in time", r.onBeat, 8);
+}
+{
+  // A syncopated pattern (D DU UDU) must also sit on the grid.
+  const r = scoreRhythm([0, 1000, 1250, 1750], 0, 4, 0.5);
+  eq("syncopation lands on the grid", r.offsets, [0, 0, 0, 0]);
+  eq("and reads as in time", rhythmLabel(r), "in time");
+}
+{
+  // Genuinely loose time: off both the beats and the off-beats. 100ms of a 250ms
+  // grid step is unambiguously late for the position it belongs to. (Exactly 125ms
+  // would be equidistant between two grid positions and round to the later one,
+  // reported as early — a real ambiguity at that spacing, not a bug.)
+  const r = scoreRhythm([100, 600, 1100, 1600], 0, 4, 0.5);
+  eq("sub-grid drift is caught", r.offsets, [100, 100, 100, 100]);
+  eq("and reported as loose time", rhythmLabel(r), "off the beat");
+}
+{
+  const r = scoreRhythm([-100, 400, 900, 1400], 0, 4, 0.5);
+  eq("consistent earliness is negative", r.offsets, [-100, -100, -100, -100]);
+  eq("named for tightness, not direction", rhythmLabel(r), "off the beat");
+}
+{
+  // A strum slightly BEFORE the downbeat belongs to beat 0, early — not to a beat
+  // in the previous bar, and not a whole beat late.
+  const r = scoreRhythm([-40], 0, 4, 0.5);
+  eq("just-early strum stays on beat 0", r.offsets, [-40]);
+  eq("and counts as on-beat within tolerance", r.onBeat, 1);
+}
+{
+  // Extra strums (a busy strumming hand over a simple bar).
+  const r = scoreRhythm([0, 250, 500, 750, 1000, 1250, 1500, 1750], 0, 4, 0.5);
+  eq("counts them all", r.strums, 8);
+  // Straight eighths are normal playing, not an overshoot.
+  eq("on-beat eighths are in time", rhythmLabel(r), "in time");
+}
+{
+  const acc = newAccumulator();
+  accumulate(acc, reading({ active: false }), 1000);
+  const v = seal(acc, {
+    bar: 1, chordIdx: 0, expected: "C", section: "",
+    barStartAt: 1000, beats: 4, secPerBeat: 0.5,
+  });
+  eq("a silent bar is a MISS", v.status, "MISS");
+  eq("with no strums", v.rhythm.strums, 0);
+  eq("named plainly", rhythmLabel(v.rhythm), "no strum");
+}
+{
+  // Untimed songs have no beat grid, so there is nothing to score against.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 1000);
+  const v = seal(acc, {
+    bar: 1, chordIdx: 0, expected: "C", section: "", barStartAt: null,
+  });
+  eq("untimed songs claim no rhythm", v.rhythm, null);
+  eq("and rhythmLabel says nothing", rhythmLabel(null), "");
+}
+{
+  // Wait-for-me passes barStartAt null so the parked gap isn't blamed on the
+  // player; that must suppress rhythm too, not just the timing offset.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 5000);
+  const v = seal(acc, {
+    bar: 1, chordIdx: 0, expected: "C", section: "",
+    barStartAt: null, beats: 4, secPerBeat: 0.5,
+  });
+  eq("wait-mode bars carry no rhythm verdict", v.rhythm, null);
+}
+
 // --- the buffer ---
 console.log("VerdictBuffer");
 function verdict(over = {}) {
@@ -144,7 +290,19 @@ function verdict(over = {}) {
     cleanliness: 0.9,
     offsetMs: null,
     section: "",
+    rhythm: null,
     ...over,
+  };
+}
+
+/// A rhythm block for digest tests: `strums` attacks in a `beats`-beat bar.
+function rhy(strums, beats, offsets = null) {
+  const offs = offsets ?? new Array(strums).fill(0);
+  return {
+    strums,
+    beats,
+    offsets: offs,
+    onBeat: offs.filter((o) => Math.abs(o) < 70).length,
   };
 }
 {
@@ -209,6 +367,32 @@ console.log("digest()");
     ]
   );
   check("no markdown in the digest", !/[*#`|]/.test(out), out);
+}
+{
+  // Rhythm in the digest: the coach can only talk about strum texture if the
+  // counts are in front of it. A clean chord strummed once in a four-beat bar is
+  // the case that used to be invisible — chord HIT, nothing else said.
+  const buf = new VerdictBuffer();
+  buf.push(verdict({ bar: 1, chordIdx: 0, expected: "C", rhythm: rhy(1, 4) }));
+  buf.push(verdict({ bar: 2, chordIdx: 1, expected: "C", rhythm: rhy(4, 4) }));
+  buf.push(
+    verdict({
+      bar: 3, chordIdx: 2, expected: "F",
+      rhythm: rhy(4, 4, [130, 130, 130, 130]),
+    })
+  );
+  const lines = buf.digest(8, { tempo: 120, timeSig: [4, 4] }).split("\n");
+  eq(
+    "digest carries strum counts and tightness, and claims no direction",
+    lines.slice(1),
+    [
+      "1: expect C, clean, 1 strums in 4 beats, 1 in time -> HIT",
+      "2: expect C, clean, 4 strums in 4 beats, 4 in time -> HIT",
+      "3: expect F, clean, 4 strums in 4 beats, 0 in time -> HIT",
+    ]
+  );
+  check("digest never claims dragging or rushing",
+        !/dragging|rushing/.test(lines.join("\n")), lines.join(" | "));
 }
 {
   const buf = new VerdictBuffer();
