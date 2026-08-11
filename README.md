@@ -1,9 +1,10 @@
 # ukejam
 
-ukejam is a play-along practice app for **baritone ukulele**. Load a song, see
-the chord timeline, play along, and let the app listen for what is actually
-ringing. The feedback is practical: which target notes are present, which are
-missing, and which extra notes are getting into the chord.
+ukejam is a play-along practice app for **ukulele** — standard G-C-E-A or
+baritone D-G-B-E, picked on the Setup screen. Load a song, see the chord
+timeline, play along, and let the app listen for what is actually ringing. The
+feedback is practical: which target notes are present, which are missing, and
+which extra notes are getting into the chord.
 
 The repo now has two active layers:
 
@@ -20,10 +21,14 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Area | State |
 |------|-------|
 | Tauri shell + Vite UI | Working |
-| Live tuner | Working via `cpal` + FFT |
+| Live tuner | Working via `cpal` + FFT, standard or baritone tuning |
 | Live chord detection | Working native Rust port: FFT → chroma → template match |
 | Missing / extra note feedback | Working for target chords |
-| Song library | Working in frontend `localStorage`; Python prototype uses SQLite |
+| Onset (strum) detection | Working: spectral flux vs. a self-scaling baseline |
+| Per-bar scoring | Working: HIT / WRONG / MISS per bar, with strum timing |
+| Live practice coaching | Working: graded bars → AI advice across bars (needs a provider) |
+| Chord diagrams | Working: verified shape tables per tuning, generator fallback |
+| Song library | Working as JSON in the app data dir; Python prototype uses SQLite |
 | Pasted tab / ChordPro import | Working, with AI enhancement (Apple Intelligence on-device, OpenRouter, or any OpenAI-compatible endpoint) |
 | In-app tab search | Working: searches Ultimate Guitar from the library screen, in-app WebKit preview window, one-click import; optional ✨ smart mode turns a fuzzy description into searches via the configured AI provider |
 | MIDI import | Working: parses SMF, derives timed chord chart, selects chord-source channels |
@@ -82,11 +87,33 @@ Everything except backing playback works without a SoundFont.
                                                                        │
                                              expected chord vs heard notes
                                                                        │
-                                                     clean / missing / extra
+                                        ┌──── clean / missing / extra (instant)
+                                        │
+                                        └──> one graded verdict per bar
+                                                  │            │
+                                    highway trail,│            │ windowed digest
+                                    strip, score  │            ▼
+                                                  │      LLM coach: patterns
+                                                  ▼      across bars
 ```
 
+Two layers of feedback, deliberately split. Everything the app can compute it
+computes locally and shows immediately — the missing note, the bar's HIT / WRONG
+/ MISS, whether the strum was early or late. The LLM is asked only for the thing
+no local rule can produce: the pattern across a run of bars ("every change into F
+is late", "the chorus is solid, the bridge falls apart"). It never re-judges a bar
+and never restates the notes, so it can't contradict what the screen already
+showed. Coaching fires on section boundaries, when you pause or finish, and when
+the last eight bars go badly — never per bar, which would be slower than the
+music and thinner than the local feedback already is.
+
+Without a configured AI provider, everything except the coach panel works
+unchanged.
+
 Songs stay instrument-agnostic: a `G` is stored as a chord name and pitch-class
-target, while the app decides how to show that shape on baritone uke.
+target, while the app decides how to show that shape in the current tuning.
+Detection is chroma-based and so tuning-agnostic too — only the tuner and the
+fretboard/voicing layer care which uke you have.
 
 ## App
 
@@ -97,16 +124,50 @@ pnpm build
 pnpm tauri dev
 ```
 
+Pick your tuning on the Setup screen — Standard (G C E A, i.e. soprano/concert/
+tenor) or Baritone (D G B E). The choice persists in `settings.json` in the app
+data dir and is applied to both the Rust tuner and the frontend fretboards on
+launch.
+
 Useful app checks:
 
 ```bash
 pnpm --dir app build
+pnpm --dir app verify:voicings
+pnpm --dir app verify:verdicts
 cargo test --manifest-path app/src-tauri/Cargo.toml
 cargo check --manifest-path app/src-tauri/Cargo.toml --examples
 ```
 
-The Rust app currently has no meaningful unit-test coverage, so `cargo test`
-mainly proves the crate compiles.
+`verify:voicings` re-derives every hand-written chord shape in `main.ts` from
+the chord's pitch classes and fails if a shape misses a chord tone or sounds a
+note that isn't in the chord. A wrong fret is invisible in the UI — it just
+teaches the wrong chord — and the first run caught 16 bad standard-tuning
+shapes, so run it after touching the tables.
+
+`verify:verdicts` covers the per-bar scorer in `app/src/verdict.ts`: the grading
+rule, the MISS-vs-WRONG split, timing signs, and the digest the coach is built
+from. The grading rule (all target notes present, at most one extra) is shared
+with `isCleanHit()` in `main.ts` and `scorer.py` in the prototype — these tests
+pin it so changing one has to be a deliberate change to all three. A wrong
+verdict is worse than none: it tells the player a chord they got right was wrong,
+and hands the coach facts that contradict the screen.
+
+### AI provider
+
+Both AI features — ✨ tab enhance and the practice coach — go through the one
+provider picked on the Setup screen: Apple Intelligence (on-device), OpenRouter, or
+any OpenAI-compatible endpoint. Calls are made from Rust so the key never reaches
+the webview and there is no browser CORS against arbitrary endpoints.
+
+Coaching deliberately shares that provider rather than having its own model
+setting. An earlier version had one, reasoning that coaching is a short turn the
+player waits on mid-song while tab conversion is a long offline job — but on-device
+Apple Intelligence is already fast, and a second model field is a knob most players
+would never touch.
+
+`UKEJAM_PROXY_URL` and `UKEJAM_PROXY_KEY` still override the saved values at request
+time for the OpenAI-compatible provider.
 
 ### iOS
 
@@ -116,6 +177,12 @@ are already in the tree:
 - `app/src-tauri/src/ios_audio.rs` configures `AVAudioSession`
   (playAndRecord + speaker/bluetooth routing) before every cpal stream start —
   without this an iOS build records nothing and plays through the earpiece.
+  It also installs the interruption and route-change observers (below) and
+  drives `UIApplication.isIdleTimerDisabled`.
+- The screen stays awake while the mic is listening or a backing track is
+  playing, and only then: the frontend derives one boolean from
+  listening/detecting/playing and calls `set_keep_awake` when it flips, so the
+  idle timer comes back the moment practice stops.
 - `app/src-tauri/Info.plist` carries the required `NSMicrophoneUsageDescription`
   and is merged into the generated Xcode project.
 - The song library persists to a JSON file in the app's data dir (not webview
@@ -150,10 +217,16 @@ the project was generated, delete `src-tauri/gen/apple` and re-run
 link time mean the generated project predates the list).
 
 Note the simulator has no useful mic input — test the tuner/detector on a real
-device. Known follow-up: AVAudioSession interruption events (phone calls,
-Siri) currently rely on the user restarting listening/playback, which
-re-activates the session; a native interruption observer would resume
-automatically.
+device.
+
+Interruptions (phone call, Siri, alarm) and route changes (unplugged
+headphones) are handled natively: `install_observers` watches
+`AVAudioSessionInterruptionNotification` and
+`AVAudioSessionRouteChangeNotification`, re-activates the session when the
+interruption ends, and emits `audio_interruption` / `audio_route_change` to the
+webview. The frontend resumes mic listening by itself but deliberately leaves
+backing playback paused — silently restarting audio in the user's ear after a
+call is worse than a paused transport they can see.
 
 ## Python Prototype
 

@@ -15,6 +15,8 @@ use backing::{BackingState, BackingStatus};
 use base64::Engine as _;
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
+    // Manager brings `app.state()`, used in setup() to apply the saved tuning
+    // before the first audio stream opens.
     AppHandle, Manager, Runtime, State, Url, WebviewUrl, WebviewWindowBuilder,
 };
 
@@ -197,6 +199,13 @@ fn stop_audio(state: State<AudioState>) {
     state.stop();
 }
 
+/// Set the instrument tuning ("standard" | "baritone") the tuner snaps to.
+/// Applies mid-stream, so switching while listening is fine.
+#[tauri::command]
+fn set_tuning(tuning: String, state: State<AudioState>) {
+    state.set_tuning(audio::Tuning::from_str(&tuning));
+}
+
 /// Normalize a messy pasted tab into clean ChordPro via the configured AI
 /// provider. Runs on a blocking thread so the UI stays responsive.
 #[tauri::command]
@@ -214,6 +223,27 @@ async fn enhance_tab(
     };
     tauri::async_runtime::spawn_blocking(move || {
         enhance::enhance_tab(&app, &raw, m, lyrics.as_deref(), &config)
+    })
+    .await
+    .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Turn a digest of graded bars into short practice advice via the configured AI
+/// provider.
+///
+/// Same shape as `enhance_tab`: the request is made from Rust so the API key never
+/// reaches the webview, and on a blocking thread so a slow provider can't stall the
+/// UI mid-song. `reason` is what triggered the request (section boundary, pause,
+/// rough patch) and is passed to the model as context.
+#[tauri::command]
+async fn coach_bars(
+    app: AppHandle,
+    digest: String,
+    reason: String,
+    config: enhance::AiConfig,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        enhance::coach_bars(&app, &digest, &reason, &config)
     })
     .await
     .map_err(|e| format!("task join: {e}"))?
@@ -368,6 +398,14 @@ fn backing_status(state: State<BackingState>) -> BackingStatus {
     state.status()
 }
 
+/// Keep the screen awake while the transport is running. A play-along app goes
+/// untouched for whole songs, so the default auto-lock would black out the
+/// chord highway mid-verse. No-op off iOS.
+#[tauri::command]
+fn set_keep_awake(app: AppHandle, awake: bool) {
+    ios_audio::set_idle_timer_disabled(&app, awake);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -389,6 +427,19 @@ pub fn run() {
         .plugin(openrouter_oauth_return())
         .manage(AudioState::default())
         .manage(BackingState::default())
+        .setup(|app| {
+            // Watch for interruptions (calls, Siri) and route changes
+            // (headphones unplugged) so audio recovers without the user
+            // restarting by hand.
+            ios_audio::install_observers(app.handle().clone());
+            // Apply the saved tuning before the first stream starts, so the
+            // tuner is right on a cold launch rather than after the frontend
+            // gets around to telling us.
+            let saved = settings::load(app.handle());
+            app.state::<AudioState>()
+                .set_tuning(audio::Tuning::from_str(&saved.tuning));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             start_tuner,
             stop_tuner,
@@ -397,7 +448,9 @@ pub fn run() {
             set_target,
             set_gate,
             stop_audio,
+            set_tuning,
             enhance_tab,
+            coach_bars,
             ai_models,
             test_ai,
             openrouter_exchange,
@@ -411,6 +464,7 @@ pub fn run() {
             stop_backing,
             set_backing_loop,
             backing_status,
+            set_keep_awake,
             platform,
             library::library_load,
             library::library_save,
