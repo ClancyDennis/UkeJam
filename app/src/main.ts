@@ -31,6 +31,7 @@ import { initOpenRouterAuth, resumeOpenRouterLogin } from "./views/setup/openrou
 import { initTabSearch } from "./views/tabSearch";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
 import { escapeHtml } from "./dom";
+import { initIosAudio } from "./iosAudio";
 import {
   accumulateReading,
   backingTrackList,
@@ -78,7 +79,6 @@ import {
   isTunerListening,
   noteTunerRms,
   rebuildStringRows,
-  startTunerListening,
   stopTunerListening,
 } from "./views/tuner";
 import { initTuningSetup } from "./views/setup/tuningSetup";
@@ -1401,71 +1401,26 @@ nativeListen<BackingStatus>("backing", (event) => {
   if (event.payload.playing) syncBackingPos(event.payload.pos);
 });
 
-// ---- iOS audio-session interruptions and route changes ----
-// A phone call, Siri, or another app taking the session kills our streams and
-// iOS does not hand them back. The native observer re-activates the session and
-// tells us; only the frontend knows what the user was doing, so resuming is our
-// job. Nothing fires on desktop.
-//
-// Playback does NOT auto-resume: having a backing track burst out of the
-// speaker the instant you hang up is worse than pressing play yourself. The
-// transport pauses and the mic — passive — comes back on its own.
-let wasListeningBeforeInterruption = false;
-let wasChordListeningBeforeInterruption = false;
-
-nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
-  if (event.payload.began) {
-    wasListeningBeforeInterruption = isTunerListening();
-    wasChordListeningBeforeInterruption = chordListening;
-    // The streams are already dead; drop our own state so the buttons and the
-    // "live" dot don't lie, and pause the transport so we don't silently run
-    // the playhead past the whole song while the audio is gone.
-    stopTunerListening();
+initIosAudio({
+  isChordListening: () => chordListening,
+  stopChordListening: () => {
     chordListening = false;
     listenBtn2.textContent = "Start listening";
     listenBtn2.classList.remove("on");
-    setConn(false);
-    if (isPlaying()) stopTransport();
-    await nativeInvoke("stop_audio").catch(() => {});
-    syncKeepAwake();
-    coachEl.textContent = "audio interrupted — resuming when the call ends";
-    updatePracticeUi();
-    return;
-  }
-
-  // Interruption over: the native side has re-activated the session, so put
-  // the mic back exactly where it was.
-  try {
-    if (wasChordListeningBeforeInterruption) {
-      await nativeInvoke("start_chords");
-      await nativeInvoke("set_target", { chord: currentTarget() || null });
-      chordListening = true;
-      listenBtn2.textContent = "Stop listening";
-      listenBtn2.classList.add("on");
-    } else if (wasListeningBeforeInterruption) {
-      await startTunerListening();
-    }
-    if (chordListening || isTunerListening()) coachEl.textContent = "";
-  } catch (e) {
-    coachEl.textContent = `mic didn't come back: ${e} — press Start listening`;
-  }
-  wasListeningBeforeInterruption = false;
-  wasChordListeningBeforeInterruption = false;
-  setConn(false);
-  syncKeepAwake();
-  updatePracticeUi();
-});
-
-// Headphones pulled out (reason 2 = old device unavailable). Apple's guidance
-// is to pause rather than blast the built-in speaker; the mic keeps going since
-// the native side has already re-routed it.
-nativeListen<{ reason: number }>("audio_route_change", (event) => {
-  if (event.payload.reason !== 2) return;
-  if (isPlaying()) {
-    stopTransport();
-    coachEl.textContent = "output device disconnected — playback paused";
-  }
-  updatePracticeUi();
+  },
+  startChordListening: async () => {
+    await nativeInvoke("start_chords");
+    await nativeInvoke("set_target", { chord: currentTarget() || null });
+    chordListening = true;
+    listenBtn2.textContent = "Stop listening";
+    listenBtn2.classList.add("on");
+  },
+  setCoachMessage: (text) => {
+    coachEl.textContent = text;
+  },
+  markDisconnected: () => setConn(false),
+  syncKeepAwake,
+  onPracticeStateChanged: updatePracticeUi,
 });
 
 initSoundfont({
