@@ -855,13 +855,26 @@ def verdict(results):
         print("  spectral overlap between the strings, not time resolution.")
         print("  Remaining options: the camera route, or a song-supplied strum")
         print("  pattern scored against onset COUNT (needs nothing new).")
-    if onsets and np.median(onsets) < SHIPPED_ONSET_RATIO:
+    # Onset health. Note the failure that actually occurred was the OPPOSITE of the
+    # one this originally warned about: the threshold was fine (real p95 ≈ 2.8 vs a
+    # shipped 2.2) and the detector over-fired instead, counting one strum 2-3 times,
+    # because a scale-free ratio inflates ring-out once its baseline decays. So check
+    # the COUNT, not just the threshold — a count is what every timing feature is
+    # built on.
+    if onsets:
+        p95 = float(np.median(onsets))
         print()
-        print(f"  SEPARATELY: real audio peaks around {np.median(onsets):.1f}x "
-              f"baseline, below the shipped")
-        print(f"  ONSET_RATIO of {SHIPPED_ONSET_RATIO} — onset detection is likely "
-              "missing strums. Worth")
-        print("  fixing regardless of what happens with direction.")
+        if p95 < SHIPPED_ONSET_RATIO:
+            print(f"  ONSET CHECK: real audio peaks around {p95:.1f}x baseline, below "
+                  f"the shipped\n  ONSET_RATIO of {SHIPPED_ONSET_RATIO} — strums are "
+                  "likely being missed.")
+        else:
+            print(f"  ONSET CHECK: threshold looks right (real p95 {p95:.1f}x vs "
+                  f"shipped {SHIPPED_ONSET_RATIO}).")
+            print("  Over-firing is the more likely fault and is not visible here —")
+            print("  see the real-audio regression test in audio.rs, which asserts "
+                  "the")
+            print("  onset COUNT against a known number of strums.")
 
 
 if __name__ == "__main__":

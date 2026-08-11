@@ -41,6 +41,27 @@ const PRESENCE: f32 = 0.18; // chroma bin above this counts as "sounding"
 const FLUX_SMOOTH: f32 = 0.05; // EMA weight for the slow flux baseline
 const ONSET_RATIO: f32 = 2.2; // flux must exceed this multiple of the baseline
 const ONSET_REFRACTORY: Duration = Duration::from_millis(60); // one strum = one onset
+// An onset must also be RISING: this window's flux has to exceed the previous
+// window's by this factor.
+//
+// Measured on a real 45s baritone recording of 46 strums (clips/, see the strum
+// study in the README), the ratio test ALONE fired 95 times — one strum counted
+// two or three times. The ratio is deliberately scale-free, which is what makes one
+// threshold work for a fingerpick and a loud strum, but it also means that as the
+// slow baseline decays under a ringing chord, ordinary ring-out fluctuation gets
+// inflated past the threshold. Requiring the flux to be rising fixes it: 52 onsets
+// for 46 strums, with only 2 of 51 inter-onset gaps short enough to be a
+// double-trigger. A decaying string cannot rise, so this separates a new attack
+// from a tail in a way no threshold on its own can.
+//
+// The refractory barely matters once this is in place (150/250/350ms all give
+// 51/50/50), so it stays at 60ms and keeps fast strumming detectable. An RMS gate
+// was tried instead and overshoots — at 0.30x peak it drops to 42, discarding real
+// but quiet strums.
+//
+// This is the same fix, for the same reason, as strum_lab.py's Listener and
+// analyse_strums.find_strums. All three read attacks out of a decaying signal.
+const ONSET_RISE_RATIO: f32 = 1.30;
 
 /// What the capture thread analyzes each window into.
 #[derive(Clone, Copy, PartialEq)]
@@ -452,6 +473,8 @@ struct Analyzer {
 
 struct OnsetState {
     prev_mag: Vec<f32>,
+    /// Previous window's flux, for the rising test (see ONSET_RISE_RATIO).
+    prev_flux: f32,
     baseline: f32,
     last_onset: Option<Instant>,
     /// Set when an attack is detected, cleared when a reading carrying it is
@@ -482,6 +505,7 @@ impl Analyzer {
             scratch: Mutex::new(vec![Complex::new(0.0, 0.0); FFT_SIZE]),
             onset: Mutex::new(OnsetState {
                 prev_mag: vec![0.0; FFT_SIZE / 2],
+                prev_flux: 0.0,
                 baseline: 0.0,
                 last_onset: None,
                 latched: false,
@@ -525,14 +549,18 @@ impl Analyzer {
         let clear_of_refractory = st
             .last_onset
             .is_none_or(|t| now.duration_since(t) >= ONSET_REFRACTORY);
-        if ratio >= ONSET_RATIO && clear_of_refractory {
+        // Rising, not merely loud — see ONSET_RISE_RATIO. Without this the ringing
+        // tail of one strum reads as several attacks.
+        let rising = flux > st.prev_flux * ONSET_RISE_RATIO;
+        if ratio >= ONSET_RATIO && rising && clear_of_refractory {
             st.last_onset = Some(now);
             st.latched = true;
         }
 
-        // Baseline tracks flux *after* the decision, so a strum doesn't raise the
-        // bar it was just measured against.
+        // Baseline and previous flux both update *after* the decision, so a strum
+        // doesn't raise the bar it was just measured against.
         st.baseline = FLUX_SMOOTH * flux + (1.0 - FLUX_SMOOTH) * st.baseline;
+        st.prev_flux = flux;
         (st.latched, ratio)
     }
 
@@ -546,6 +574,7 @@ impl Analyzer {
     fn reset_onset(&self) {
         let mut st = self.onset.lock().unwrap();
         st.prev_mag.iter_mut().for_each(|m| *m = 0.0);
+        st.prev_flux = 0.0;
         st.baseline = 0.0;
         st.last_onset = None;
         st.latched = false;
@@ -781,6 +810,90 @@ mod tests {
         let (latched, _) = analyzer.track_onset(&mag, at);
         analyzer.clear_onset(); // one "emit" per window in these tests
         latched
+    }
+
+    /// A real recording of a ukulele being strummed, mono i16 at 44.1kHz.
+    ///
+    /// Synthetic sines cannot expose the failure this guards: they don't ring, and
+    /// the over-firing bug lived entirely in how a *decaying* chord interacts with
+    /// a scale-free threshold. The detector shipped calibrated only against sines,
+    /// and consequently counted one strum two or three times for months.
+    fn real_strums() -> Vec<f32> {
+        let bytes = include_bytes!("../tests/fixtures/strums_baritone_12.i16");
+        bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+            .collect()
+    }
+
+    /// Replay samples the way the capture thread does: one analysis per
+    /// callback-sized chunk over the newest FFT_SIZE window. Returns onsets fired.
+    ///
+    /// `track_onset` is driven directly rather than through `analyze_chord`, because
+    /// that reads `Instant::now()` — and a test replays 6s of audio in a few
+    /// milliseconds, so every window would look simultaneous and the refractory
+    /// would suppress everything. Virtual time derived from the sample position is
+    /// what the refractory gate sees live, and it makes the result deterministic.
+    fn count_onsets(samples: &[f32], chunk: usize) -> usize {
+        let analyzer = Analyzer::new(44_100.0);
+        let t0 = Instant::now();
+        let mut fired = 0;
+        let mut pos = FFT_SIZE;
+        while pos <= samples.len() {
+            let window = &samples[pos - FFT_SIZE..pos];
+            let (mag, rms) = analyzer.spectrum(window);
+            if rms < RMS_GATE {
+                // Mirrors analyze_chord's silence path, which clears onset history
+                // so the next note counts as a fresh attack.
+                analyzer.reset_onset();
+            } else {
+                let at = t0 + Duration::from_micros((pos as u64 * 1_000_000) / 44_100);
+                let (latched, _) = analyzer.track_onset(&mag, at);
+                if latched {
+                    fired += 1;
+                }
+                analyzer.clear_onset();
+            }
+            pos += chunk;
+        }
+        fired
+    }
+
+    /// The regression this whole exercise exists for.
+    ///
+    /// 12 real strums must produce close to 12 onsets. Without the rising test the
+    /// same audio gives 16-17: the scale-free ratio inflates ordinary ring-out
+    /// fluctuation once the slow baseline has decayed under a sustained chord. Every
+    /// timing feature sits on this count — a bar's strum count, the per-bar timing
+    /// offset, any future rhythm scoring — so an inflated count corrupts all of them
+    /// silently.
+    ///
+    /// The upper bound is deliberately tight enough to FAIL on the pre-fix
+    /// behaviour. It was first written as 10..=18, which accepted both the broken
+    /// (16-17) and fixed (11-12) counts and so tested nothing; the bound was set by
+    /// disabling the fix and measuring what it actually produced.
+    #[test]
+    fn real_strums_fire_about_once_each() {
+        let samples = real_strums();
+        // 1024 samples is a typical CoreAudio callback; 512 and 2048 also occur, and
+        // the count must not depend on the buffer size the OS happens to hand us.
+        for chunk in [512usize, 1024, 2048] {
+            let n = count_onsets(&samples, chunk);
+            assert!(
+                (10..=14).contains(&n),
+                "chunk {chunk}: {n} onsets for 12 real strums — expected 10..=14 \
+                 (without the rising test this audio gives 16-17)"
+            );
+        }
+    }
+
+    /// Silence between strums must not itself generate onsets.
+    #[test]
+    fn real_recording_silence_does_not_fire() {
+        // The fixture has 150ms of true silence between strums. If those gaps fired,
+        // the count above would be inflated without any strum being played at all.
+        let quiet = vec![0.0f32; 44_100];
+        assert_eq!(count_onsets(&quiet, 1024), 0);
     }
 
     #[test]

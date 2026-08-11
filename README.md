@@ -24,7 +24,7 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Live tuner | Working via `cpal` + FFT, standard or baritone tuning |
 | Live chord detection | Working native Rust port: FFT → chroma → template match |
 | Missing / extra note feedback | Working for target chords |
-| Onset (strum) detection | Working: spectral flux vs. a self-scaling baseline |
+| Onset (strum) detection | Working: spectral flux, rising-edge gated; validated on real audio |
 | Per-bar scoring | Working: HIT / WRONG / MISS per bar, with strum timing |
 | Live practice coaching | Working: graded bars → AI advice across bars (needs a provider) |
 | Chord diagrams | Working: verified shape tables per tuning, generator fallback |
@@ -144,6 +144,19 @@ the chord's pitch classes and fails if a shape misses a chord tone or sounds a
 note that isn't in the chord. A wrong fret is invisible in the UI — it just
 teaches the wrong chord — and the first run caught 16 bad standard-tuning
 shapes, so run it after touching the tables.
+
+`cargo test` includes a **real-audio onset regression** (`audio.rs`): 12 strums from
+an actual ukulele recording, replayed through the shipped detector at three callback
+sizes, asserting the onset count lands near 12. This exists because the detector was
+calibrated only against synthetic sines and consequently over-fired on real playing —
+one strum counted two or three times, since a scale-free flux ratio inflates ring-out
+once its slow baseline decays. Synthetic sines cannot catch that: they don't ring.
+The bound is set tight enough to fail on the pre-fix behaviour (16–17 onsets), and
+was verified to do so by disabling the fix.
+
+Every timing feature sits on this count — a bar's strum count, the per-bar timing
+offset, any rhythm scoring — so it's worth guarding directly rather than inferring
+from downstream symptoms.
 
 `verify:verdicts` covers the per-bar scorer in `app/src/verdict.ts`: the grading
 rule, the MISS-vs-WRONG split, timing signs, and the digest the coach is built
@@ -531,11 +544,9 @@ Demucs weights are large and should stay out of git.
   filtering, and Rust/Python detector parity still have no fixture tests.
 - Live chord detection still needs more real-instrument tuning across mics,
   strum strengths, muting, and room noise.
-- **Onset detection is uncalibrated.** `ONSET_RATIO = 2.2` in `audio.rs` was set
-  against synthetic sines and has never seen a real ukulele. Run
-  `analyse_strums.py` on real takes to find the value the instrument supports —
-  too high and strums are silently missed, which quietly corrupts every per-bar
-  timing offset built on top of it.
+- Onset detection is now validated against a real recording (see below), but only
+  one instrument in one room. More instruments, mics and playing styles would
+  strengthen it.
 - Speaker playback contaminates mic input. Headphones/backing isolation should
   remain the default practice path.
 - Extended chord naming and simplified playable chord naming can diverge,

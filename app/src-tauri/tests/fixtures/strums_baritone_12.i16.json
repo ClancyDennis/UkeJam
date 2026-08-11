@@ -1,0 +1,9 @@
+{
+  "strums": 12,
+  "sr": 44100,
+  "samples": 264600,
+  "format": "i16le mono",
+  "source": "clips/lab_A_down_60_20260810-201130.npy (real baritone, 46 strums)",
+  "packing": "50ms pre + 300ms post per strum, 150ms silence between",
+  "tuning": "baritone"
+}
