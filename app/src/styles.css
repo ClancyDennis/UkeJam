@@ -3449,15 +3449,25 @@ body.mobile .grain {
 }
 .sc-call-label {
   color: var(--text);
+  /* The reason ("hand barely moving") must not wrap word-by-word: the meta
+     column beside it is nowrap, so a wrapping label interleaved with it and read
+     as garbled text ("no motion in no frames in window frame"). Let the label
+     take the space it needs and ellipsize rather than reflow. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .sc-call.unsure .sc-call-label {
   color: var(--text-dim);
 }
 .sc-call-meta {
   margin-left: auto;
+  padding-left: 8px;
   color: var(--text-dim);
   font-size: 10.5px;
   white-space: nowrap;
+  flex: none; /* the numbers are the point; never let them be squeezed away */
 }
 
 @media (max-width: 860px) {

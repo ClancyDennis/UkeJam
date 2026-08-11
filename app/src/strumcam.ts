@@ -405,6 +405,58 @@ export function palmY(hand: readonly HandPoint[]): number {
   return (hand[0].y + hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 5;
 }
 
+/// How much of the hand's own size to pad the spotlight by, so the glow reads as
+/// lighting the hand rather than clipping it at the knuckles.
+const SPOTLIGHT_PAD = 0.55;
+/// Floor on the spotlight radius as a fraction of the frame's smaller side. A
+/// hand far from the camera covers few pixels, and a spotlight that tracked its
+/// bounding box exactly would shrink to a dot the player can't see.
+const SPOTLIGHT_MIN_R = 0.13;
+/// How far the un-spotlit frame is darkened. Enough to push the background back
+/// without hiding it: the player still needs to see whether they are framed, and
+/// a near-black surround would make a mistracked hand harder to diagnose, not
+/// easier.
+const DIM_ALPHA = 0.62;
+
+/// Where to put the "lit" circle for a tracked hand, in normalized (0..1)
+/// coordinates against a `w`x`h` frame. Separated from the drawing so the
+/// geometry is testable without a canvas — the radius rules below are the part
+/// that can be wrong in a way no unit test of the drawing calls would catch.
+///
+/// `mirror` matches drawHand's convention so the spotlight lands on the hand as
+/// the player sees it, not on its un-mirrored twin across the frame.
+export function spotlightFor(
+  hand: readonly HandPoint[],
+  w: number,
+  h: number,
+  mirror = true
+): { x: number; y: number; r: number } | null {
+  if (hand.length < 21) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of hand) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  // Half-diagonal in PIXELS, not normalized units: a frame is wider than it is
+  // tall, so treating x and y as the same scale would make the spotlight an
+  // ellipse that misses the fingers on one axis.
+  const dx = ((maxX - minX) * w) / 2;
+  const dy = ((maxY - minY) * h) / 2;
+  const reach = Math.hypot(dx, dy) * (1 + SPOTLIGHT_PAD);
+  return {
+    x: (mirror ? 1 - cx : cx) * w,
+    y: cy * h,
+    r: Math.max(reach, Math.min(w, h) * SPOTLIGHT_MIN_R),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Camera capture layer (DOM). Grab frames, run the active tracking backend,
 // ring-buffer the samples, and answer the one question main.ts asks: "the mic
@@ -689,8 +741,47 @@ export class StrumCam {
     ctx.drawImage(video, 0, 0, width, height);
     ctx.restore();
 
+    // When a hand is tracked, dim the frame and leave the hand lit, so the
+    // player can see at a glance WHAT the tracker has locked onto — the single
+    // most useful thing this preview can tell them. A wall, a face or a passing
+    // arm being spotlit instead of the strumming hand explains a whole run of
+    // bad calls, and is otherwise invisible behind a plausible-looking skeleton.
+    const spot = this.lastHand ? spotlightFor(this.lastHand, width, height) : null;
+    if (spot) {
+      // Darken everything, then cut the spotlight back out. `destination-out`
+      // erases the dim layer rather than painting light over the image, so the
+      // hand keeps its true colours instead of being washed toward white.
+      ctx.save();
+      ctx.fillStyle = `rgba(3, 8, 8, ${DIM_ALPHA})`;
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalCompositeOperation = "destination-out";
+      // A soft edge: a hard circle reads as a porthole cut out of the picture,
+      // which draws the eye to the rim instead of the hand.
+      const hole = ctx.createRadialGradient(spot.x, spot.y, spot.r * 0.55, spot.x, spot.y, spot.r);
+      hole.addColorStop(0, "rgba(0,0,0,1)");
+      hole.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = hole;
+      ctx.beginPath();
+      ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Overlays are drawn in video pixel space (un-flip a flipped sample).
-    if (this.lastHand) drawHand(ctx, this.lastHand, width, height);
+    if (this.lastHand) {
+      // Two passes for the glow: a wide, soft, low-alpha stroke under a crisp
+      // one. canvas shadowBlur alone would bleed the joint dots into a smear at
+      // this scale, and it is markedly slower per frame at 30fps.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      drawHand(ctx, this.lastHand, width, height, {
+        color: "rgba(25, 227, 196, 0.22)",
+        jointColor: "rgba(25, 227, 196, 0.18)",
+        lineWidth: 9,
+      });
+      ctx.restore();
+      drawHand(ctx, this.lastHand, width, height);
+    }
     if (sample) {
       const y = (this.flip ? 1 - sample.y : sample.y) * height;
       ctx.strokeStyle = "rgba(25, 227, 196, 0.9)";

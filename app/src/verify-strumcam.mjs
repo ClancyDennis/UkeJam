@@ -11,7 +11,14 @@
 // Run with `pnpm verify:strumcam`. Plain node, no dependencies — it imports
 // strumcam.ts directly (node strips types natively) so it tests the real code.
 
-import { HandMotion, MotionField, StrokeTracker, classifyStrum, palmY } from "./strumcam.ts";
+import {
+  HandMotion,
+  MotionField,
+  StrokeTracker,
+  classifyStrum,
+  palmY,
+  spotlightFor,
+} from "./strumcam.ts";
 
 let failures = 0;
 
@@ -224,6 +231,76 @@ function playSamples(tracker, samples) {
   }
   const strokes = playSamples(new StrokeTracker(), samples);
   check("a twitch is not a stroke", strokes.length === 0, JSON.stringify(strokes));
+}
+
+// --- spotlight geometry -----------------------------------------------------
+//
+// The preview dims the frame and lights the tracked hand, so the player can see
+// WHAT the tracker locked onto. That only helps if the lit circle actually lands
+// on the hand: a spotlight on the wrong thing, or one that mirrors the wrong way,
+// would reassure the player at exactly the moment they should be suspicious.
+
+/// A 21-point hand filling a box, in normalized coords.
+function handIn(x0, y0, x1, y1) {
+  const pts = [];
+  for (let i = 0; i < 21; i++) {
+    // Spread the points over the box; corners included so the bounds are exact.
+    const fx = i % 2 === 0 ? 0 : 1;
+    const fy = i < 2 ? 0 : i > 18 ? 1 : (i % 5) / 4;
+    pts.push({ x: x0 + (x1 - x0) * fx, y: y0 + (y1 - y0) * fy });
+  }
+  pts[0] = { x: x0, y: y0 };
+  pts[20] = { x: x1, y: y1 };
+  return pts;
+}
+
+{
+  check("fewer than 21 points yields no spotlight", spotlightFor([{ x: 0.5, y: 0.5 }], 640, 480) === null);
+}
+{
+  // Un-mirrored, a hand on the left of the frame lights the left of the frame.
+  const s = spotlightFor(handIn(0.1, 0.4, 0.3, 0.6), 640, 480, false);
+  check("spotlight centres on the hand (x)", Math.abs(s.x - 0.2 * 640) < 1, JSON.stringify(s));
+  check("spotlight centres on the hand (y)", Math.abs(s.y - 0.5 * 480) < 1, JSON.stringify(s));
+}
+{
+  // Mirrored (the default, matching drawHand): a hand on the LEFT of the raw
+  // video is drawn on the RIGHT of the preview, and the spotlight must follow
+  // the skeleton rather than the raw coordinates.
+  const hand = handIn(0.1, 0.4, 0.3, 0.6);
+  const m = spotlightFor(hand, 640, 480, true);
+  const u = spotlightFor(hand, 640, 480, false);
+  check("mirroring flips the spotlight across the frame", Math.abs(m.x - (640 - u.x)) < 1, JSON.stringify({ m, u }));
+  check("mirroring leaves y alone", Math.abs(m.y - u.y) < 1e-9);
+}
+{
+  // The radius must cover the hand it is lighting, measured in PIXELS. A wide
+  // flat hand is the case that separates a pixel-space radius from a normalized
+  // one: normalized units make a frame-spanning hand read as 0.5 "wide", which
+  // the minimum-radius floor then silently rounds up to a circle far too small
+  // to cover it. Sized deliberately so the floor cannot mask the difference.
+  const w = 640;
+  const h = 480;
+  const hand = handIn(0.15, 0.45, 0.85, 0.55);
+  const s = spotlightFor(hand, w, h, false);
+  const halfDiag = Math.hypot(((0.85 - 0.15) * w) / 2, ((0.55 - 0.45) * h) / 2);
+  check("spotlight reaches past the hand's extent", s.r > halfDiag, `${s.r} vs ${halfDiag}`);
+  // Every landmark is inside the lit circle.
+  const covered = hand.every((p) => Math.hypot(p.x * w - s.x, p.y * h - s.y) <= s.r);
+  check("every landmark is inside the spotlight", covered, JSON.stringify(s));
+}
+{
+  // A distant hand covers few pixels; without a floor the spotlight would shrink
+  // to a dot and defeat the purpose.
+  const tiny = spotlightFor(handIn(0.5, 0.5, 0.505, 0.505), 640, 480, false);
+  check("a tiny hand still gets a visible spotlight", tiny.r >= Math.min(640, 480) * 0.12, JSON.stringify(tiny));
+}
+{
+  // A hand spanning the frame gets a spotlight larger than the floor — the floor
+  // is a minimum, not a cap.
+  const big = spotlightFor(handIn(0.05, 0.05, 0.95, 0.95), 640, 480, false);
+  const small = spotlightFor(handIn(0.45, 0.45, 0.55, 0.55), 640, 480, false);
+  check("the spotlight scales with the hand", big.r > small.r, JSON.stringify({ big, small }));
 }
 
 if (failures) {
