@@ -16,6 +16,7 @@
     "verify:timing": "node src/verify-timing.mjs",
     "verify:calltrim": "node src/verify-calltrim.mjs",
     "verify:icons": "bash src-tauri/icons/verify-no-alpha.sh",
+    "sync:ios-icons": "bash src-tauri/icons/sync-ios-icons.sh",
     "verify": "pnpm verify:voicings && pnpm verify:verdicts && pnpm verify:strumcam && pnpm verify:songparse && pnpm verify:theory && pnpm verify:timing && pnpm verify:calltrim && pnpm verify:icons"
   },
   "dependencies": {
