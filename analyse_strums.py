@@ -149,23 +149,48 @@ def goertzel_envelope_fast(x, freq, sr=SR, block=BLOCK, hop=None):
     return times, mags
 
 
+# A strum must reach this fraction of the take's loudest strum to count. Guards
+# against the same failure the live rig hit: without an absolute floor, room noise
+# and decay tails are "rises" too.
+STRUM_MIN_LEVEL_FRAC = 0.15
+# A new attack has to be RISING by this factor over the previous frame. Same test
+# as strum_lab's Listener, and for the same reason — see below.
+STRUM_RISE_RATIO = 1.30
+
+
 def find_strums(x, sr=SR, min_gap_ms=STRUM_MIN_GAP_MS):
-    """Rough strum starts (sample indices) from broadband energy rises."""
+    """Strum start positions (sample indices) from broadband energy rises.
+
+    An onset is a RISE, not a level, and not a derivative above a global threshold.
+    The earlier version compared the energy derivative against a percentile of the
+    whole take, which fires repeatedly through a decay: on a real 46-strum session
+    it reported 148 strums. A plucked note decays slowly enough that its tail keeps
+    clearing any fixed derivative bar, so the extra "strums" were the same notes
+    ringing out — and each phantom got measured and scored as if it were a
+    performance.
+
+    The live rig hit exactly this and fixed it with a frame-to-frame rise test plus
+    an absolute level gate; this is that logic, so the two paths agree about what
+    counts as a strum.
+    """
     hop = max(1, int(sr * 0.002))  # 2ms
     win = int(sr * 0.010)          # 10ms
     n = 1 + max(0, (len(x) - win) // hop)
     if n <= 2:
         return []
     env = np.array([np.sqrt(np.mean(x[i * hop:i * hop + win] ** 2)) for i in range(n)])
-    # Positive energy derivative, thresholded relative to the take's own dynamics
-    # so this works at any recording level.
-    d = np.diff(env, prepend=env[0])
-    thresh = max(np.percentile(d, 99) * 0.35, env.max() * 0.02)
-    min_gap = int(min_gap_ms / 1000 * sr / hop)
+    if not env.max():
+        return []
+
+    # Absolute floor, relative to this take's own loudest strum so it works at any
+    # recording level.
+    floor = env.max() * STRUM_MIN_LEVEL_FRAC
+    min_gap = max(1, int(min_gap_ms / 1000 * sr / hop))
     hits = []
     last = -min_gap * 2
     for i in range(1, n):
-        if d[i] >= thresh and i - last >= min_gap:
+        rising = env[i] > env[i - 1] * STRUM_RISE_RATIO
+        if rising and env[i] >= floor and i - last >= min_gap:
             hits.append(i * hop)
             last = i
     return hits
@@ -570,10 +595,71 @@ def load_take(path):
     return np.ascontiguousarray(x, dtype=np.float64), meta
 
 
-def analyse_take(path, verbose=False):
+def load_strum_log(path):
+    """The lab's per-strum log, if this take has one.
+
+    A lab session that switched shapes mid-recording can only be split correctly
+    from here: it records the target each strum was actually played against, where
+    the sidecar records one target for the whole file.
+    """
+    log = path[:-len(".npy")] + ".strums.jsonl" if path.endswith(".npy") else ""
+    if not log or not os.path.exists(log):
+        return []
+    import json as _json
+    out = []
+    with open(log) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                try:
+                    out.append(_json.loads(line))
+                except ValueError:
+                    pass
+    return out
+
+
+def analyse_session(path, verbose=False):
+    """Analyse one take, splitting a mixed lab session by shape.
+
+    Returns a list of results — one per (chord, direction) actually played — so a
+    session where the shape was switched isn't averaged into a single figure
+    computed with one shape's probe frequencies.
+    """
+    _, meta = load_take(path)
+    log = load_strum_log(path)
+    targets = meta.get("targets")
+    if not targets and log:
+        # Older sessions have no `targets`; recover them from the log.
+        seen, targets = set(), []
+        for s in log:
+            k = (s["chord"], s["expected"])
+            if k not in seen:
+                seen.add(k)
+                targets.append({"chord": s["chord"], "direction": s["expected"]})
+    if not targets:
+        r = analyse_take(path, verbose=verbose)
+        return [r] if r else []
+    if len(targets) == 1:
+        r = analyse_take(path, verbose=verbose,
+                         chord=targets[0]["chord"],
+                         direction=targets[0]["direction"])
+        return [r] if r else []
+
+    print(f"\n{os.path.basename(path)}: mixed session — "
+          f"{len(targets)} targets, analysing each separately")
+    out = []
+    for t in targets:
+        r = analyse_take(path, verbose=verbose, chord=t["chord"],
+                         direction=t["direction"], log=log)
+        if r:
+            out.append(r)
+    return out
+
+
+def analyse_take(path, verbose=False, chord=None, direction=None, log=None):
     x, meta = load_take(path)
-    chord = meta.get("chord")
-    direction = meta.get("direction")
+    chord = chord or meta.get("chord")
+    direction = direction or meta.get("direction")
     tuning = meta.get("tuning", "standard")
     if not chord or not direction:
         print(f"  {path}: can't tell which chord/direction this is — skipping")
@@ -588,6 +674,19 @@ def analyse_take(path, verbose=False):
                                min_bins=MIN_SEP_BINS)
 
     starts = find_strums(x)
+    if log:
+        # Mixed session: keep only the strums played against THIS target. The log's
+        # timestamps are wall-clock, so match by ordinal — both the log and
+        # find_strums see the same strums in the same order.
+        want = [i for i, s in enumerate(log)
+                if s["chord"] == chord and s["expected"] == direction]
+        if len(log) == len(starts):
+            starts = [starts[i] for i in want]
+        else:
+            # Counts disagree, so an ordinal match would silently pair the wrong
+            # strums. Say so rather than reporting a confident mismatch.
+            print(f"  note: log has {len(log)} strums but {len(starts)} were found "
+                  f"in the audio — analysing all of them as {chord}")
     print(f"\n{os.path.basename(path)}  {chord} {frets} {direction}stroke"
           f"  ({len(starts)} strums found, {len(tracked)}/4 strings trackable)")
     if len(tracked) < 2:
@@ -595,10 +694,18 @@ def analyse_take(path, verbose=False):
         return None
 
     span = int(0.12 * SR)  # analyse 120ms from each strum start
+    # Silence kept BEFORE the onset, and it has to exceed the Goertzel half-window
+    # (BLOCK/2 = 23.2ms): the envelope's first sample is centred there, so with less
+    # lead-in the rising edge sits inside the first block and attack_time correctly
+    # refuses to locate it. This path used 5ms and consequently measured almost
+    # nothing on a real session — 1 of 23 strums — while the live rig, which uses
+    # 60ms, measured them fine. Raising it to 60 recovered 11 of 23; the rest are
+    # strums whose neighbours were still ringing.
+    lead = int(0.060 * SR)
     gaps, margins, spans = [], [], []
     correct = wrong = unknown = usable = 0
     for i, s in enumerate(starts):
-        seg = x[max(0, s - int(0.005 * SR)):s + span]
+        seg = x[max(0, s - lead):s + span]
         m = measure_strum(seg, frets, tuning)
         if len(m["attacks"]) < 2:
             continue
@@ -633,6 +740,11 @@ def analyse_take(path, verbose=False):
     decided = correct + wrong
     result = {
         "chord": chord, "direction": direction, "strums": usable,
+        # How many strings this shape could actually order. Reported because it is
+        # the strongest predictor of reliability: a shape with one usable pair has
+        # nothing to outvote a single mis-ordered pair, while four tracked strings
+        # give three pairs and can absorb one bad reading.
+        "tracked": len(tracked),
         "gap_median": float(np.median(gaps)),
         "gap_p10": float(np.percentile(gaps, 10)),
         "gap_p90": float(np.percentile(gaps, 90)),
@@ -669,6 +781,20 @@ def verdict(results):
     print("\n" + "=" * 68)
     print("VERDICT")
     print("=" * 68)
+    # Per shape first. Reliability tracks how many strings a shape can order, and
+    # that difference decides whether direction detection should be shape-gated in
+    # the app rather than offered everywhere.
+    if len(results) > 1:
+        print(f"  {'shape':6s}{'dir':6s}{'strings':>8s}{'n':>4s}{'right':>6s}"
+              f"{'wrong':>6s}{'unk':>5s}{'gap':>7s}")
+        for r in sorted(results, key=lambda r: (-r["tracked"], r["chord"])):
+            n = r["strums"]
+            dec = round(r["decided_rate"] * n)
+            right = round(dec * (r["accuracy"] if not np.isnan(r["accuracy"]) else 0))
+            print(f"  {r['chord']:6s}{r['direction']:6s}{r['tracked']:>8d}{n:>4d}"
+                  f"{right:>6d}{r['wrong']:>6d}{n - dec:>5d}"
+                  f"{r['gap_median']:>6.1f}ms")
+        print()
     print(f"  takes analysed:        {len(results)}  ({total} strums)")
     print(f"  median stagger:        {np.median(gaps):.1f}ms "
           f"(range {min(gaps):.1f} .. {max(gaps):.1f})")
@@ -775,5 +901,5 @@ if __name__ == "__main__":
         print("  python record_strums.py --plan")
         sys.exit(1)
 
-    results = [r for r in (analyse_take(p, args.verbose) for p in paths) if r]
+    results = [r for p in paths for r in analyse_session(p, args.verbose)]
     verdict(results)

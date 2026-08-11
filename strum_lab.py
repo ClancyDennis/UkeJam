@@ -369,8 +369,25 @@ def stop_recording():
     np.save(base + ".npy", audio)
     with _lock:
         target = dict(_target)
+
+    # Every target actually played, not just the one showing at stop. A session
+    # where the shape was switched mid-recording used to be saved under whatever
+    # was selected when the button was pressed — one real session was labelled
+    # A_down_60 but tagged chord "C", so the offline pass analysed 23 A strums with
+    # C's probe frequencies. The per-strum log had it right all along; the sidecar
+    # didn't, and the sidecar is what the analyser reads.
+    played = []
+    for s in strums:
+        key = (s["chord"], s["expected"], s["bpm"])
+        if key not in played:
+            played.append(key)
     meta = {**target, "sr": SR, "label": label, "seconds": len(audio) / SR,
-            "strums": len(strums), "recorded": stamp}
+            "strums": len(strums), "recorded": stamp,
+            "targets": [{"chord": c, "direction": d, "bpm": b}
+                        for c, d, b in played],
+            # A single-shape session can be analysed from this file alone; a mixed
+            # one must be split by the per-strum log, so say which this is.
+            "mixed": len(played) > 1}
     with open(base + ".meta.json", "w") as fh:
         json.dump(meta, fh, indent=2)
     with open(base + ".strums.jsonl", "w") as fh:
