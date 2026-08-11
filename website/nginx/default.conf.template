@@ -1,0 +1,29 @@
+# Cloud Run injects PORT; the nginx image's entrypoint runs envsubst on
+# /etc/nginx/templates/*.template before starting.
+server {
+    listen ${PORT};
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css text/plain application/javascript image/svg+xml;
+
+    # clean URLs: /privacy -> privacy.html, /support -> support.html, etc.
+    location / {
+        try_files $uri $uri.html $uri/ =404;
+    }
+
+    error_page 404 /404.html;
+
+    # long cache for images, short for html/css so content updates land quickly
+    location ~* \.(png|jpg|jpeg|svg|ico|webp)$ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000, immutable";
+    }
+
+    location ~* \.(html|css)$ {
+        add_header Cache-Control "public, max-age=300";
+    }
+}

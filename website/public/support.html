@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Support — ukejam</title>
+  <meta name="description" content="Support, FAQ, and contact information for the ukejam iOS app." />
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="labgrid" aria-hidden="true"></div>
+  <div class="wrap">
+
+    <header class="site">
+      <a class="brand" href="/">
+        <img src="/ukejam-mark.png" alt="" />
+        <span>ukejam</span>
+      </a>
+      <nav class="site">
+        <a href="/#features">Features</a>
+        <a href="/support">Support</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+    </header>
+
+    <main class="doc">
+      <h1>Support</h1>
+      <p class="updated">We're happy to help you get playing.</p>
+
+      <div class="callout">
+        <p><strong>Contact us:</strong> email <a href="mailto:cdeltainc@gmail.com">cdeltainc@gmail.com</a> with a description of the problem, your device model, and your iOS version. We aim to respond within 2 business days.</p>
+      </div>
+
+      <h2>Frequently asked questions</h2>
+
+      <details class="faq">
+        <summary>The app isn't hearing my ukulele. What should I check?</summary>
+        <p>First, make sure microphone access is allowed: open iOS Settings → ukejam → Microphone. Then check that nothing is covering the mic and that you're in a reasonably quiet room. Strum firmly and let the chord ring — very light or heavily muted strums are harder to detect.</p>
+      </details>
+
+      <details class="faq">
+        <summary>Chord detection gets confused while a backing track is playing.</summary>
+        <p>Sound from the speaker bleeds into the microphone and contaminates detection. The reliable setup is headphones for the backing track, so the mic only hears your instrument. This is the recommended practice mode.</p>
+      </details>
+
+      <details class="faq">
+        <summary>Why does the app say it needs a SoundFont for backing tracks?</summary>
+        <p>Backing tracks are rendered from MIDI through a General MIDI SoundFont, and good GM banks aren't free to redistribute, so one isn't bundled. The first time you play a backing track, the app offers a one-tap download of GeneralUser GS (free, about 30 MB). Everything except backing playback works without it.</p>
+      </details>
+
+      <details class="faq">
+        <summary>What tunings and instruments are supported?</summary>
+        <p>ukejam is built for baritone ukulele in standard D-G-B-E tuning. Songs are stored instrument-agnostically as chord names, and the app decides how to show each shape on baritone uke.</p>
+      </details>
+
+      <details class="faq">
+        <summary>How do I add a song?</summary>
+        <p>Two ways: paste a chord tab or ChordPro chart into the import view, or import a MIDI file. MIDI imports get an automatic timed chord chart, which enables the scrolling chord highway and backing playback.</p>
+      </details>
+
+      <details class="faq">
+        <summary>Where are my songs stored? Can I sync them between devices?</summary>
+        <p>Your library is stored locally on your device and nowhere else. There is currently no sync or cloud backup — deleting the app deletes the library, so keep copies of source tabs or MIDI files you care about.</p>
+      </details>
+
+      <details class="faq">
+        <summary>A chord name looks wrong on an imported MIDI song.</summary>
+        <p>Chord names are derived from the notes in the MIDI file, and extended or ambiguous voicings (like A7 or Dmaj7) can come out simplified or named differently than the sheet music you know. If a song consistently imports incorrectly, email us the MIDI file and we'll take a look.</p>
+      </details>
+
+      <details class="faq">
+        <summary>How do I report a bug or request a feature?</summary>
+        <p>Email <a href="mailto:cdeltainc@gmail.com">cdeltainc@gmail.com</a>. For bugs, include what you were doing, what you expected, and what happened instead — screenshots or screen recordings help a lot.</p>
+      </details>
+
+      <h2>Privacy questions</h2>
+      <p>Wondering what the app does with microphone audio or your songs? Nothing leaves your device — see the full <a href="/privacy">Privacy Policy</a>.</p>
+    </main>
+
+    <footer class="site">
+      <span>© 2026 ukejam</span>
+      <nav>
+        <a href="/support">Support</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms of Use</a>
+      </nav>
+    </footer>
+
+  </div>
+</body>
+</html>
