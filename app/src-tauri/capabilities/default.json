@@ -7,6 +7,7 @@
     "core:default",
     "core:event:default",
     "opener:default",
-    "local-llm:default"
+    "local-llm:default",
+    "web-auth:default"
   ]
 }

@@ -1,0 +1,2 @@
+# SwiftPM build output when the package is built in place by hand while iterating.
+.build/

@@ -12,6 +12,7 @@ import {
   type AiProviderId,
 } from "./ai";
 import {
+  buildOpenRouterAuthorizeUrl,
   buildOpenRouterLoginUrl,
   cleanOpenRouterCallbackUrl,
   cleanOpenRouterStrandUrl,
@@ -21,7 +22,10 @@ import {
   isOpenRouterCodeReturn,
   isOpenRouterStrand,
   openRouterCallbackUrl,
+  openRouterCodeFromCallback,
+  OPENROUTER_CALLBACK_PARAM,
 } from "./openrouter";
+import { authorizeInSystemBrowser, SystemAuthCancelled, SystemAuthUnavailable } from "./webAuth";
 import {
   parseMidi,
   midiToChordChart,
@@ -2145,17 +2149,12 @@ function openSetupView() {
   (document.querySelector('.util-btn[data-mode="cal-mic"]') as HTMLButtonElement | null)?.click();
 }
 
-async function startOpenRouterLogin() {
-  const verifier = createCodeVerifier();
-  // In the packaged Tauri app this is a localhost sentinel OpenRouter will
-  // accept (the app's own tauri:// origin would be rejected, stranding the
-  // player on openrouter.ai); the Rust hook routes its redirect back here.
-  const callback = openRouterCallbackUrl(window.location.href, nativeRuntime);
+// The verifier must survive the round-trip through openrouter.ai. If the
+// browser blocks BOTH storages (private mode, storage denied), the return
+// leg could never complete — report that here, before navigating away,
+// instead of silently after sign-in.
+function storeOpenRouterVerifier(verifier: string): boolean {
   const pending = JSON.stringify({ verifier, createdAt: Date.now() });
-  // The verifier must survive the round-trip through openrouter.ai. If the
-  // browser blocks BOTH storages (private mode, storage denied), the return
-  // leg could never complete — fail here, before navigating away, instead of
-  // silently after sign-in.
   let stored = false;
   for (const storage of [localStorage, sessionStorage]) {
     try {
@@ -2165,13 +2164,64 @@ async function startOpenRouterLogin() {
       // Try the other storage implementation.
     }
   }
-  if (!stored) {
+  return stored;
+}
+
+// Sign in through the OS browser sheet (iOS: ASWebAuthenticationSession),
+// where the player gets a Cancel button, Safari's existing openrouter.ai
+// session, Keychain autofill and passkeys — none of which exist in the app's
+// own webview. The app is never unloaded, so the fragile parts of the web
+// flow (verifier round-trip, return-leg detection, crash resume) simply
+// don't apply on this path.
+//
+// Returns false when there is no native sheet on this host, which is the
+// signal to fall back to the in-page redirect below.
+async function startNativeOpenRouterLogin(verifier: string): Promise<boolean> {
+  try {
+    const callbackUrl = await authorizeInSystemBrowser({
+      authUrl: await buildOpenRouterAuthorizeUrl(verifier),
+      callbackParam: OPENROUTER_CALLBACK_PARAM,
+    });
+    const code = openRouterCodeFromCallback(callbackUrl);
+    if (!code) throw new Error("OpenRouter finished without returning a sign-in code");
+    await finishOpenRouterExchange(code, verifier);
+    return true;
+  } catch (error) {
+    if (error instanceof SystemAuthUnavailable) return false;
+    clearOpenRouterVerifier();
+    if (error instanceof SystemAuthCancelled) {
+      setAiStatus("sign-in cancelled — tap Connect OpenRouter whenever you're ready");
+    } else {
+      setAiStatus(`${error} — please try connecting again`, "err");
+    }
+    return true;
+  }
+}
+
+async function startOpenRouterLogin() {
+  const verifier = createCodeVerifier();
+  if (!storeOpenRouterVerifier(verifier)) {
     setAiStatus(
       "your browser is blocking site storage, so the secure sign-in can't complete — allow storage for this site and try again",
       "err"
     );
     return;
   }
+  if (nativeRuntime) {
+    aiOrLoginBtn.disabled = true;
+    setAiStatus("opening the secure OpenRouter sign-in…");
+    try {
+      if (await startNativeOpenRouterLogin(verifier)) return;
+    } finally {
+      aiOrLoginBtn.disabled = false;
+    }
+  }
+  // No native sheet here (browser build, dev server, desktop package): the
+  // page navigates to openrouter.ai and comes back with ?code=…. In the
+  // packaged app the callback is a localhost sentinel OpenRouter will accept
+  // (its tauri:// origin would be rejected, stranding the player on
+  // openrouter.ai); the Rust hook routes that redirect back here.
+  const callback = openRouterCallbackUrl(window.location.href, nativeRuntime);
   try {
     window.location.assign(await buildOpenRouterLoginUrl(callback.toString(), verifier));
   } catch (e) {

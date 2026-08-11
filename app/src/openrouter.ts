@@ -58,12 +58,36 @@ export function openRouterCallbackUrl(currentHref: string, inTauri: boolean): UR
   return callback;
 }
 
-export async function buildOpenRouterLoginUrl(callbackUrl: string, verifier: string): Promise<string> {
+// The query parameter /auth expects the redirect target in. Named because the
+// native sign-in (src/webAuth.ts) can't build the URL itself — only the Rust
+// side knows the loopback address its listener ended up on — so it passes this
+// name down and lets the plugin append the pair.
+export const OPENROUTER_CALLBACK_PARAM = "callback_url";
+
+async function openRouterAuthUrl(callbackUrl: string, verifier: string): Promise<string> {
   const url = new URL(OPENROUTER_AUTH_URL);
-  url.searchParams.set("callback_url", callbackUrl);
+  if (callbackUrl) url.searchParams.set(OPENROUTER_CALLBACK_PARAM, callbackUrl);
   url.searchParams.set("code_challenge", await createCodeChallenge(verifier));
   url.searchParams.set("code_challenge_method", "S256");
   return url.toString();
+}
+
+export function buildOpenRouterLoginUrl(callbackUrl: string, verifier: string): Promise<string> {
+  return openRouterAuthUrl(callbackUrl, verifier);
+}
+
+/** The same authorize URL without a callback, for the native sign-in sheet. */
+export function buildOpenRouterAuthorizeUrl(verifier: string): Promise<string> {
+  return openRouterAuthUrl("", verifier);
+}
+
+/** The one-shot code out of whatever URL the sign-in finished on. */
+export function openRouterCodeFromCallback(callbackUrl: string): string {
+  try {
+    return new URL(callbackUrl).searchParams.get("code") ?? "";
+  } catch {
+    return "";
+  }
 }
 
 /**

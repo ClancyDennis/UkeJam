@@ -311,6 +311,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_local_llm::init())
+        .plugin(tauri_plugin_web_auth::init())
         .plugin(openrouter_oauth_return())
         .manage(AudioState::default())
         .manage(BackingState::default())

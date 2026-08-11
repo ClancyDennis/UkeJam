@@ -129,6 +129,7 @@ Current observed results in this workspace:
 | `app/src-tauri/src/backing.rs` | MIDI backing playback through `rustysynth` |
 | `app/src-tauri/src/enhance.rs` | Provider-routed chat calls (Apple on-device / remote) for tab cleanup |
 | `app/tauri-plugin-local-llm/` | Tauri plugin bridging Apple Foundation Models (iOS Swift plugin + macOS helper) |
+| `app/tauri-plugin-web-auth/` | Tauri plugin running OAuth sign-in in the system browser sheet (iOS) |
 | `app/src/ai.ts` | AI provider config: persistence + provider registry |
 | `chords.py` | Python detector reference |
 | `feedback.py` | Python missing/extra feedback reference |
@@ -146,11 +147,21 @@ through a provider chosen in the **⚙ Setup** screen:
   `build.rs` compiles a Swift helper binary best-effort; without the macOS 26
   SDK the build still succeeds and the option reports unavailable
   (`UKEJAM_SKIP_LOCALLLM_HELPER=1` skips it explicitly).
-- **OpenRouter** — one-tap PKCE sign-in (Connect OpenRouter navigates the
-  webview through openrouter.ai/auth and back; a Rust navigation hook routes
-  the redirect into the packaged app), or paste an API key from
+- **OpenRouter** — one-tap PKCE sign-in, or paste an API key from
   [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). Either
-  way, pick any model from its catalog.
+  way, pick any model from its catalog. The sign-in runs two ways:
+  - **iOS** — `app/tauri-plugin-web-auth/` presents an
+    `ASWebAuthenticationSession`: a Safari-backed sheet with a Cancel button
+    that shares Safari's cookie jar, Keychain autofill and passkeys. The
+    plugin opens a loopback listener for the redirect (OpenRouter accepts
+    `127.0.0.1` on any port but no custom scheme) and bounces its reply to
+    `ukejam-auth://callback`, which is how the sheet knows to dismiss. The
+    app is never unloaded.
+  - **Browser, dev server, desktop package** — the page navigates through
+    openrouter.ai/auth and back with `?code=…`; in the packaged app a Rust
+    navigation hook routes the redirect into the app's real origin. This
+    path carries the verifier round-trip, stranded-login recovery and
+    crash-resume, all of which exist because the app unloads mid sign-in.
 - **OpenAI-compatible endpoint** — any base URL speaking the OpenAI chat
   protocol (OpenAI itself, LiteLLM, LM Studio, Ollama, a local proxy). The
   API key is optional for keyless local servers.
