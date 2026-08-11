@@ -23,6 +23,12 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); display: inline-block; }
   .dot.live { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
 
+  .tunepick { display: inline-flex; gap: 4px; align-items: center; }
+  .tunepick button { font-size: 11px; padding: 4px 9px; }
+  .tunepick button.on { border-color: var(--gold); color: var(--gold);
+                        background: rgba(245,196,81,.08); }
+  .tunewarn { font-size: 11px; color: var(--gold); }
+
   .grid { display: grid; grid-template-columns: 300px 1fr 320px; gap: 14px; align-items: start; }
   @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
@@ -121,6 +127,10 @@
 <div class="top">
   <h1>ukejam · strum lab</h1>
   <span class="sub"><span class="dot" id="dot"></span> <span id="micname">connecting…</span></span>
+  <!-- Tuning is in the header, not buried in a panel. A wrong tuning does not fail
+       loudly: it tracks HARMONICS of the wrong strings, which reverses the apparent
+       order and makes every downstroke read as an upstroke. -->
+  <span class="tunepick" id="tunepick"></span>
   <span class="sub mono" id="thresh"></span>
 </div>
 
@@ -214,11 +224,53 @@ async function boot() {
     `spectral leakage between the strings swamps the real order, so it reports ` +
     `<i>unknown</i> rather than guessing. ` +
     `<b>Unknown is fine. Wrong is not</b> — a wrong arrow would teach a learner ` +
-    `the opposite of what they did, so watch the wrong count above all.`;
+    `the opposite of what they did, so watch the wrong count above all.` +
+    `<br><br>Check the tuning in the header matches your instrument. With the ` +
+    `wrong one it doesn't go quiet: it tracks <i>harmonics</i> of the wrong ` +
+    `strings, and the order comes out reversed — every downstroke reads as an ` +
+    `upstroke, confidently.`;
+  buildTuningPicker();
   buildCells();
   renderShape(CFG.shape);
   renderTally();
   connect();
+}
+
+// The tuning selector. This exists because the lab silently defaulted to standard
+// while a baritone was being played: two of the four probe frequencies landed on
+// HARMONICS of the wrong strings, the measured order came out reversed, and every
+// downstroke was reported as an upstroke with real confidence. Wrong tuning
+// produces plausible nonsense, not silence — so it has to be visible at all times.
+function buildTuningPicker() {
+  const el = $("tunepick");
+  el.innerHTML = Object.entries(CFG.tunings).map(([id, t]) =>
+    `<button data-t="${id}">${id} · ${t.spelling}</button>`).join("") +
+    `<span class="tunewarn">← must match your uke</span>`;
+  el.querySelectorAll("button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.t === target.tuning);
+    b.addEventListener("click", () => setTuning(b.dataset.t));
+  });
+}
+
+async function setTuning(id) {
+  // The shape list changes with the tuning, and a name valid on one may be absent
+  // or unmeasurable on the other — the server picks a safe shape and tells us which.
+  const r = await fetch("/target", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tuning: id }),
+  });
+  const d = await r.json();
+  target = { ...target, ...d.target };
+  CFG.shapes = CFG.tunings[id].shapes;
+  // Tallies are per-instrument: mixing them would average two different physical
+  // measurements into one meaningless number.
+  for (const k of Object.keys(tally)) delete tally[k];
+  rows.length = 0; $("rows").innerHTML = "";
+  $("tunepick").querySelectorAll("button")
+    .forEach((b) => b.classList.toggle("on", b.dataset.t === id));
+  buildCells();
+  renderShape(d.shape);
+  renderTally();
 }
 
 function buildCells() {
@@ -332,6 +384,9 @@ function renderShape(shape) {
 
 // ---------- live results ----------
 function onStrum(e) {
+  // Ignore anything measured against a different target than the one on screen:
+  // a strum that landed while the shape/tempo was being switched belongs to the
+  // previous cell, and counting it in this one would silently corrupt the tally.
   if (e.chord !== target.chord || e.expected !== target.direction) return;
 
   $("seq").textContent = `#${e.seq}`;
