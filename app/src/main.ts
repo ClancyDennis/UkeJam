@@ -6,25 +6,18 @@ import {
   type ChordReading,
 } from "./native";
 import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
-import type { Song, SongLine } from "./song";
+import type { SongLine } from "./song";
 import { invokeAiConfig } from "./ai";
 import { parseChordChart, buildFusedChordPro } from "./midi";
 import {
-  VerdictBuffer,
-  accumulate,
-  newAccumulator,
-  seal,
   timingLabel,
-  type BarAccumulator,
   type BarVerdict,
 } from "./verdict";
 import { activeTuning } from "./tunings";
-import { barOfBeat, beatsPerBarOf, buildBeatTimeline, fmtTime, isTimedSong } from "./time";
+import { fmtTime } from "./time";
 import {
   hideSoundfontOpenFolder,
   initSoundfont,
-  maybeSoundfontError,
-  playBacking,
 } from "./views/setup/soundfont";
 import {
   aiConfig,
@@ -38,6 +31,47 @@ import { initOpenRouterAuth, resumeOpenRouterLogin } from "./views/setup/openrou
 import { initTabSearch } from "./views/tabSearch";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
 import { escapeHtml } from "./dom";
+import {
+  accumulateReading,
+  backingTrackList,
+  barBeats,
+  beatOfChord,
+  buildSectionMap,
+  currentChordIdx,
+  currentRecord,
+  currentSong,
+  currentSongTime,
+  currentTarget,
+  hasBackingAudio,
+  initSession,
+  isCleanHit,
+  isPlaying,
+  isTargetGradeable,
+  isTimed,
+  isWaiting,
+  jumpToChord,
+  LOOKAHEAD_BEATS,
+  loadBackingIntoEngine,
+  maybeAdvance,
+  nextDistinctChord,
+  nextDistinctChordInfo,
+  resetScoring,
+  restartTransport,
+  secondsPerBeat,
+  selectedBackingChannels,
+  setBackingChannels,
+  setLoadedSong,
+  setTarget,
+  setupBacking,
+  setupTiming,
+  startTransport,
+  stopTransport,
+  syncBackingPos,
+  tickTransport,
+  toggleWaitMode,
+  verdictBuffer,
+} from "./session";
+
 import { currentMode, isPracticeMode, setMode, type AppMode } from "./state/appMode";
 import {
   initTuner,
@@ -76,7 +110,7 @@ function setConn(live: boolean) {
 // when the combined state flips (setIdleTimerDisabled is a main-thread hop).
 let keepAwake = false;
 function syncKeepAwake() {
-  const want = isTunerListening() || chordListening || playing;
+  const want = isTunerListening() || chordListening || isPlaying();
   if (want === keepAwake) return;
   keepAwake = want;
   nativeInvoke("set_keep_awake", { awake: want }).catch(() => {});
@@ -172,7 +206,6 @@ let lastChordAt = 0;
 // enough to perceive — an onset is true for one reading only.
 let lastOnsetAt = 0;
 let smoothClean = 0;
-let targetChord = "";
 
 // FFT spectrum config + smoothed buffer. Must match the Rust log_spectrum:
 // 96 bins log-spaced over 70..2000 Hz.
@@ -251,7 +284,7 @@ listenBtn2.addEventListener("click", async () => {
   if (!chordListening) {
     try {
       await nativeInvoke("start_chords");
-      await nativeInvoke("set_target", { chord: targetChord || null });
+      await nativeInvoke("set_target", { chord: currentTarget() || null });
       chordListening = true;
       listenBtn2.textContent = "Stop listening";
       listenBtn2.classList.add("on");
@@ -270,6 +303,20 @@ listenBtn2.addEventListener("click", async () => {
   }
   updatePracticeUi(); // mic live/idle text is no longer refreshed every frame
 });
+
+// --- view state that follows the session's chord index ---
+// Element lists the play and arrangement screens rebuild when a song loads, so
+// currentChordIdx() -> {chip, lyric token, arrangement chord} stays O(1).
+let stripChordEls: HTMLElement[] = [];
+let lyricTokenEls: (HTMLElement | null)[] = [];
+let lyricLineOfIdx: HTMLElement[] = [];
+let arrangementChordEls: HTMLElement[] = [];
+let arrangementLineOfIdx: HTMLElement[] = [];
+let arrangementChordCards = new Map<string, HTMLElement>();
+let lastArrangementScrollIdx = -1;
+
+// How many bars the highway keeps tinted behind the NOW line.
+const VERDICT_TRAIL_BARS = 3;
 
 // Diagnostics drawer: the analyzer instrumentation (gauge, chroma, FFT, peaks)
 // is hidden by default and slides up on demand. The canvases keep their layout
@@ -294,13 +341,13 @@ addEventListener("keydown", (e) => {
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
   if (e.code === "Space") {
     e.preventDefault();
-    if (timed) (playing ? stopTransport() : startTransport());
+    if (isTimed()) (isPlaying() ? stopTransport() : startTransport());
   } else if (e.key === "ArrowRight") {
     e.preventDefault();
-    jumpToChord(songIdx + 1);
+    jumpToChord(currentChordIdx() + 1);
   } else if (e.key === "ArrowLeft") {
     e.preventDefault();
-    jumpToChord(songIdx - 1);
+    jumpToChord(currentChordIdx() - 1);
   } else if (e.key === "d" || e.key === "D") {
     toggleDiagnostics();
   }
@@ -328,138 +375,12 @@ const practiceSubEl = document.getElementById("practice-sub")!;
 const practicePosEl = document.getElementById("practice-pos")!;
 const practiceNextEl = document.getElementById("practice-next")!;
 
-// loaded song state
-let loadedSong: Song | null = null;
-let loadedRecord: SongRecord | null = null;
-let songIdx = 0; // index into chordSequence = current target chord
-let stripChordEls: HTMLElement[] = [];
-let advanceHold = 0; // frames the correct chord has been held (debounce)
-
-// --- timed-highway transport state ---
-// When the loaded song has a real tempo (e.g. a MIDI import), each chord is
-// placed at a known beat position so the highway scrolls on a wall clock,
-// Rocksmith-style. chordBeat[i] = beat at which chord i begins; songBeats =
-// total length. timed===false for plain tabs (no tempo) -> play-to-advance.
-let timed = false;
-let chordBeat: number[] = []; // beat position of each chord in chordSequence
-let songBeats = 0; // total beats (end of last chord)
-let secPerBeat = 0.5; // 60/tempo
-let playing = false;
-let songTime = 0; // seconds elapsed in the song
-let lastTickAt = 0; // performance.now() of last transport tick
-const LOOKAHEAD_BEATS = 6; // how many beats ahead the highway shows
-
-// --- per-bar scoring ---
-// The detector judges each window in isolation; this turns that stream into one
-// graded verdict per bar, which is what both the highway trail and the coach
-// read. See verdict.ts for the model and the grading rule.
-const verdicts = new VerdictBuffer();
-let barAccum: BarAccumulator = newAccumulator();
-let beatsPerBar = 4; // set by setupTiming from the song's time signature
-let currentBar = -1; // bar ordinal the accumulator is filling (-1 = none yet)
-let currentBarChordIdx = 0; // chord the bar was opened on, for the verdict
-let currentBarStartedAt: number | null = null; // performance.now() of its downbeat
-// Whether wait-mode parked the playhead during this bar. If it did, the strum's
-// distance from the downbeat is an artifact of the mode, not the player.
-let currentBarWaited = false;
-// Section label per chord index, so a verdict knows where in the song it sits
-// (and so the coach can be triggered on section boundaries).
-let sectionOfIdx: string[] = [];
-// How many bars the highway keeps tinted behind the NOW line.
-const VERDICT_TRAIL_BARS = 3;
-
-// backing-track (MIDI audio) state. When a song has backing audio, the Rust
-// playback position drives the highway playhead (no drift); otherwise the
-// wall clock does. selectedChannels = which MIDI channels sound (bass+drums
-// by default — the player covers the rest).
-let hasBacking = false;
-let backingTracks: import("./library").BackingTrackInfo[] = [];
-let selectedChannels: number[] = [];
-let currentMidiB64: string | null = null;
-// per-global-chord-index lyric token elements + the line each belongs to.
-// Built in loadSongIntoPlay so songIdx -> {token, line} is O(1).
-let lyricTokenEls: (HTMLElement | null)[] = [];
-let lyricLineOfIdx: HTMLElement[] = [];
-let arrangementChordEls: HTMLElement[] = [];
-let arrangementLineOfIdx: HTMLElement[] = [];
-let arrangementChordCards = new Map<string, HTMLElement>();
-let lastArrangementScrollIdx = -1;
-
-// Whether the detector could actually parse the current target. False for a
-// chord name neither side understands (a typo, or a quality we don't support):
-// Rust then holds no target, so `missing`/`extra` come back empty, which looks
-// exactly like a flawless chord. Everything that grades must check this first.
-let targetGradeable = false;
-
-function setTarget(chord: string) {
-  targetChord = chord;
-  // Assume ungradeable until Rust confirms it parsed. Optimistic-then-correct
-  // would flash a false "Locked in" for a frame on every chord change.
-  targetGradeable = false;
-  nativeInvoke<boolean>("set_target", { chord: chord || null })
-    .then((ok) => {
-      // Ignore a stale reply: the player may have moved on while it was in flight.
-      if (targetChord === chord) targetGradeable = ok && !!chord;
-      updatePracticeUi();
-    })
-    .catch(() => {
-      // The call itself failed (no native runtime, or a transient IPC error), so
-      // Rust never told us either way. Fall back to our own resolver, which
-      // shares its vocabulary: a real chord stays gradeable rather than grading
-      // switching itself off silently for the rest of the session.
-      if (targetChord === chord) targetGradeable = chordPitchClasses(chord).length > 0;
-      updatePracticeUi();
-    });
-  updatePracticeUi();
-}
-
-function isCleanHit(reading: ChordReading | null): boolean {
-  // No parseable target => nothing was compared => cannot be a hit. Without this
-  // guard an empty diff reads as perfect, which auto-advanced the song and
-  // scored every bar HIT while the player hadn't touched the strings.
-  if (!targetGradeable) return false;
-  return !!reading?.active && reading.missing.length === 0 && reading.extra.length <= 1;
-}
-
-type NextChordInfo = {
-  name: string;
-  index: number;
-  beatsUntil: number;
-  urgency: number;
-};
-
-function nextDistinctChordInfo(): NextChordInfo {
-  if (!loadedSong) return { name: "", index: -1, beatsUntil: 0, urgency: 0 };
-  const seq = loadedSong.chordSequence;
-  let n = songIdx + 1;
-  while (n < seq.length && seq[n] === seq[songIdx]) n++;
-  if (n >= seq.length) return { name: "", index: -1, beatsUntil: 0, urgency: 0 };
-
-  if (!timed) {
-    const stepsUntil = Math.max(1, n - songIdx);
-    return {
-      name: seq[n],
-      index: n,
-      beatsUntil: stepsUntil,
-      urgency: Math.max(0.22, 0.55 - (stepsUntil - 1) * 0.12),
-    };
-  }
-
-  const headBeat = songTime / secPerBeat;
-  const nextBeat = chordBeat[n] ?? n;
-  const beatsUntil = Math.max(0, nextBeat - headBeat);
-  const urgency = 1 - Math.min(1, beatsUntil / LOOKAHEAD_BEATS);
-  return { name: seq[n], index: n, beatsUntil, urgency };
-}
-
-function nextDistinctChord(): string {
-  return nextDistinctChordInfo().name;
-}
 
 function updatePracticeUi() {
+  const song = currentSong();
   // mode bar edge + tag: teal "free play" vs. gold "practice"
-  playView.classList.toggle("free", !loadedSong);
-  if (!loadedSong) {
+  playView.classList.toggle("free", !song);
+  if (!song) {
     modeTagEl.textContent = "● Free play";
     songTagEl.textContent = "free detection";
     practiceTitleEl.textContent = "Free play";
@@ -470,29 +391,29 @@ function updatePracticeUi() {
   }
   modeTagEl.textContent = "● Practice";
 
-  const title = loadedRecord?.title || loadedSong.title || "Untitled";
-  const artist = loadedRecord?.artist || loadedSong.artist;
-  const current = loadedSong.chordSequence[songIdx] ?? "--";
+  const title = currentRecord()?.title || song.title || "Untitled";
+  const artist = currentRecord()?.artist || song.artist;
+  const current = song.chordSequence[currentChordIdx()] ?? "--";
   const next = nextDistinctChord();
-  const modeText = timed
-    ? `${Math.round(loadedSong.tempo)} bpm · ${waiting ? "waiting" : playing ? "playing" : "paused"}`
+  const modeText = isTimed()
+    ? `${Math.round(song.tempo)} bpm · ${isWaiting() ? "waiting" : isPlaying() ? "playing" : "paused"}`
     : "play-to-advance";
   const micText = chordListening ? "mic live" : "mic idle";
-  const backingText = hasBacking ? "backing" : "no backing";
+  const backingText = hasBackingAudio() ? "backing" : "no backing";
   // Rolling score over the last 16 bars: enough history to mean something,
   // short enough that fixing a rough patch shows up while you're still on it.
-  const score = verdicts.hitCount(16);
+  const score = verdictBuffer().hitCount(16);
   const scoreText = score.total ? ` · ${score.hits}/${score.total} bars` : "";
   // Rhythm alongside the chord score, because they fail independently: a player
   // can hold every chord perfectly and still strum once where the bar wants four.
-  const rhythmText = timed ? verdicts.rhythmSummary(16) : "";
+  const rhythmText = isTimed() ? verdictBuffer().rhythmSummary(16) : "";
 
   songTagEl.textContent = artist ? `${title} · ${artist}` : title;
   practiceTitleEl.textContent = artist ? `${title} — ${artist}` : title;
   practiceSubEl.textContent =
-    (timed ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) +
+    (isTimed() ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) +
     scoreText + rhythmText;
-  practicePosEl.textContent = `${songIdx + 1}/${loadedSong.chordSequence.length} · ${current}`;
+  practicePosEl.textContent = `${currentChordIdx() + 1}/${song.chordSequence.length} · ${current}`;
   practiceNextEl.textContent = next ? `next ${next}` : "last chord";
 }
 
@@ -705,9 +626,7 @@ function loadSongIntoPlay(rec: SongRecord) {
   // resetScoring(), which also runs on a loop — where the advice the player just
   // read is still about the part they're replaying.
   resetCoaching();
-  loadedSong = song;
-  loadedRecord = rec;
-  songIdx = 0;
+  setLoadedSong(song, rec);
   buildSectionMap(song); // before setupTiming: a sealed bar reads this
   setupTiming(song);
   setupBacking(rec);
@@ -720,160 +639,7 @@ function loadSongIntoPlay(rec: SongRecord) {
   (document.querySelector('[data-mode="play"]') as HTMLButtonElement)?.click();
 }
 
-// Configure backing audio for the loaded song. Default the selection to
-// bass + drums (the rhythm section to play over); if the MIDI has neither,
-// fall back to all non-lead channels.
-function setupBacking(rec: SongRecord) {
-  nativeInvoke("stop_backing").catch(() => {});
-  hasBacking = !!rec.midi && !!rec.tracks?.length;
-  backingTracks = rec.tracks ?? [];
-  currentMidiB64 = rec.midi ?? null;
-  if (!hasBacking) {
-    backingControlsEl.hidden = true;
-    updatePracticeUi();
-    return;
-  }
-  const rhythm = backingTracks.filter((t) => t.isBass || t.isDrums).map((t) => t.channel);
-  selectedChannels = rhythm.length ? rhythm : backingTracks.map((t) => t.channel);
-  buildTrackPicker();
-  backingControlsEl.hidden = false;
-  loadBackingIntoEngine();
-  updatePracticeUi();
-}
 
-// Send the MIDI + selected channels to the Rust synth (paused at start). The
-// MIDI travels as base64 (decoded in Rust) — far cheaper over IPC than a JSON
-// array of bytes.
-function loadBackingIntoEngine() {
-  if (!currentMidiB64) return;
-  nativeInvoke("load_backing", { midi: currentMidiB64, channels: selectedChannels }).catch((e) => {
-    // no SoundFont installed yet → prompt to download one; otherwise a transient
-    // load failure shouldn't tear down the picker, so just log it.
-    if (!maybeSoundfontError(e)) console.warn("load_backing failed", e);
-  });
-}
-
-// Re-filter the already-loaded backing to the current channel selection without
-// resending the file — preserves position/play state (used by the track picker).
-function applyChannelSelection() {
-  if (!currentMidiB64) return;
-  nativeInvoke("set_backing_channels", { channels: selectedChannels }).catch((e) => {
-    console.warn("set_backing_channels failed", e);
-  });
-}
-
-// Build the beat-timeline for the loaded song. With a real tempo + bar markers
-// (MIDI import) each chord occupies the bars until the next chord, so chord i
-// sits at a known beat. Without tempo, the song is untimed (play-to-advance).
-function setupTiming(song: Song) {
-  stopTransport();
-  songTime = 0;
-  resetScoring();
-  timed = isTimedSong(song);
-  chordBeat = [];
-  if (!timed) {
-    transportEl.hidden = true;
-    arrTransportEl.hidden = true;
-    songBeats = 0;
-    // Untimed songs score per chord advance, and sealUntimedChord files the
-    // chord we're leaving — so open the first one here or chord 0 is never
-    // graded (resetScoring left currentBar at -1, meaning "nothing open").
-    currentBar = 0;
-    currentBarChordIdx = 0;
-    updatePracticeUi();
-    return;
-  }
-  secPerBeat = 60 / song.tempo;
-  beatsPerBar = beatsPerBarOf(song);
-  const timeline = buildBeatTimeline(song, beatsPerBar);
-  chordBeat = timeline.chordBeat;
-  songBeats = timeline.songBeats;
-  tpBpmEl.textContent = `${Math.round(song.tempo)} bpm`;
-  arrBpmEl.textContent = `${Math.round(song.tempo)} bpm`;
-  tpTimeEl.textContent = "0:00";
-  arrTimeEl.textContent = "0:00";
-  transportEl.hidden = false;
-  arrTransportEl.hidden = false;
-  setPlayBtn(false);
-  updatePracticeUi();
-}
-
-// --- per-bar scoring ---
-
-// Map every chord index to the section it sits in, so a verdict can say "the
-// bridge falls apart" rather than just "bar 34". Sections come from {comment:}
-// directives, which a lot of songs simply don't have — an empty label is normal.
-function buildSectionMap(song: Song) {
-  sectionOfIdx = [];
-  let section = "";
-  let idx = 0;
-  for (const line of song.lines) {
-    if (line.section) {
-      section = line.section;
-      continue;
-    }
-    for (let i = 0; i < line.chords.length; i++) sectionOfIdx[idx++] = section;
-  }
-}
-
-function resetScoring() {
-  verdicts.clear();
-  barAccum = newAccumulator();
-  currentBar = -1;
-  currentBarChordIdx = 0;
-  currentBarStartedAt = null;
-  currentBarWaited = false;
-  // This counts bars in the buffer we just emptied, so it has to go with it —
-  // otherwise it stays ahead of verdicts.length and the sectionless trigger
-  // stops firing for a whole extra window.
-  coachBarsAtLastRequest = 0;
-}
-
-// Close out the bar the accumulator has been filling and file its verdict.
-// `nextBar`/`nextChordIdx` open the following bar in the same step, so the
-// downbeat timestamp used for the timing offset is the one we actually crossed.
-function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number | null) {
-  let sealed: BarVerdict | null = null;
-  const expected = loadedSong?.chordSequence[currentBarChordIdx] ?? "";
-  // A bar whose chord we can't parse has nothing to grade against: the detector
-  // held no target, so missing/extra are empty and the bar would score a
-  // flawless HIT on silence. Skip it entirely rather than feed a fiction to the
-  // trail, the hit rate and the coach.
-  const gradeable = !!expected && chordPitchClasses(expected).length > 0;
-  if (currentBar >= 0 && loadedSong && gradeable) {
-    sealed = seal(barAccum, {
-      bar: currentBar + 1, // 1-based for anything a human or the LLM reads
-      chordIdx: currentBarChordIdx,
-      expected,
-      section: sectionOfIdx[currentBarChordIdx] ?? "",
-      // Wait-mode holds the playhead until the chord is found, so the gap
-      // between downbeat and strum is the mode working as intended, not the
-      // player being late. Report no timing rather than a false accusation.
-      barStartAt: currentBarWaited ? null : currentBarStartedAt,
-      // Beat grid for rhythm scoring. Untimed songs pass 0 and get no rhythm
-      // verdict, which is right: there is no grid to have played against.
-      beats: timed ? beatsPerBar : 0,
-      secPerBeat: timed ? secPerBeat : 0,
-    });
-    verdicts.push(sealed);
-  }
-  barAccum = newAccumulator();
-  currentBar = nextBar;
-  currentBarChordIdx = nextChordIdx;
-  currentBarStartedAt = at;
-  currentBarWaited = false;
-  // After the state swap, and with the verdict passed explicitly: the triggers
-  // must reason about the bar that was just graded, not whichever bar happens to
-  // be open by the time they run.
-  if (sealed) onVerdictSealed(sealed);
-}
-
-// Untimed songs have no bar clock, so a "bar" is one chord: seal when the player
-// advances. There is no downbeat to measure against, hence no timing claims.
-function sealUntimedChord(chordIdx: number) {
-  if (timed) return;
-  sealCurrentBar(chordIdx, chordIdx, null);
-}
 
 // --- LLM coaching ---
 // Everything above this line is local and instant. This part asks the model for
@@ -899,25 +665,26 @@ let coachEndpointWarned = false;
 /// Ask for advice on the bars just played. Called from several triggers, all of
 /// which can fire close together, so this is the single place the guards live.
 function requestCoaching(reason: string) {
-  if (!nativeRuntime || !loadedSong || coachInFlight) return;
-  if (verdicts.length < COACH_MIN_BARS) return;
+  const song = currentSong();
+  if (!nativeRuntime || !song || coachInFlight) return;
+  if (verdictBuffer().length < COACH_MIN_BARS) return;
   const now = performance.now();
   if (coachLastAt && now - coachLastAt < COACH_COOLDOWN_MS) return;
 
-  const window = verdicts.recent(COACH_WINDOW_BARS);
+  const window = verdictBuffer().recent(COACH_WINDOW_BARS);
   // Nothing sounded at all: the player is holding the instrument, not playing
   // it. Coaching silence produces advice about a performance that didn't happen.
   if (window.every((v) => v.status === "MISS")) return;
 
-  const digest = verdicts.digest(COACH_WINDOW_BARS, {
-    tempo: timed ? loadedSong.tempo : 0,
-    timeSig: loadedSong.timeSig ?? [4, 4],
+  const digest = verdictBuffer().digest(COACH_WINDOW_BARS, {
+    tempo: isTimed() ? song.tempo : 0,
+    timeSig: song.timeSig ?? [4, 4],
   });
   if (!digest) return;
 
   coachInFlight = true;
   coachLastAt = now;
-  coachBarsAtLastRequest = verdicts.length;
+  coachBarsAtLastRequest = verdictBuffer().length;
   renderCoachThinking(reason);
   // Same provider as tab enhancement — whatever is configured in Setup.
   nativeInvoke<string>("coach_bars", {
@@ -935,7 +702,7 @@ function requestCoaching(reason: string) {
 /// Called after each bar is graded: the automatic triggers that depend on how
 /// the playing is going, rather than on a transport event.
 function onVerdictSealed(v: BarVerdict) {
-  if (!loadedSong) return;
+  if (!currentSong()) return;
 
   // Section boundary — the natural unit of "how did that bit go". Songs without
   // {comment:} markers get a fixed cadence instead.
@@ -944,17 +711,17 @@ function onVerdictSealed(v: BarVerdict) {
       requestCoaching(`finished the ${coachLastSection}`);
     }
     coachLastSection = v.section;
-  } else if (verdicts.length - coachBarsAtLastRequest >= COACH_SECTIONLESS_BARS) {
+  } else if (verdictBuffer().length - coachBarsAtLastRequest >= COACH_SECTIONLESS_BARS) {
     requestCoaching(`${COACH_SECTIONLESS_BARS} bars in`);
   }
 
   // Rough patch — coaching arrives while the player is still in the trouble,
   // which is the only time it can actually help.
-  const rate = verdicts.hitRate(COACH_ROUGH_WINDOW);
+  const rate = verdictBuffer().hitRate(COACH_ROUGH_WINDOW);
   if (
     rate !== null &&
     rate < COACH_ROUGH_RATE &&
-    verdicts.length >= COACH_ROUGH_WINDOW
+    verdictBuffer().length >= COACH_ROUGH_WINDOW
   ) {
     requestCoaching("struggling with this part");
   }
@@ -1011,184 +778,48 @@ function resetCoaching() {
     `<span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>`;
 }
 
-// Wait-mode: hold the playhead at each chord boundary until the player has
-// played that chord cleanly, then resume. Encourages smooth, accurate playing.
-let waitMode = false;
-let waiting = false; // currently paused at a boundary, waiting for the chord
 
-function setPlayBtn(on: boolean) {
-  tpPlayBtn.textContent = on ? "❚❚" : "▶";
-  tpPlayBtn.classList.toggle("on", on);
-  arrPlayBtn.textContent = on ? "❚❚" : "▶";
-  arrPlayBtn.classList.toggle("on", on);
-  updatePracticeUi();
-}
-
-function startTransport() {
-  if (!timed) return;
-  playing = true;
-  waiting = false;
-  lastTickAt = performance.now();
-  setPlayBtn(true);
-  syncKeepAwake();
-  if (hasBacking) playBacking();
-}
-
-function stopTransport() {
-  const wasPlaying = playing;
-  playing = false;
-  waiting = false;
-  setPlayBtn(false);
-  syncKeepAwake();
-  if (hasBacking) nativeInvoke("pause_backing").catch(() => {});
-  // Stopping is when the player wants to know how that went. The buffer is left
-  // intact so pressing play again continues the same run. Gated on wasPlaying
-  // because setupTiming() calls this on every song load — coaching the player
-  // about the song they just navigated away from would be nonsense.
-  if (wasPlaying) requestCoaching("paused");
-}
-
-function restartTransport() {
-  songTime = 0;
-  songIdx = 0;
-  waiting = false;
-  resetScoring(); // a fresh run from the top is a fresh score
-  tpTimeEl.textContent = "0:00";
-  arrTimeEl.textContent = "0:00";
-  updateStrip();
-  setTarget(loadedSong?.chordSequence[0] ?? "");
-  if (hasBacking) {
-    // reload from the top (rustysynth seeks via reload at pos 0)
-    loadBackingIntoEngine();
-    if (playing) playBacking();
-  }
-  updatePracticeUi();
-}
-
-// Move songIdx to the chord whose beat window contains `beat`; updates target.
-// Also the single place bars are closed out: both the wall-clock tick and the
-// backing-audio sync funnel through here, so scoring can't miss a bar or
-// double-count one depending on which clock is driving the playhead.
-function applyBeat(beat: number) {
-  if (!loadedSong) return;
-  let idx = songIdx;
-  while (idx + 1 < chordBeat.length && chordBeat[idx + 1] <= beat) idx++;
-  while (idx > 0 && chordBeat[idx] > beat) idx--;
-
-  const bar = barOfBeat(beat, beatsPerBar);
-  if (bar !== currentBar) {
-    // We notice the boundary a frame or two after it passed. Back out that
-    // overshoot so the timing offset measures the player against the downbeat,
-    // not against when the render loop happened to look.
-    const overshootMs = (beat - bar * beatsPerBar) * secPerBeat * 1000;
-    sealCurrentBar(bar, idx, performance.now() - overshootMs);
-  }
-
-  if (idx !== songIdx) {
-    songIdx = idx;
-    updateStrip();
-    setTarget(loadedSong.chordSequence[idx]);
-  }
-}
-
-// Whether the current chord has been played acceptably (used by wait-mode).
-function currentChordSatisfied(): boolean {
-  return isCleanHit(chord);
-}
-
-// advance the playhead each render frame. With backing audio, the Rust
-// position drives us (synced via the `backing` event), so the wall-clock
-// fallback here only runs for MIDI songs without audio. Wait-mode pauses the
-// transport at the next chord boundary until the player nails the chord.
-function tickTransport() {
-  if (!playing || !timed || !loadedSong) return;
-
-  // wait-mode gate: if we're holding for the player, resume once they play it
-  if (waiting) {
-    if (currentChordSatisfied()) {
-      waiting = false;
-      updatePracticeUi(); // no longer refreshed every frame
-      if (hasBacking) playBacking();
-    } else {
-      lastTickAt = performance.now();
-      return; // stay parked on this chord
-    }
-  }
-
-  if (hasBacking) {
-    // position comes from the `backing` event (syncBackingPos); nothing to
-    // integrate here. Wait-mode boundary checks still run below via beat.
-    return;
-  }
-
-  const now = performance.now();
-  const dt = Math.min(0.1, (now - lastTickAt) / 1000); // clamp big gaps
-  lastTickAt = now;
-  songTime += dt;
-  const beat = songTime / secPerBeat;
-  tpTimeEl.textContent = fmtTime(songTime);
-  arrTimeEl.textContent = fmtTime(songTime);
-  maybeWaitAtBoundary(beat);
-  if (!waiting) applyBeat(beat);
-  // loop at the end
-  if (beat >= songBeats) {
-    // A full pass through the song is the natural moment for a review, and the
-    // buffer is about to be rewound — so ask before clearing it.
-    requestCoaching("song end");
-    songTime = 0;
-    songIdx = 0;
-    resetScoring();
-    updateStrip();
-    setTarget(loadedSong.chordSequence[0]);
-  }
-}
-
-// In wait-mode, if the playhead is about to cross into the next chord but the
-// player hasn't satisfied the *current* one, park there (pause backing too).
-function maybeWaitAtBoundary(beat: number) {
-  if (!waitMode || !loadedSong) return;
-  const next = songIdx + 1;
-  if (next < chordBeat.length && beat >= chordBeat[next] && !currentChordSatisfied()) {
-    waiting = true;
-    currentBarWaited = true; // suppresses this bar's timing offset (see sealCurrentBar)
-    // clamp the playhead just before the boundary so we don't advance
-    songTime = chordBeat[next] * secPerBeat - 0.001;
-    if (hasBacking) nativeInvoke("pause_backing").catch(() => {});
+initSession({
+  currentReading: () => chord,
+  onPlayingChanged: (on) => {
+    tpPlayBtn.textContent = on ? "❚❚" : "▶";
+    tpPlayBtn.classList.toggle("on", on);
+    arrPlayBtn.textContent = on ? "❚❚" : "▶";
+    arrPlayBtn.classList.toggle("on", on);
     updatePracticeUi();
-  }
-}
+  },
+  onTimeChanged: (sec) => {
+    tpTimeEl.textContent = fmtTime(sec);
+    arrTimeEl.textContent = fmtTime(sec);
+  },
+  onTimingReady: (timed, tempo) => {
+    transportEl.hidden = !timed;
+    arrTransportEl.hidden = !timed;
+    if (!timed) return;
+    tpBpmEl.textContent = `${Math.round(tempo)} bpm`;
+    arrBpmEl.textContent = `${Math.round(tempo)} bpm`;
+  },
+  onChordIndexChanged: updateStrip,
+  onBackingChanged: (has) => {
+    if (has) buildTrackPicker();
+    backingControlsEl.hidden = !has;
+  },
+  onBarSealed: onVerdictSealed,
+  requestCoaching,
+  onScoringReset: () => {
+    coachBarsAtLastRequest = 0;
+  },
+  onPracticeStateChanged: updatePracticeUi,
+  syncKeepAwake,
+});
 
-// Called from the `backing` event: the Rust playback position is authoritative
-// when audio is playing, so map it onto the highway playhead.
-function syncBackingPos(pos: number) {
-  if (!timed || !loadedSong || !hasBacking) return;
-  // The backing engine owns looping, so a position that jumps backwards is the
-  // song wrapping. Review the pass and start a fresh score, mirroring what the
-  // wall-clock path does at `beat >= songBeats`.
-  if (pos + 0.5 < songTime) {
-    requestCoaching("song end");
-    resetScoring();
-  }
-  songTime = pos;
-  const beat = pos / secPerBeat;
-  tpTimeEl.textContent = fmtTime(pos);
-  arrTimeEl.textContent = fmtTime(pos);
-  maybeWaitAtBoundary(beat);
-  if (!waiting) applyBeat(beat);
-}
-
-tpPlayBtn.addEventListener("click", () => (playing ? stopTransport() : startTransport()));
+tpPlayBtn.addEventListener("click", () => (isPlaying() ? stopTransport() : startTransport()));
 tpRestartBtn.addEventListener("click", restartTransport);
-arrPlayBtn.addEventListener("click", () => (playing ? stopTransport() : startTransport()));
+arrPlayBtn.addEventListener("click", () => (isPlaying() ? stopTransport() : startTransport()));
 arrRestartBtn.addEventListener("click", restartTransport);
 
 tpWaitBtn.addEventListener("click", () => {
-  waitMode = !waitMode;
-  tpWaitBtn.classList.toggle("on", waitMode);
-  if (!waitMode && waiting) {
-    waiting = false;
-    if (playing && hasBacking) playBacking();
-  }
+  tpWaitBtn.classList.toggle("on", toggleWaitMode());
   updatePracticeUi();
 });
 
@@ -1199,8 +830,8 @@ tpTracksBtn.addEventListener("click", () => {
 // Build the channel checklist; toggling reloads the backing with the new mix.
 function buildTrackPicker() {
   trackPickerEl.innerHTML = "";
-  for (const t of backingTracks) {
-    const on = selectedChannels.includes(t.channel);
+  for (const t of backingTrackList()) {
+    const on = selectedBackingChannels().includes(t.channel);
     const row = document.createElement("label");
     row.className = "track-opt";
     row.innerHTML =
@@ -1209,29 +840,30 @@ function buildTrackPicker() {
       `<span class="t-meta">${t.isDrums ? "drums" : t.isBass ? "bass" : "ch" + (t.channel + 1)} · ${t.noteCount}</span>`;
     const cb = row.querySelector("input") as HTMLInputElement;
     cb.addEventListener("change", () => {
-      if (cb.checked) {
-        if (!selectedChannels.includes(t.channel)) selectedChannels.push(t.channel);
-      } else {
-        selectedChannels = selectedChannels.filter((c) => c !== t.channel);
-      }
+      const channels = selectedBackingChannels();
       // re-filter in place: keeps the current position + play state (no reload,
       // no resend of the file), so the song doesn't restart on a toggle.
-      applyChannelSelection();
+      setBackingChannels(
+        cb.checked
+          ? channels.includes(t.channel) ? channels : [...channels, t.channel]
+          : channels.filter((c) => c !== t.channel)
+      );
     });
     trackPickerEl.appendChild(row);
   }
 }
 
 function buildSongStrip() {
+  const song = currentSong();
   songStrip.innerHTML = "";
   stripChordEls = [];
-  if (!loadedSong) return;
+  if (!song) return;
   songBarEmpty.hidden = true;
   songStrip.hidden = false;
-  const hasBars = loadedSong.barStart.some(Boolean);
-  loadedSong.chordSequence.forEach((ch, i) => {
+  const hasBars = song.barStart.some(Boolean);
+  song.chordSequence.forEach((ch, i) => {
     // bar separator before any chord (except the first) that starts a measure
-    if (hasBars && i > 0 && loadedSong!.barStart[i]) {
+    if (hasBars && i > 0 && song!.barStart[i]) {
       const sep = document.createElement("span");
       sep.className = "bar-sep";
       songStrip.appendChild(sep);
@@ -1240,9 +872,7 @@ function buildSongStrip() {
     el.className = "strip-chord";
     el.textContent = ch;
     el.addEventListener("click", () => {
-      songIdx = stripChordEls.indexOf(el);
-      updateStrip();
-      setTarget(ch);
+      jumpToChord(stripChordEls.indexOf(el));
     });
     songStrip.appendChild(el);
     stripChordEls.push(el);
@@ -1252,17 +882,17 @@ function buildSongStrip() {
 
 function updateStrip() {
   stripChordEls.forEach((el, i) => {
-    el.classList.toggle("done", i < songIdx);
-    el.classList.toggle("current", i === songIdx);
+    el.classList.toggle("done", i < currentChordIdx());
+    el.classList.toggle("current", i === currentChordIdx());
     // Verdict tint persists for the whole run, so the strip doubles as a map of
     // where the song went wrong — the highway trail only shows the last few bars.
-    const v = verdicts.forChordIdx(i);
+    const v = verdictBuffer().forChordIdx(i);
     el.classList.toggle("hit", v?.status === "HIT");
     el.classList.toggle("wrong", v?.status === "WRONG");
     el.classList.toggle("miss", v?.status === "MISS");
   });
   // keep the current chord in view
-  stripChordEls[songIdx]?.scrollIntoView({ block: "nearest", inline: "center" });
+  stripChordEls[currentChordIdx()]?.scrollIntoView({ block: "nearest", inline: "center" });
   updateLyrics();
   updateArrangementState();
   updatePracticeUi();
@@ -1286,6 +916,7 @@ function arrangementBarsForLine(line: SongLine, startIdx: number): ArrangementCh
 }
 
 function buildArrangement() {
+  const song = currentSong();
   arrangementSheetEl.innerHTML = "";
   arrangementChordsEl.innerHTML = "";
   arrangementChordEls = [];
@@ -1293,7 +924,7 @@ function buildArrangement() {
   arrangementChordCards = new Map();
   lastArrangementScrollIdx = -1;
 
-  if (!loadedSong) {
+  if (!song) {
     arrangementTagEl.textContent = "no song";
     arrangementChordTagEl.textContent = activeTuning().spelling;
     arrangementEmptyEl.hidden = false;
@@ -1304,13 +935,13 @@ function buildArrangement() {
 
   arrangementEmptyEl.hidden = true;
   arrangementSheetEl.hidden = false;
-  const title = loadedRecord?.title || loadedSong.title || "Untitled";
-  const artist = loadedRecord?.artist || loadedSong.artist;
+  const title = currentRecord()?.title || song.title || "Untitled";
+  const artist = currentRecord()?.artist || song.artist;
   arrangementTagEl.textContent = artist ? `${title} · ${artist}` : title;
-  arrangementChordTagEl.textContent = `${loadedSong.uniqueChords.length} shapes`;
+  arrangementChordTagEl.textContent = `${song.uniqueChords.length} shapes`;
 
   let globalIdx = 0;
-  for (const line of loadedSong.lines) {
+  for (const line of song.lines) {
     if (line.section) {
       const sec = document.createElement("div");
       sec.className = "arr-section";
@@ -1356,8 +987,8 @@ function buildArrangement() {
   }
 
   const counts = new Map<string, number>();
-  loadedSong.chordSequence.forEach((ch) => counts.set(ch, (counts.get(ch) ?? 0) + 1));
-  loadedSong.uniqueChords.forEach((ch) => {
+  song.chordSequence.forEach((ch) => counts.set(ch, (counts.get(ch) ?? 0) + 1));
+  song.uniqueChords.forEach((ch) => {
     const card = document.createElement("div");
     card.className = "arr-chord-card";
     card.tabIndex = 0;
@@ -1374,7 +1005,7 @@ function buildArrangement() {
       `</span>` +
       `</span>` +
       `<svg class="arr-mini-fret" viewBox="0 0 150 200" aria-label="${escapeHtml(ch)} fingering"></svg>`;
-    const firstIdx = loadedSong!.chordSequence.indexOf(ch);
+    const firstIdx = song!.chordSequence.indexOf(ch);
     card.addEventListener("click", () => jumpToChord(firstIdx));
     card.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" && e.key !== " ") return;
@@ -1409,26 +1040,27 @@ function buildArrangement() {
 }
 
 function updateArrangementState(forceScroll = false) {
+  const song = currentSong();
   const next = nextDistinctChordInfo();
-  if (!loadedSong) {
+  if (!song) {
     arrangementNowEl.textContent = "--";
     arrangementNextEl.textContent = "--";
     arrangementCountEl.textContent = "--";
     return;
   }
 
-  const current = loadedSong.chordSequence[songIdx] ?? "--";
+  const current = song.chordSequence[currentChordIdx()] ?? "--";
   arrangementNowEl.textContent = current;
   arrangementNextEl.textContent = next.name || "end";
-  arrangementCountEl.textContent = `${songIdx + 1}/${loadedSong.chordSequence.length}`;
+  arrangementCountEl.textContent = `${currentChordIdx() + 1}/${song.chordSequence.length}`;
 
   arrangementChordEls.forEach((el, i) => {
-    el.classList.toggle("done", i < songIdx);
-    el.classList.toggle("now", i === songIdx);
+    el.classList.toggle("done", i < currentChordIdx());
+    el.classList.toggle("now", i === currentChordIdx());
     el.classList.toggle("next", next.index >= 0 && i === next.index);
   });
 
-  const curLine = arrangementLineOfIdx[songIdx];
+  const curLine = arrangementLineOfIdx[currentChordIdx()];
   arrangementSheetEl.querySelectorAll(".arr-line").forEach((line) => {
     line.classList.toggle("now", line === curLine);
   });
@@ -1438,16 +1070,17 @@ function updateArrangementState(forceScroll = false) {
     card.classList.toggle("next", !!next.name && name === next.name);
   });
 
-  if ((forceScroll || lastArrangementScrollIdx !== songIdx) && curLine && !arrangementView.hidden) {
+  if ((forceScroll || lastArrangementScrollIdx !== currentChordIdx()) && curLine && !arrangementView.hidden) {
     curLine.scrollIntoView({ block: "center" });
-    lastArrangementScrollIdx = songIdx;
+    lastArrangementScrollIdx = currentChordIdx();
   }
 }
 
 // Canvas chord highway: tokens slide down toward a gold NOW line. When the song
 // is timed, position comes from the wall-clock playhead (Rocksmith-style);
-// otherwise it's a static lane of upcoming chords fanning up from songIdx.
+// otherwise it's a static lane of upcoming chords fanning up from the target.
 function drawHighway() {
+  const song = currentSong();
   const dpr = window.devicePixelRatio || 1;
   const rect = highway.getBoundingClientRect();
   const w = rect.width || 360;
@@ -1473,8 +1106,8 @@ function drawHighway() {
   const WRONG = "245,158,66"; // --verdict-wrong #f59e42
   const MISS = "120,132,146"; // --verdict-miss  #788492
 
-  if (!loadedSong) return;
-  const seq = loadedSong.chordSequence;
+  if (!song) return;
+  const seq = song.chordSequence;
 
   // perspective rails converging toward NOW
   hctx.strokeStyle = `rgba(${TEAL},0.12)`;
@@ -1486,22 +1119,22 @@ function drawHighway() {
     hctx.stroke();
   });
 
-  // playhead beat (timed) or a synthetic position from songIdx (untimed)
-  const headBeat = timed ? songTime / secPerBeat : (chordBeat[songIdx] ?? songIdx);
+  // playhead beat (timed) or a synthetic position from the chord index (untimed)
+  const headBeat = isTimed() ? currentSongTime() / secondsPerBeat() : (beatOfChord(currentChordIdx()) ?? currentChordIdx());
 
   // How far behind NOW the graded trail extends, in beats.
-  const trailBeats = timed ? VERDICT_TRAIL_BARS * beatsPerBar : VERDICT_TRAIL_BARS;
+  const trailBeats = isTimed() ? VERDICT_TRAIL_BARS * barBeats() : VERDICT_TRAIL_BARS;
 
   // draw upcoming tokens from nearest-future back, mapping beat-distance to y.
   // Bars the playhead has already crossed stay on screen for a few beats, tinted
   // by their verdict — the player sees how the last bars went without looking
   // away from where they're going.
   for (let i = 0; i < seq.length; i++) {
-    const tb = timed ? chordBeat[i] : i;
+    const tb = isTimed() ? beatOfChord(i) : i;
     const rel = tb - headBeat; // beats ahead of the playhead (0 = at NOW)
     if (rel > LOOKAHEAD_BEATS) break; // too far ahead
     const passed = rel < -0.6;
-    const verdict = passed ? verdicts.forChordIdx(i) : undefined;
+    const verdict = passed ? verdictBuffer().forChordIdx(i) : undefined;
     if (passed && (!verdict || rel < -trailBeats)) continue; // off the trail
     if (passed) {
       drawTrailToken(hctx, cx, nowY, verdict!, -rel / trailBeats, seq[i], { HIT, WRONG, MISS });
@@ -1511,7 +1144,7 @@ function drawHighway() {
     const y = nowY - prog * (nowY - topY);
     const scale = 1 - prog * 0.55;
     const alpha = 1 - prog * 0.78;
-    const isNow = rel < (timed ? 0.5 : 0.5) && i === songIdx;
+    const isNow = rel < (isTimed() ? 0.5 : 0.5) && i === currentChordIdx();
     const col = isNow ? GOLD : TEAL;
     const tw = 60 * scale;
     const th = 30 * scale;
@@ -1632,17 +1265,18 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 // positioned above the syllable they fall on (using chordPos). A flat map
 // from global chord index -> token element drives the gold highlight.
 function buildLyrics() {
+  const song = currentSong();
   lyricsView.innerHTML = "";
   lyricTokenEls = [];
   lyricLineOfIdx = [];
-  if (!loadedSong) {
+  if (!song) {
     lyricsView.hidden = true;
     return;
   }
   lyricsView.hidden = false;
 
   let globalIdx = 0; // running index into chordSequence
-  for (const line of loadedSong.lines) {
+  for (const line of song.lines) {
     if (line.section) {
       const sec = document.createElement("div");
       sec.className = "lyric-section";
@@ -1725,48 +1359,19 @@ function buildLyrics() {
   updateLyrics();
 }
 
-// Move highlight to the token at songIdx, brighten its line, autoscroll.
+// Move highlight to the token at the current chord, brighten its line, autoscroll.
 function updateLyrics() {
-  if (!loadedSong) return;
-  const curLine = lyricLineOfIdx[songIdx];
+  if (!currentSong()) return;
+  const curLine = lyricLineOfIdx[currentChordIdx()];
   lyricTokenEls.forEach((tok, i) => {
-    if (tok) tok.classList.toggle("lit", i === songIdx);
+    if (tok) tok.classList.toggle("lit", i === currentChordIdx());
   });
   lyricsView.querySelectorAll(".lyric-line").forEach((l) => {
     l.classList.toggle("now", l === curLine);
   });
-  lyricTokenEls[songIdx]?.scrollIntoView({ block: "nearest" });
+  lyricTokenEls[currentChordIdx()]?.scrollIntoView({ block: "nearest" });
 }
 
-// Clicking a lyric cue jumps the target to that chord (same path as a strip
-// chip): set songIdx, refresh both views, and tell the detector the new target.
-function jumpToChord(idx: number) {
-  if (!loadedSong || idx < 0 || idx >= loadedSong.chordSequence.length) return;
-  songIdx = idx;
-  updateStrip();
-  setTarget(loadedSong.chordSequence[idx]);
-}
-
-// advance to the next chord when the current one is played cleanly. Only for
-// UNTIMED songs — when a song is timed, the transport playhead owns the
-// position and we don't want a good strum to skip ahead of the music.
-function maybeAdvance(reading: ChordReading) {
-  if (!loadedSong || !targetChord || timed) return;
-  const hit = isCleanHit(reading);
-  if (hit) {
-    advanceHold++;
-    // require a few consecutive good frames (~0.25s) to avoid double-skips
-    if (advanceHold >= 4 && songIdx < loadedSong.chordSequence.length - 1) {
-      songIdx++;
-      advanceHold = 0;
-      sealUntimedChord(songIdx);
-      updateStrip();
-      setTarget(loadedSong.chordSequence[songIdx]);
-    }
-  } else {
-    advanceHold = 0;
-  }
-}
 
 nativeListen<ChordReading>("chord", (event) => {
   chord = event.payload;
@@ -1781,8 +1386,8 @@ nativeListen<ChordReading>("chord", (event) => {
   // The mic now also runs under the StrumCam view; only the practice surfaces
   // grade bars or advance the song, so noodling in the lab can't touch a score.
   const practicing = isPracticeMode(currentMode());
-  if (practicing && loadedSong && (!timed || playing)) {
-    accumulate(barAccum, event.payload, lastChordAt);
+  if (practicing && currentSong() && (!isTimed() || isPlaying())) {
+    accumulateReading(event.payload, lastChordAt);
   }
   if (event.payload.onset) {
     lastOnsetAt = lastChordAt;
@@ -1820,7 +1425,7 @@ nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
     listenBtn2.textContent = "Start listening";
     listenBtn2.classList.remove("on");
     setConn(false);
-    if (playing) stopTransport();
+    if (isPlaying()) stopTransport();
     await nativeInvoke("stop_audio").catch(() => {});
     syncKeepAwake();
     coachEl.textContent = "audio interrupted — resuming when the call ends";
@@ -1833,7 +1438,7 @@ nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
   try {
     if (wasChordListeningBeforeInterruption) {
       await nativeInvoke("start_chords");
-      await nativeInvoke("set_target", { chord: targetChord || null });
+      await nativeInvoke("set_target", { chord: currentTarget() || null });
       chordListening = true;
       listenBtn2.textContent = "Stop listening";
       listenBtn2.classList.add("on");
@@ -1856,7 +1461,7 @@ nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
 // the native side has already re-routed it.
 nativeListen<{ reason: number }>("audio_route_change", (event) => {
   if (event.payload.reason !== 2) return;
-  if (playing) {
+  if (isPlaying()) {
     stopTransport();
     coachEl.textContent = "output device disconnected — playback paused";
   }
@@ -1867,7 +1472,7 @@ initSoundfont({
   // A song loaded before a SoundFont existed still has its MIDI staged; hand it
   // to the engine now that one is installed.
   onInstalled: () => {
-    if (hasBacking) loadBackingIntoEngine();
+    if (hasBackingAudio()) loadBackingIntoEngine();
   },
 });
 
@@ -1891,7 +1496,7 @@ initTuningSetup({
     // baritone is a different list, so a stale index would point at nothing.
     resetVoicingsForTuningChange();
     invalidateFretboards();
-    if (loadedSong) buildArrangement();
+    if (currentSong()) buildArrangement();
     updateArrangementState(true);
   },
   markDisconnected: () => setConn(false),
@@ -1916,11 +1521,11 @@ resumeOpenRouterLogin();
 // fingers are wrong" visual). Pulls the target chord's pitch classes and marks
 // each present unless the detector reports it missing; appends any extras.
 function renderBreakdown(reading: ChordReading | null) {
-  if (!targetChord) {
+  if (!currentTarget()) {
     targetNotesEl.innerHTML = "";
     return;
   }
-  const pcs = chordPitchClasses(targetChord);
+  const pcs = chordPitchClasses(currentTarget());
   const missingPcs = new Set((reading?.missing ?? []).map((n) => pcNameToIndex(n)));
   const active = !!reading?.active;
   let html = "";
@@ -1967,9 +1572,9 @@ function renderChords() {
 
   const c = chord;
   let fretboardMatched = false;
-  const targetPcs = chordPitchClasses(targetChord);
+  const targetPcs = chordPitchClasses(currentTarget());
   // FFT gold highlight follows the target chord if set, else the detected one
-  fftGoldPCs = targetChord
+  fftGoldPCs = currentTarget()
     ? targetPcs
     : c && c.active && c.detected
       ? chordPitchClasses(c.detected)
@@ -1980,35 +1585,35 @@ function renderChords() {
     // hero chord = what to play (target) when a song is loaded; the detected
     // chord otherwise. For target chords, use the same tolerant note-diff hit
     // rule as the coach and auto-advance so the screen gives one verdict.
-    const matched = targetChord ? isCleanHit(c) : !!c.detected;
+    const matched = currentTarget() ? isCleanHit(c) : !!c.detected;
     fretboardMatched = matched;
-    const hero = targetChord || c.detected || "—";
+    const hero = currentTarget() || c.detected || "—";
     chordNameEl.textContent = hero;
     chordNameEl.className = "chord-name " + (matched ? "clean" : "dirty");
     // A target we can't parse gets no verdict at all — say so plainly instead of
     // reporting on a comparison that never happened.
-    chordSubEl.textContent = !targetChord
+    chordSubEl.textContent = !currentTarget()
       ? "Playing"
-      : !targetGradeable
-        ? `can't grade ${targetChord} — heard ${c.detected || "—"}`
+      : !isTargetGradeable()
+        ? `can't grade ${currentTarget()} — heard ${c.detected || "—"}`
         : matched
           ? "Locked in"
           : `heard ${c.detected || "—"}`;
     smoothClean += (c.cleanliness - smoothClean) * 0.2;
     cleanValEl.innerHTML = `${pct}<span class="pct">%</span>`;
     cleanStatusEl.textContent = clean ? "clean" : pct >= 70 ? "almost" : "off";
-    cleanTargetEl.textContent = targetChord ? `target · ${targetChord}` : "free play";
+    cleanTargetEl.textContent = currentTarget() ? `target · ${currentTarget()}` : "free play";
 
     // coach text from missing/extra
-    if (!targetChord) {
+    if (!currentTarget()) {
       coachEl.className = "coach good";
       coachEl.innerHTML = `<span class="ok">free play</span> · heard <b>${c.detected || "—"}</b>`;
-    } else if (!targetGradeable) {
+    } else if (!isTargetGradeable()) {
       coachEl.className = "coach";
-      coachEl.innerHTML = `<span class="miss">can't grade <b>${targetChord}</b></span> — not a chord we know, so this bar isn't scored`;
+      coachEl.innerHTML = `<span class="miss">can't grade <b>${currentTarget()}</b></span> — not a chord we know, so this bar isn't scored`;
     } else if (isCleanHit(c)) {
       coachEl.className = "coach good";
-      coachEl.innerHTML = `<span class="ok">nice — that's a clean ${targetChord} ✓</span>`;
+      coachEl.innerHTML = `<span class="ok">nice — that's a clean ${currentTarget()} ✓</span>`;
     } else {
       coachEl.className = "coach";
       const parts: string[] = [];
@@ -2059,13 +1664,13 @@ function renderChords() {
       lastNextFretChord
     );
   } else {
-    chordNameEl.textContent = targetChord || "—";
+    chordNameEl.textContent = currentTarget() || "—";
     chordNameEl.className = "chord-name";
-    chordSubEl.textContent = targetChord ? "Play this" : "Playing";
+    chordSubEl.textContent = currentTarget() ? "Play this" : "Playing";
     smoothClean += (0 - smoothClean) * 0.15;
     cleanValEl.innerHTML = `0<span class="pct">%</span>`;
     cleanStatusEl.textContent = chordListening ? "listening…" : "idle";
-    cleanTargetEl.textContent = targetChord ? `target · ${targetChord}` : "free play";
+    cleanTargetEl.textContent = currentTarget() ? `target · ${currentTarget()}` : "free play";
     coachEl.className = "coach good";
     coachEl.textContent = chordListening ? "play a chord" : "press start to listen";
     renderBreakdown(null);
@@ -2173,11 +1778,11 @@ let lastNextFretChord = "__none__";
 let lastTransitionKey = "__none__";
 
 function currentFretboardChord(detected: string, matched: boolean): { name: string; played: boolean } {
-  return { name: targetChord || detected, played: matched };
+  return { name: currentTarget() || detected, played: matched };
 }
 
 function nextFretboardChord(): { name: string; played: boolean; isNext: boolean } {
-  if (loadedSong && targetChord) {
+  if (currentSong() && currentTarget()) {
     const next = nextDistinctChordInfo();
     if (next.name) {
       return { name: next.name, played: false, isNext: true };
@@ -2214,12 +1819,12 @@ function updateFretboardPanelState(matched: boolean) {
   currentFingerPanelEl.classList.toggle("is-clean", matched);
   nextFingerPanelEl.classList.toggle("has-upcoming", !!next.name);
   nextFingerPanelEl.classList.toggle("is-close", nextGlow > 0.68);
-  currentFingerPanelEl.style.setProperty("--now-glow", loadedSong ? "1" : chordListening ? "0.62" : "0.35");
+  currentFingerPanelEl.style.setProperty("--now-glow", currentSong() ? "1" : chordListening ? "0.62" : "0.35");
   nextFingerPanelEl.style.setProperty("--next-glow", nextGlow.toFixed(2));
   setShapeControls(currentName, currentShapeControlsEl, currentShapeCountEl, currentShapePrevBtn, currentShapeNextBtn);
   setShapeControls(next.name, nextShapeControlsEl, nextShapeCountEl, nextShapePrevBtn, nextShapeNextBtn);
   if (next.name) {
-    const eta = timed ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
+    const eta = isTimed() ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
     fingerTagEl.textContent = shapeTag(next.name, chordShapeState(next.name, activeTuning()), eta);
   }
   updateTransitionCoach();
@@ -2241,14 +1846,14 @@ function updateTransitionCoach(force = false) {
   const nextName = next.name;
   const nowState = chordShapeState(nowName, activeTuning());
   const nextState = chordShapeState(nextName, activeTuning());
-  const eta = timed && nextName ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
-  const key = `${nowName}|${nowState.index}|${nextName}|${nextState.index}|${songIdx}|${eta}`;
+  const eta = isTimed() && nextName ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
+  const key = `${nowName}|${nowState.index}|${nextName}|${nextState.index}|${currentChordIdx()}|${eta}`;
   if (!force && key === lastTransitionKey) return;
   lastTransitionKey = key;
 
   if (!nowName || !nextName || !nowState.voicing || !nextState.voicing) {
-    transitionTagEl.textContent = loadedSong ? "last chord" : "free play";
-    transitionCoachEl.innerHTML = loadedSong
+    transitionTagEl.textContent = currentSong() ? "last chord" : "free play";
+    transitionCoachEl.innerHTML = currentSong()
       ? `<div class="transition-empty">Stay on ${escapeHtml(nowName || "the chord")}.</div>`
       : `<div class="transition-empty">Load a song to see the next move.</div>`;
     return;
