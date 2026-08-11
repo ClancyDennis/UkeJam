@@ -278,9 +278,34 @@ the second, none ever ambiguous. The 24% are first-position standard-tuning shap
 That unison is symmetric between the two templates, so it cancels: you don't need
 to know which string made a pitch, only what order the pitches arrived in.
 
-**Whether the physics works is the open question**, and it is a real gate. A strum
-has to stagger the strings by enough time to measure, consistently, or the sequence
-never forms no matter how neat the templates are.
+**The physics also works** — measured on a real baritone, 46 strums at 60 bpm
+(`A` and `C`, downstrokes):
+
+| | |
+|---|---|
+| Median inter-string stagger | **~10 ms** |
+| Correct when it commits | **100%** (0 wrong of 19, offline pass) |
+| Commits on | **80%** of strums |
+| Method needs | 4 ms to commit; ~2.8 ms floor |
+
+Real playing staggers the strings roughly 2.5× more than the method needs, so the
+approach is viable. Two caveats carry forward into the implementation:
+
+- **Shape matters.** `A` tracks all four strings — three ordered pairs, so one
+  mis-ordered pair gets outvoted. `C` tracks two: a single pair, with nothing to
+  outvote it. The one wrong call in the live session was a `C`. Direction detection
+  should probably be gated on trackable-string count rather than offered on every
+  shape.
+- **Level matters.** Two of the three live wrong calls were on strums the rig had
+  already flagged `QUIET`. Excluding those, live accuracy was 97%.
+
+An earlier session appeared to *fail* the gate — 2.3 ms stagger, 8 wrong. It was
+played on a baritone while the lab still defaulted to standard tuning, so it was
+timing harmonics of the wrong strings (see the tuning warning below). Void, not
+evidence — and the reason the tuning is now impossible to overlook.
+
+`ONSET_RATIO = 2.2` in `audio.rs` also looks about right: real audio measured a p95
+flux ratio of 2.8.
 
 ```bash
 .venv/bin/python analyse_strums.py --self-check   # fast path == reference maths
@@ -294,10 +319,10 @@ difference). The floor comes from strings sounding *together* — each one's
 narrowband envelope picks up its neighbours' leakage and the attack shifts. Measured
 at a true 0 ms stagger: C 2.8 ms, G 2.6 ms, Am 1.9 ms, F 0.8 ms.
 
-So the method needs roughly **8 ms** of real stagger to commit, and reports
-*unknown* below that rather than guessing. That is a much higher bar than the ~3 ms
-originally assumed, and it is what real takes have to beat. **A shorter analysis hop
-will not help** — the limit is spectral overlap between the strings, not time
+So the method needs roughly **8 ms** of real stagger to be confident, and reports
+*unknown* below that rather than guessing. That was a much higher bar than the ~3 ms
+originally assumed — and real playing clears it. **A shorter analysis hop would not
+have helped**: the limit is spectral overlap between the strings, not time
 resolution.
 
 ### Strum lab (live, browser)
@@ -515,8 +540,11 @@ Demucs weights are large and should stay out of git.
   remain the default practice path.
 - Extended chord naming and simplified playable chord naming can diverge,
   especially from MIDI extraction.
-- Strum direction is unresolved — the study above has to run against a real
-  instrument before any of it is built.
+- Strum direction is **validated but not implemented**. A real baritone staggers the
+  strings ~10 ms, comfortably above the ~4 ms the method needs, at 100% accuracy
+  when it commits. The detector in `audio.rs` is the remaining work, and it should
+  gate on trackable-string count: four-string shapes carry three ordered pairs,
+  two-string shapes carry one and can be flipped by a single bad reading.
 
 ## Direction
 
