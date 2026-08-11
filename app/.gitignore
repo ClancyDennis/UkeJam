@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# MediaPipe assets staged at build time by scripts/fetch-mediapipe.mjs
+public/mediapipe
