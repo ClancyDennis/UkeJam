@@ -3,96 +3,297 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ukejam — play-along practice for baritone ukulele</title>
-  <meta name="description" content="ukejam is a play-along practice app for baritone ukulele. Load a song, follow the chord highway, and get live feedback on which notes are ringing, missing, or extra." />
+  <title>ukejam — stop guessing. start playing.</title>
+  <meta name="description" content="A play-along practice app for ukulele — standard or baritone — that hears every chord. Follow the chord highway, play along, and get instant feedback." />
   <link rel="canonical" href="https://ukejam.otti-tech.de/" />
-  <meta property="og:title" content="ukejam — play-along practice for baritone ukulele" />
-  <meta property="og:description" content="Load a song, follow the chord highway, and let ukejam listen for what is actually ringing." />
+  <meta property="og:title" content="ukejam — stop guessing. start playing." />
+  <meta property="og:description" content="The ukulele practice app that actually listens. Standard or baritone tuning." />
   <meta property="og:url" content="https://ukejam.otti-tech.de/" />
   <meta property="og:image" content="https://ukejam.otti-tech.de/icon.png" />
+  <meta name="theme-color" content="#07110f" />
   <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="apple-touch-icon" href="/icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
-  <div class="labgrid" aria-hidden="true"></div>
-  <div class="wrap">
+<body class="landing">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="atmosphere" aria-hidden="true"></div>
 
-    <header class="site">
-      <a class="brand" href="/">
+  <div class="site-shell">
+    <header class="site site-header">
+      <a class="brand" href="/" aria-label="ukejam home">
         <img src="/ukejam-mark.png" alt="" />
-        <span>ukejam</span>
+        <span class="wordmark">uke<span>jam</span></span>
       </a>
-      <nav class="site">
-        <a href="/#features">Features</a>
+      <nav class="site" aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#features">Inside the app</a>
         <a href="/support">Support</a>
-        <a href="/privacy">Privacy</a>
-        <a href="/terms">Terms</a>
       </nav>
+      <a class="nav-cta" href="#get-ukejam">Coming soon <span>↗</span></a>
     </header>
 
-    <section class="hero">
-      <img class="mark" src="/icon.png" alt="ukejam app icon" />
-      <h1>Practice that actually <em>listens</em>.</h1>
-      <p class="tag">
-        ukejam is a play-along practice app for baritone ukulele. Load a song,
-        follow the chord highway, and let the app hear what is really ringing —
-        which target notes landed, which are missing, and which extras crept in.
-      </p>
-      <div class="cta">
-        <a class="btn-appstore" href="#" aria-label="Download ukejam on the App Store">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8.98-.2 1.92-.86 3.03-.78 1.33.11 2.33.63 3 1.57-2.75 1.65-2.31 5.28.25 6.31-.5 1.32-1.15 2.63-2.36 4.07zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
-          <span>Download on the<br /><small>App Store — coming soon</small></span>
-        </a>
-      </div>
-      <p class="note" style="margin-top:18px">Built for baritone ukulele (D-G-B-E tuning).</p>
-    </section>
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> Made for ukulele · standard or baritone</p>
+          <h1 id="hero-title">Stop guessing.<br /><em>Start playing.</em></h1>
+          <p class="hero-lede">A play-along practice app that listens to every strum. Follow the song, land the chord, and know exactly what to fix.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#get-ukejam">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8.98-.2 1.92-.86 3.03-.78 1.33.11 2.33.63 3 1.57-2.75 1.65-2.31 5.28.25 6.31-.5 1.32-1.15 2.63-2.36 4.07zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+              <span><small>Coming soon to the</small>App Store</span>
+            </a>
+            <a class="text-link" href="#how-it-works">See it in action <span>↓</span></a>
+          </div>
+          <div class="hero-proof" aria-label="Product highlights">
+            <span><i></i> Live chord detection</span>
+            <span><i></i> Audio stays on-device</span>
+          </div>
+        </div>
 
-    <section class="features" id="features">
-      <div class="grid">
-        <div class="card">
-          <h3>Timed chord highway</h3>
-          <p>Chords scroll toward you in time with the song, with upcoming shapes shown clearly enough to play without reading the whole screen.</p>
+        <div class="hero-product" aria-label="Animated preview of ukejam's chord highway">
+          <svg class="jam-crowd hero-crowd" viewBox="0 0 920 680" role="img" aria-label="Neon silhouettes of musicians and dancers jamming around the app">
+            <g class="neon-person coral guitarist">
+              <circle cx="90" cy="212" r="27" />
+              <path d="M88 242 C58 268 62 338 69 398 L46 518 M75 393 L111 518 M64 286 L18 350 M102 275 L158 330" />
+              <path class="instrument" d="M42 337 C20 322 5 348 19 369 C34 392 77 388 91 362 C101 342 81 324 62 334 Z M67 345 L160 291" />
+              <path class="string" d="M70 350 L159 296 M73 356 L162 302" />
+            </g>
+            <g class="neon-person gold dancer-left">
+              <circle cx="194" cy="115" r="21" />
+              <path d="M191 139 C167 175 165 234 184 278 L160 365 M184 278 L225 354 M172 174 L126 139 M207 171 L251 114" />
+              <path class="motion" d="M113 127 Q128 107 149 112 M245 93 Q268 103 272 126" />
+            </g>
+            <g class="neon-person teal dancer-right">
+              <circle cx="748" cy="116" r="22" />
+              <path d="M751 141 C780 175 783 229 760 280 L786 367 M760 280 L720 357 M777 177 L830 142 M736 176 L700 119" />
+              <path class="motion" d="M826 122 Q850 111 862 135 M685 105 Q701 89 721 94" />
+            </g>
+            <g class="neon-person purple uke-player">
+              <circle cx="840" cy="225" r="25" />
+              <path d="M839 252 C869 286 860 349 852 405 L878 517 M851 405 L813 518 M857 284 L900 342 M824 281 L778 337" />
+              <path class="instrument" d="M809 323 C785 309 766 330 776 354 C787 380 830 382 846 358 C859 339 843 318 823 323 Z M823 337 L899 300" />
+              <path class="string" d="M824 341 L900 305 M827 347 L902 312" />
+            </g>
+            <g class="floor-glow"><path d="M0 529 Q220 502 460 526 T920 525" /></g>
+          </svg>
+          <div class="orbit orbit-one" aria-hidden="true"></div>
+          <div class="orbit orbit-two" aria-hidden="true"></div>
+          <div class="app-window">
+            <div class="app-topbar">
+              <span class="mini-brand"><img src="/ukejam-mark.png" alt="" /> uke<span>jam</span></span>
+              <span class="song-name">MIDNIGHT DRIVE <i>•</i> 92 BPM</span>
+              <span class="live-pill"><b></b> LISTENING</span>
+            </div>
+
+            <div class="highway" data-highway>
+              <div class="highway-glow" aria-hidden="true"></div>
+              <div class="road-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+              <div class="chord-stream" aria-hidden="true">
+                <div class="chord-tile chord-far"><small>NEXT</small><strong>C</strong></div>
+                <div class="chord-tile chord-mid"><small>2 BARS</small><strong>Em</strong></div>
+                <div class="chord-tile chord-near"><small>NEXT</small><strong>G</strong></div>
+              </div>
+              <div class="hit-line"><span>STRUM</span></div>
+              <div class="current-chord">
+                <small>NOW PLAYING</small>
+                <strong data-chord>F</strong>
+                <span>● ● ● ●</span>
+              </div>
+              <div class="score-pop" aria-hidden="true">CLEAN +100</div>
+            </div>
+
+            <div class="feedback-strip">
+              <div>
+                <span class="feedback-label">HEARD</span>
+                <span class="note-chip good">F</span>
+                <span class="note-chip good">A</span>
+                <span class="note-chip good">C</span>
+              </div>
+              <div class="accuracy"><strong>96</strong><span>%<br />ACCURACY</span></div>
+              <button class="demo-control" type="button" data-demo aria-pressed="false"><span>Ⅱ</span> Pause demo</button>
+            </div>
+          </div>
+          <div class="floating-card float-tuner" aria-hidden="true"><span>TUNER</span><strong>D</strong><i>IN TUNE</i></div>
+          <div class="floating-card float-streak" aria-hidden="true"><span>STREAK</span><strong>12</strong><i>CHORDS</i></div>
         </div>
-        <div class="card">
-          <h3>Live listening feedback</h3>
-          <p>The microphone feeds a low-latency chord detector. ukejam compares the expected chord against the notes it hears and shows clean, missing, and extra notes as you play.</p>
-        </div>
-        <div class="card">
-          <h3>Built-in tuner</h3>
-          <p>A fast, accurate tuner tuned for baritone ukulele, powered by the same real-time audio engine as the chord detector.</p>
-        </div>
-        <div class="card">
-          <h3>Import songs your way</h3>
-          <p>Paste a tab or ChordPro chart, or import a MIDI file — ukejam derives a timed chord chart automatically and adds it to your library.</p>
-        </div>
-        <div class="card">
-          <h3>Backing tracks</h3>
-          <p>Play along with MIDI backing rendered through a General MIDI SoundFont. Pick the instruments you want behind you — usually bass and drums.</p>
-        </div>
-        <div class="card">
-          <h3>Wait-for-me mode</h3>
-          <p>Practicing a tricky passage? The song can wait until you actually play the chord before moving on.</p>
-        </div>
-        <div class="card">
-          <h3>AI coaching, your way</h3>
-          <p>The built-in coach reviews how your practice went, points out the chords that need work, and cleans up messy imported tabs. It runs on-device with Apple&nbsp;Intelligence — or bring your own model via OpenRouter or any OpenAI-compatible endpoint.</p>
+      </section>
+
+      <div class="marquee" aria-hidden="true">
+        <div class="marquee-track">
+          <span>FOLLOW THE CHORD</span><i>✦</i><span>HEAR WHAT LANDED</span><i>✦</i><span>FIX WHAT DIDN'T</span><i>✦</i>
+          <span>FOLLOW THE CHORD</span><i>✦</i><span>HEAR WHAT LANDED</span><i>✦</i><span>FIX WHAT DIDN'T</span><i>✦</i>
         </div>
       </div>
-    </section>
 
-    <footer class="site">
-      <span>© 2026 ukejam</span>
-      <nav>
-        <a href="/support">Support</a>
-        <a href="/privacy">Privacy Policy</a>
-        <a href="/terms">Terms of Use</a>
-      </nav>
+      <section class="section process" id="how-it-works">
+        <div class="section-heading">
+          <p class="eyebrow"><span></span> Practice, with a pulse</p>
+          <h2>Your ears.<br /><em>Now with receipts.</em></h2>
+          <p>ukejam turns practice into a tight feedback loop. No menus to babysit. No vague red or green score. Just the next chord and the truth.</p>
+        </div>
+        <ol class="process-grid">
+          <li>
+            <span class="step-num">01</span>
+            <div class="step-icon step-import" aria-hidden="true"><i></i><i></i><i></i></div>
+            <h3>Bring a song</h3>
+            <p>Paste a tab, drop in ChordPro, or import MIDI. ukejam builds the route.</p>
+          </li>
+          <li>
+            <span class="step-num">02</span>
+            <div class="step-icon step-play" aria-hidden="true"><i>F</i><i>G</i><i>Am</i></div>
+            <h3>Follow the highway</h3>
+            <p>See every chord coming in time. Slow it down or let the song wait for you.</p>
+          </li>
+          <li>
+            <span class="step-num">03</span>
+            <div class="step-icon step-hear" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <h3>Hear the difference</h3>
+            <p>Know which notes rang clean, which went missing, and which snuck in.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section showcase" id="features">
+        <div class="showcase-copy">
+          <p class="eyebrow"><span></span> Real-time feedback</p>
+          <h2>It doesn't just hear <em>a chord.</em> It hears <em>your chord.</em></h2>
+          <p>Clean notes, missing notes, extra notes—ukejam separates them in real time, while the music keeps moving.</p>
+          <ul class="feature-list">
+            <li><span>01</span> Low-latency microphone analysis</li>
+            <li><span>02</span> Note-by-note chord feedback</li>
+            <li><span>03</span> Built-in tuner for both tunings</li>
+          </ul>
+        </div>
+        <div class="signal-card" aria-label="Chord feedback example">
+          <div class="signal-head"><span>LIVE INPUT / CHORD ANALYSIS</span><b><i></i> ACTIVE</b></div>
+          <div class="waveform" aria-hidden="true">
+            <i style="--h:20%"></i><i style="--h:38%"></i><i style="--h:68%"></i><i style="--h:94%"></i><i style="--h:54%"></i><i style="--h:82%"></i><i style="--h:35%"></i><i style="--h:62%"></i><i style="--h:88%"></i><i style="--h:46%"></i><i style="--h:74%"></i><i style="--h:28%"></i><i style="--h:57%"></i><i style="--h:84%"></i><i style="--h:44%"></i><i style="--h:22%"></i>
+          </div>
+          <div class="signal-result">
+            <div><small>TARGET</small><strong>G</strong></div>
+            <div class="note-result"><small>WHAT RANG</small><span class="good">G</span><span class="good">B</span><span class="good">D</span><span class="extra">A</span></div>
+          </div>
+          <div class="signal-message"><b>Almost.</b> Mute the open A string and try that strum again.</div>
+        </div>
+      </section>
+
+      <section class="crowd-break" aria-label="The joy of playing together">
+        <div class="crowd-copy">
+          <p class="eyebrow"><span></span> Bedroom practice. Main-stage energy.</p>
+          <h2>Find the chord.<br /><em>Lose yourself.</em></h2>
+        </div>
+        <svg class="jam-crowd stage-crowd" viewBox="0 0 1200 430" aria-hidden="true">
+          <defs>
+            <linearGradient id="stageNeon" x1="0" x2="1"><stop stop-color="#28f0c3"/><stop offset=".5" stop-color="#ffc857"/><stop offset="1" stop-color="#ff725e"/></linearGradient>
+          </defs>
+          <g class="audience-lines">
+            <path d="M0 399 Q230 356 420 395 T800 390 T1200 397" />
+            <path d="M0 420 Q260 381 520 415 T910 407 T1200 419" />
+          </g>
+          <g class="stage-person p1">
+            <circle cx="115" cy="188" r="25"/><path d="M114 216 Q78 254 91 326 L67 413 M94 323 L128 413 M88 253 L37 202 M130 248 L178 185"/>
+          </g>
+          <g class="stage-person p2">
+            <circle cx="320" cy="157" r="26"/><path d="M320 186 Q287 226 300 319 L273 417 M303 316 L344 417 M300 225 L237 287 M338 221 L395 275"/>
+            <path class="solid-instrument" d="M260 268 Q224 252 216 285 Q211 321 251 336 Q288 345 306 313 Q319 287 290 271 Z M285 282 L395 225"/>
+          </g>
+          <g class="stage-person singer">
+            <circle cx="550" cy="134" r="28"/><path d="M551 164 Q514 220 529 325 L495 421 M530 322 L575 421 M530 210 L475 265 M566 201 L617 151"/>
+            <path class="mic" d="M613 151 L664 102 M605 145 l17 17"/>
+          </g>
+          <g class="stage-person drummer">
+            <circle cx="770" cy="180" r="24"/><path d="M771 207 Q745 237 749 287 M750 230 L700 197 M786 229 L836 192"/>
+            <ellipse class="drum" cx="771" cy="340" rx="91" ry="72"/><path class="drum" d="M696 287 L846 287 M696 393 L846 393 M706 394 L686 425 M836 394 L855 425"/>
+          </g>
+          <g class="stage-person p5">
+            <circle cx="1040" cy="170" r="26"/><path d="M1039 198 Q1004 238 1017 325 L984 416 M1019 324 L1064 416 M1018 236 L952 199 M1055 232 L1116 181"/>
+          </g>
+          <g class="neon-confetti"><path d="M70 102 l12 -28 M186 73 l-9 -32 M395 103 l19 -29 M681 70 l8 -33 M894 105 l-18 -27 M1135 83 l12 -31"/></g>
+        </svg>
+        <div class="stage-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+      </section>
+
+      <section class="section bento-section">
+        <div class="section-heading compact">
+          <p class="eyebrow"><span></span> More ways to get unstuck</p>
+          <h2>A full band in your pocket.<br /><em>Minus the group chat.</em></h2>
+        </div>
+        <div class="bento-grid">
+          <article class="bento bento-wide backing">
+            <div class="bento-copy"><span class="bento-index">01 / BACKING</span><h3>Play with a band<br />that never gets tired.</h3><p>Choose bass, drums, or the full arrangement. MIDI backing tracks keep the groove while you find yours.</p></div>
+            <div class="mixer" aria-hidden="true">
+              <div><span>DRUMS</span><i style="--level:78%"></i></div><div><span>BASS</span><i style="--level:62%"></i></div><div><span>KEYS</span><i style="--level:38%"></i></div>
+            </div>
+          </article>
+          <article class="bento wait-mode">
+            <span class="bento-index">02 / PATIENCE</span>
+            <div class="wait-visual" aria-hidden="true"><span>WAITING FOR</span><strong>B♭</strong><i></i></div>
+            <h3>Wait-for-me mode</h3>
+            <p>The song holds until the chord lands. No shame. No rush.</p>
+          </article>
+          <article class="bento coach">
+            <span class="bento-index">03 / COACH</span>
+            <div class="coach-bubble">Your F is clean. That G? Your open A string is joining uninvited.</div>
+            <h3>Coaching that gets specific</h3>
+            <p>On-device by default, or connect your own AI provider.</p>
+          </article>
+          <article class="bento bento-wide privacy-card">
+            <div class="privacy-seal" aria-hidden="true"><div>⌁</div><span>LOCAL<br />AUDIO</span></div>
+            <div class="bento-copy"><span class="bento-index">04 / PRIVACY</span><h3>Your practice stays<br />in the practice room.</h3><p>Microphone audio is analyzed live on your device. It is never recorded, saved, or transmitted.</p><a href="/privacy">Read the plain-English privacy policy <span>→</span></a></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="final-cta" id="get-ukejam">
+        <div class="final-art" aria-hidden="true">
+          <div class="sound-ring r1"></div><div class="sound-ring r2"></div><div class="sound-ring r3"></div>
+          <img src="/icon.png" alt="" />
+        </div>
+        <div class="final-copy">
+          <p class="eyebrow"><span></span> Your next good strum starts here</p>
+          <h2>Turn practice<br />into <em>play.</em></h2>
+          <p>ukejam is coming soon to iPhone and iPad.</p>
+          <a class="button button-primary" href="/support">
+            <span><small>Questions before launch?</small>Support</span><b>↗</b>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site site-footer">
+      <a class="brand" href="/"><img src="/ukejam-mark.png" alt="" /><span class="wordmark">uke<span>jam</span></span></a>
+      <p>Built for four strings and the people learning them.</p>
+      <nav aria-label="Footer navigation"><a href="/support">Support</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+      <span class="copyright">© 2026 ukejam</span>
     </footer>
-
   </div>
+
+  <script>
+    (() => {
+      const control = document.querySelector('[data-demo]');
+      const highway = document.querySelector('[data-highway]');
+      const chord = document.querySelector('[data-chord]');
+      const sequence = ['F', 'G', 'Em', 'C'];
+      let paused = false;
+      let index = 0;
+      let timer = window.setInterval(() => {
+        if (!paused) chord.textContent = sequence[++index % sequence.length];
+      }, 2400);
+
+      control?.addEventListener('click', () => {
+        paused = !paused;
+        highway.classList.toggle('is-paused', paused);
+        control.setAttribute('aria-pressed', String(paused));
+        control.innerHTML = paused ? '<span>▶</span> Play demo' : '<span>Ⅱ</span> Pause demo';
+      });
+
+      window.addEventListener('pagehide', () => window.clearInterval(timer));
+    })();
+  </script>
 </body>
 </html>
