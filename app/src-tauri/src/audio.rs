@@ -197,6 +197,10 @@ impl AudioState {
 
 /// Build and start the cpal input stream. Runs on the capture thread.
 fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<CaptureRuntime, String> {
+    // On iOS the AVAudioSession must allow recording before cpal opens the
+    // stream (no-op elsewhere); doing it per-start also recovers after an
+    // interruption (phone call, Siri).
+    crate::ios_audio::configure_session()?;
     let host = cpal::default_host();
     let device = host
         .default_input_device()

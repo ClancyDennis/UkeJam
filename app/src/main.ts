@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { addSong, listSongs, deleteSong, getSong, renameSong, LibraryFullError, type SongRecord } from "./library";
+import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
 import {
   parseMidi,
@@ -968,6 +968,12 @@ function renderSongList() {
   }
 }
 
+// The list renders from the in-memory library, which starts on the
+// localStorage seed; refresh it once the durable native store has loaded.
+void libraryReady.then(() => {
+  if (mode === "library") renderSongList();
+});
+
 function escapeHtml(s: string): string {
   const d = document.createElement("div");
   d.textContent = s;
@@ -1795,6 +1801,18 @@ sfOpenFolderBtn.addEventListener("click", () => {
   nativeInvoke("open_data_dir").catch((e) => console.warn("open_data_dir failed", e));
 });
 
+// Mobile platforms have no user-facing file manager to open into the app's
+// sandbox; hide desktop-only affordances and give CSS a hook (body.mobile)
+// for touch-sized layout tweaks beyond what width queries catch.
+void nativeInvoke<string>("platform")
+  .then((os) => {
+    if (os === "ios" || os === "android") {
+      document.body.classList.add("mobile");
+      sfOpenFolderBtn.hidden = true;
+    }
+  })
+  .catch(() => {});
+
 nativeListen<{ received: number; total: number }>("soundfont_progress", (event) => {
   const { received, total } = event.payload;
   const mb = (n: number) => (n / 1e6).toFixed(1);
@@ -1827,6 +1845,43 @@ sfDownloadBtn.addEventListener("click", async () => {
   } finally {
     sfDownloadBtn.disabled = false;
     sfProgressEl.hidden = true;
+  }
+});
+
+// --- AI enhance endpoint (Setup screen) ---
+// Saved through the Rust side into app-data settings.json; env vars
+// UKEJAM_PROXY_URL/KEY still override saved values at request time.
+interface ProxySettings {
+  proxy_url: string;
+  proxy_key: string;
+}
+const proxyUrlInput = document.getElementById("proxy-url") as HTMLInputElement;
+const proxyKeyInput = document.getElementById("proxy-key") as HTMLInputElement;
+const proxySaveBtn = document.getElementById("proxy-save") as HTMLButtonElement;
+const proxyStatus = document.getElementById("proxy-status")!;
+
+void nativeInvoke<ProxySettings>("get_settings")
+  .then((s) => {
+    proxyUrlInput.value = s.proxy_url;
+    proxyKeyInput.value = s.proxy_key;
+  })
+  .catch(() => {});
+
+proxySaveBtn.addEventListener("click", async () => {
+  try {
+    await nativeInvoke("set_settings", {
+      settings: {
+        proxy_url: proxyUrlInput.value.trim(),
+        proxy_key: proxyKeyInput.value.trim(),
+      },
+    });
+    proxyStatus.classList.add("done");
+    proxyStatus.textContent = proxyUrlInput.value.trim()
+      ? "saved — AI enhance will use this endpoint"
+      : "saved — using the default local proxy";
+  } catch (e) {
+    proxyStatus.classList.remove("done");
+    proxyStatus.textContent = `save failed: ${e}`;
   }
 });
 

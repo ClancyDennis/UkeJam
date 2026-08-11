@@ -2,6 +2,9 @@ mod audio;
 mod backing;
 mod chords;
 mod enhance;
+mod ios_audio;
+mod library;
+mod settings;
 mod soundfont;
 
 use audio::{AudioState, Mode};
@@ -53,6 +56,7 @@ fn stop_audio(state: State<AudioState>) {
 /// Runs on a blocking thread so the UI stays responsive.
 #[tauri::command]
 async fn enhance_tab(
+    app: AppHandle,
     raw: String,
     mode: Option<String>,
     lyrics: Option<String>,
@@ -62,9 +66,19 @@ async fn enhance_tab(
         Some("fuse") => enhance::Mode::Fuse,
         _ => enhance::Mode::Messy,
     };
-    tauri::async_runtime::spawn_blocking(move || enhance::enhance_tab(&raw, m, lyrics.as_deref()))
-        .await
-        .map_err(|e| format!("task join: {e}"))?
+    let (proxy_url, proxy_key) = enhance::resolve_proxy(&settings::load(&app));
+    tauri::async_runtime::spawn_blocking(move || {
+        enhance::enhance_tab(&raw, m, lyrics.as_deref(), &proxy_url, &proxy_key)
+    })
+    .await
+    .map_err(|e| format!("task join: {e}"))?
+}
+
+/// The OS the native side was compiled for ("ios", "android", "macos",
+/// "linux", "windows") — lets the frontend hide desktop-only affordances.
+#[tauri::command]
+fn platform() -> &'static str {
+    std::env::consts::OS
 }
 
 // ---- backing-track playback (rustysynth) ----
@@ -144,6 +158,11 @@ pub fn run() {
             stop_backing,
             set_backing_loop,
             backing_status,
+            platform,
+            library::library_load,
+            library::library_save,
+            settings::get_settings,
+            settings::set_settings,
             soundfont::soundfont_status,
             soundfont::download_soundfont,
             soundfont::open_data_dir

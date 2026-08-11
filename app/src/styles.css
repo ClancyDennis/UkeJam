@@ -95,9 +95,14 @@ body {
   position: relative;
   z-index: 10;
   height: 100vh;
+  height: 100dvh; /* iOS: track the real visible viewport */
   display: flex;
   flex-direction: column;
-  padding: 18px 22px;
+  /* keep content out of the notch / home-indicator on iOS (0px on desktop) */
+  padding: calc(18px + env(safe-area-inset-top, 0px))
+    calc(22px + env(safe-area-inset-right, 0px))
+    calc(18px + env(safe-area-inset-bottom, 0px))
+    calc(22px + env(safe-area-inset-left, 0px));
   gap: 16px;
 }
 
@@ -2831,4 +2836,110 @@ body {
 }
 .sf-close:hover {
   color: var(--teal);
+}
+
+/* ---------- AI enhance endpoint (Setup screen) ---------- */
+.setup-view {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start; /* column direction: center would clip overflow */
+  gap: 16px;
+  overflow-y: auto;
+}
+.ai-settings-panel {
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+.proxy-input {
+  width: 100%;
+  max-width: 420px;
+  flex: 0 0 auto;
+}
+
+/* ---------- Small screens (iPhone / iPad portrait) ----------
+   The desktop layout is a fixed-viewport instrument panel; on narrow screens
+   the multi-column grids collapse to a single scrolling column instead. */
+@media (max-width: 860px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .tagline {
+    display: none;
+  }
+  .utils {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .util-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  /* every view becomes a vertically scrolling column of natural-height panels */
+  .tuner-view,
+  .library-view,
+  .arrangement-view {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tuner-view > .panel,
+  .library-view > .panel,
+  .arrangement-view > .panel {
+    flex: 0 0 auto;
+    overflow-y: visible;
+  }
+
+  .play-view {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* highway on top, full width; the two fingering panels share a row below */
+  .cluster {
+    flex: 0 0 auto;
+    grid-template-columns: 1fr 1fr;
+  }
+  .cluster .highway-panel {
+    grid-column: 1 / -1;
+    order: -1;
+    min-height: 46vh;
+  }
+  .cluster .finger-panel {
+    min-height: 230px;
+  }
+  .bottom-band {
+    grid-template-columns: 1fr;
+    max-height: none;
+    overflow: visible;
+    flex: 0 0 auto;
+  }
+  .modebar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* natural heights for the add-song form once the panel stops being a fixed
+     grid cell */
+  .paste-box {
+    min-height: 160px;
+  }
+
+  /* 16px stops iOS Safari/WKWebView from auto-zooming focused inputs */
+  .lib-input,
+  .paste-box {
+    font-size: 16px;
+  }
+
+  /* touch has no spacebar, and the fixed corner label overlaps content */
+  .kbd,
+  .corner-label {
+    display: none;
+  }
+}
+
+/* the film-grain overlay is a full-screen repaint cost mobile GPUs can skip */
+body.mobile .grain {
+  display: none;
 }

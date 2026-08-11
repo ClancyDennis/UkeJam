@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="icon" type="image/png" href="/icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -291,6 +291,35 @@
             </p>
             <button class="listen-btn" id="calibrate-btn">Calibrate microphone</button>
             <div class="setup-status" id="setup-status">not yet calibrated this session</div>
+          </div>
+        </div>
+
+        <div class="panel setup-panel ai-settings-panel">
+          <div class="panel-title">AI Enhance <span class="tag">endpoint</span></div>
+          <div class="setup-body">
+            <p class="setup-copy">
+              ✨ AI enhance sends pasted tabs to an OpenAI-compatible endpoint.
+              Blank uses the default local dev proxy (localhost:4000) — fine on
+              desktop, but on iPhone/iPad there is no local proxy, so point this
+              at a reachable server instead.
+            </p>
+            <input
+              id="proxy-url"
+              class="lib-input proxy-input"
+              type="url"
+              placeholder="https://your-server/v1/chat/completions"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+            />
+            <input
+              id="proxy-key"
+              class="lib-input proxy-input"
+              type="password"
+              placeholder="API key (sent as Bearer)"
+            />
+            <button class="listen-btn ghost" id="proxy-save">Save endpoint</button>
+            <div class="setup-status" id="proxy-status"></div>
           </div>
         </div>
       </main>
