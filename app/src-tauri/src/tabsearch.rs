@@ -50,38 +50,14 @@ pub struct SearchOutcome {
     pub hits: Vec<TabHit>,
 }
 
-// The LLM leg of "smart search": the user types a loose description (a lyric
-// fragment, a vibe, a misremembered title) and the model emits concrete
-// artist-title queries we then run against the normal search.
-const SYSTEM_FIND: &str = "\
-You turn a loose description of a song into concrete search queries for a \
-guitar/ukulele chord-sheet website. The description may be a lyric fragment, \
-a vibe ('that whistling indie song from 2012'), a misremembered title, or \
-already a clean artist + title.\n\
-Rules:\n\
-(1) Output 1 to 3 search queries, ONE PER LINE, most likely candidate first.\n\
-(2) Each query is plain text in the form: Artist SongTitle — no quotes, no \
-numbering, no dashes, no commentary.\n\
-(3) If the description already names the song, just echo a cleaned-up \
-'Artist Title' line.\n\
-(4) Output ONLY the query lines.";
-
-/// Run a search, optionally expanding the query with the LLM first.
-/// LLM failure (proxy down) degrades to a plain search rather than erroring:
-/// smart mode should never make the feature less capable than the dumb mode.
-pub fn run_search(query: &str, smart: bool) -> Result<SearchOutcome, String> {
-    let queries = if smart {
-        match interpret_query(query) {
-            Ok(qs) if !qs.is_empty() => qs,
-            _ => vec![query.to_string()],
-        }
-    } else {
-        vec![query.to_string()]
-    };
-
+/// Run each query and merge the hits (dedup'd by url, best-voted first).
+/// More than one query arrives when ✨ smart mode (enhance::interpret_search)
+/// expanded a fuzzy description. A per-query failure only surfaces when NO
+/// query produced hits — partial results beat an error.
+pub fn run_search(queries: &[String]) -> Result<SearchOutcome, String> {
     let mut hits: Vec<TabHit> = Vec::new();
     let mut first_err: Option<String> = None;
-    for q in &queries {
+    for q in queries {
         match search(q) {
             Ok(found) => {
                 for h in found {
@@ -104,21 +80,10 @@ pub fn run_search(query: &str, smart: bool) -> Result<SearchOutcome, String> {
     }
     hits.sort_by(|a, b| b.votes.cmp(&a.votes));
     hits.truncate(40);
-    Ok(SearchOutcome { queries, hits })
-}
-
-/// Ask the LLM proxy to expand a fuzzy description into up to 3 queries.
-fn interpret_query(description: &str) -> Result<Vec<String>, String> {
-    let reply = crate::enhance::chat(SYSTEM_FIND, description)?;
-    Ok(reply
-        .lines()
-        .map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim())
-        // tolerate "1. Artist Title" style numbering despite the prompt
-        .map(|l| l.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')').trim())
-        .filter(|l| !l.is_empty())
-        .take(3)
-        .map(str::to_string)
-        .collect())
+    Ok(SearchOutcome {
+        queries: queries.to_vec(),
+        hits,
+    })
 }
 
 /// One plain title search against UG.

@@ -75,6 +75,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "cpal",
+ "objc2",
  "reqwest 0.12.28",
  "rustfft",
  "rustysynth",
@@ -82,7 +83,9 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-local-llm",
  "tauri-plugin-opener",
+ "tauri-plugin-web-auth",
 ]
 
 [[package]]
@@ -3983,6 +3986,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-local-llm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "tauri-plugin-opener"
 version = "2.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4002,6 +4016,17 @@ dependencies = [
  "url",
  "windows 0.61.3",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-web-auth"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

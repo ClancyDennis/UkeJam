@@ -1,7 +1,32 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { addSong, listSongs, deleteSong, getSong, renameSong, LibraryFullError, type SongRecord } from "./library";
+import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
+import {
+  AI_PROVIDERS,
+  aiConfigProblem,
+  appleAvailabilityHint,
+  hydrateAiConfig,
+  invokeAiConfig,
+  loadAiConfig,
+  saveAiConfig,
+  type AiProviderId,
+} from "./ai";
+import {
+  buildOpenRouterAuthorizeUrl,
+  buildOpenRouterLoginUrl,
+  cleanOpenRouterCallbackUrl,
+  cleanOpenRouterStrandUrl,
+  createCodeVerifier,
+  exchangeOpenRouterCodeInBrowser,
+  isOpenRouterCallback,
+  isOpenRouterCodeReturn,
+  isOpenRouterStrand,
+  openRouterCallbackUrl,
+  openRouterCodeFromCallback,
+  OPENROUTER_CALLBACK_PARAM,
+} from "./openrouter";
+import { authorizeInSystemBrowser, SystemAuthCancelled, SystemAuthUnavailable } from "./webAuth";
 import {
   parseMidi,
   midiToChordChart,
@@ -746,7 +771,17 @@ addSongBtn.addEventListener("click", async () => {
   // mode: fuse a lyric tab onto a MIDI chart, simplify a MIDI chart, or convert
   // a messy pasted tab. (fuse needs both a staged MIDI and pasted lyrics.)
   const mode = pendingMidi && lyricTab ? "fuse" : pendingMidi ? "midi" : "messy";
-  if (mode === "fuse" && aiEnhanceToggle.checked) {
+  // The saved provider config is read from the native store asynchronously at
+  // boot; a song added before that lands would otherwise be enhanced with the
+  // seeded default rather than what the player configured.
+  if (aiEnhanceToggle.checked) await aiConfigReady;
+  // A provider that can't run (no key, Apple Intelligence unavailable) skips
+  // the AI step with a pointer to Setup instead of failing a doomed request.
+  const aiProblem = aiEnhanceToggle.checked ? aiEnhanceProblem() : null;
+  // When the AI step is skipped, its explanation must survive the generic
+  // "added …" status written after the save.
+  let aiSkipNote = false;
+  if (mode === "fuse" && aiEnhanceToggle.checked && !aiProblem) {
     // Lyric fusion: the app OWNS the bar/chord structure. We send the LLM a
     // numbered bar list + the lyrics and ask only for "barN: words" lines, then
     // rebuild the ChordPro deterministically — so the bar count and chords can
@@ -761,6 +796,7 @@ addSongBtn.addEventListener("click", async () => {
         raw: numbered,
         mode: "fuse",
         lyrics: lyricTab,
+        config: invokeAiConfig(aiConfig),
       });
       const lyricByBar = parseBarLyrics(reply, bars.length);
       source = buildFusedChordPro(header, bars, lyricByBar);
@@ -772,13 +808,26 @@ addSongBtn.addEventListener("click", async () => {
     }
   } else if (mode === "fuse") {
     // can't fuse without the LLM; keep the timed chart, note the skip
-    libAddStatus.textContent = "lyrics need ✨ AI enhance to merge — saved chart only";
+    aiSkipNote = true;
+    libAddStatus.classList.remove("done");
+    libAddStatus.textContent = aiProblem
+      ? `${aiProblem} — open ⚙ Setup · saved chart only`
+      : "lyrics need ✨ AI enhance to merge — saved chart only";
+  } else if (aiEnhanceToggle.checked && aiProblem) {
+    aiSkipNote = true;
+    libAddStatus.classList.remove("done");
+    libAddStatus.textContent = `${aiProblem} — open ⚙ Setup · saved raw`;
   } else if (aiEnhanceToggle.checked) {
     addSongBtn.disabled = true;
     libAddStatus.classList.remove("done");
     libAddStatus.textContent = "✨ enhancing with AI…";
     try {
-      const cleaned = await nativeInvoke<string>("enhance_tab", { raw: text, mode, lyrics: null });
+      const cleaned = await nativeInvoke<string>("enhance_tab", {
+        raw: text,
+        mode,
+        lyrics: null,
+        config: invokeAiConfig(aiConfig),
+      });
       if (cleaned && cleaned.trim()) source = cleaned.trim();
     } catch (e) {
       libAddStatus.textContent = `AI enhance failed (${e}) — saved raw`;
@@ -805,7 +854,7 @@ addSongBtn.addEventListener("click", async () => {
         : `couldn't save: ${e}`;
     return;
   }
-  if (!libAddStatus.textContent?.includes("failed")) {
+  if (!aiSkipNote && !libAddStatus.textContent?.includes("failed")) {
     libAddStatus.classList.add("done");
     const withMidi = pendingMidi ? " · backing track ♪" : "";
     libAddStatus.textContent = `added "${rec.title}"${rec.artist ? " — " + rec.artist : ""}${withMidi}`;
@@ -867,9 +916,13 @@ async function runTabSearch() {
   tabResultsEl.replaceChildren();
   setTabSearchStatus(smartSearchToggle.checked ? "✨ working out what to search…" : "searching…");
   try {
+    // smart mode goes through the configured AI provider — wait for the
+    // durable settings so a saved key/model is actually used
+    if (smartSearchToggle.checked) await aiConfigReady;
     const out = await nativeInvoke<TabSearchOutcome>("search_tabs", {
       query: q,
       smart: smartSearchToggle.checked,
+      config: smartSearchToggle.checked ? invokeAiConfig(aiConfig) : null,
     });
     renderTabResults(q, out);
   } catch (e) {
@@ -1094,6 +1147,12 @@ function renderSongList() {
     songListEl.appendChild(row);
   }
 }
+
+// The list renders from the in-memory library, which starts on the
+// localStorage seed; refresh it once the durable native store has loaded.
+void libraryReady.then(() => {
+  if (mode === "library") renderSongList();
+});
 
 function escapeHtml(s: string): string {
   const d = document.createElement("div");
@@ -1922,6 +1981,18 @@ sfOpenFolderBtn.addEventListener("click", () => {
   nativeInvoke("open_data_dir").catch((e) => console.warn("open_data_dir failed", e));
 });
 
+// Mobile platforms have no user-facing file manager to open into the app's
+// sandbox; hide desktop-only affordances and give CSS a hook (body.mobile)
+// for touch-sized layout tweaks beyond what width queries catch.
+void nativeInvoke<string>("platform")
+  .then((os) => {
+    if (os === "ios" || os === "android") {
+      document.body.classList.add("mobile");
+      sfOpenFolderBtn.hidden = true;
+    }
+  })
+  .catch(() => {});
+
 nativeListen<{ received: number; total: number }>("soundfont_progress", (event) => {
   const { received, total } = event.payload;
   const mb = (n: number) => (n / 1e6).toFixed(1);
@@ -1990,6 +2061,425 @@ calibrateBtn.addEventListener("click", async () => {
     setConn(false);
   }
 });
+
+// --- AI enhance provider settings (Setup screen) ---
+// Seeded synchronously from localStorage, then replaced by the durable native
+// store (see ai.ts); the live object travels with every enhance/test invoke.
+const aiConfig = loadAiConfig();
+// Resolves once the durable store has been read. Anything that sends the
+// config awaits this first, so an enhance fired seconds after launch can't go
+// out with a stale seed (or, on a fresh install, an empty one).
+const aiConfigReady: Promise<void> = hydrateAiConfig(aiConfig).then((loaded) => {
+  if (loaded) renderAiPanel();
+});
+// On-device availability, probed async at boot. Anything but "available"
+// greys out the Apple option with the reason.
+let appleStatus = "unsupportedHost";
+
+const aiProviderSel = document.getElementById("ai-provider") as HTMLSelectElement;
+const aiNoteEl = document.getElementById("ai-note")!;
+const aiBaseUrlField = document.getElementById("ai-baseurl-field")!;
+const aiBaseUrlInput = document.getElementById("ai-base-url") as HTMLInputElement;
+const aiKeyField = document.getElementById("ai-key-field")!;
+const aiKeyInput = document.getElementById("ai-api-key") as HTMLInputElement;
+const aiModelField = document.getElementById("ai-model-field")!;
+const aiModelInput = document.getElementById("ai-model") as HTMLInputElement;
+const aiModelList = document.getElementById("ai-model-list") as HTMLDataListElement;
+const aiScanBtn = document.getElementById("ai-scan-btn") as HTMLButtonElement;
+const aiTestBtn = document.getElementById("ai-test-btn") as HTMLButtonElement;
+const aiStatusEl = document.getElementById("ai-status")!;
+const aiOrActions = document.getElementById("ai-or-actions")!;
+const aiOrLoginBtn = document.getElementById("ai-or-login") as HTMLButtonElement;
+const aiOrDisconnectBtn = document.getElementById("ai-or-disconnect") as HTMLButtonElement;
+
+function aiEnhanceProblem(): string | null {
+  return aiConfigProblem(aiConfig, appleStatus);
+}
+
+function setAiStatus(text: string, tone: "" | "done" | "err" = "") {
+  aiStatusEl.classList.remove("done", "err");
+  if (tone) aiStatusEl.classList.add(tone);
+  aiStatusEl.textContent = text;
+}
+
+const AI_PROVIDER_NOTES: Record<AiProviderId, string> = {
+  apple:
+    "Nothing leaves this device. The on-device model is small — long or messy tabs may come out better on a cloud model.",
+  openrouter:
+    'One account, every major model. Connect with one tap below, or create a key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">openrouter.ai/settings/keys</a> and paste it.',
+  openai:
+    "Works with OpenAI, LiteLLM, LM Studio, Ollama — anything speaking the OpenAI chat protocol. The API key is optional for keyless local servers.",
+};
+
+function renderAiStatusLine() {
+  const problem = aiEnhanceProblem();
+  if (problem) {
+    setAiStatus(`${problem} — ✨ AI enhance will be skipped`);
+  } else if (aiConfig.provider === "apple") {
+    setAiStatus("ready — runs privately on this device", "done");
+  } else {
+    setAiStatus("configured — test the connection to be sure");
+  }
+}
+
+// Full structural render: provider options (with availability verdicts), field
+// visibility, and current values. Not called from input handlers — rewriting
+// an input's value while the user types would throw the caret away.
+function renderAiPanel() {
+  aiProviderSel.replaceChildren();
+  Object.values(AI_PROVIDERS).forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.label;
+    if (provider.id === "apple" && appleStatus !== "available") {
+      // Keep the option visible so players learn it exists, but grey it out
+      // WITH the reason ("Apple devices only", "model still downloading", …) —
+      // an unexplained disabled option reads as a bug.
+      option.disabled = true;
+      option.textContent += ` — ${appleAvailabilityHint(appleStatus)}`;
+    }
+    option.selected = provider.id === aiConfig.provider;
+    aiProviderSel.append(option);
+  });
+  const provider = aiConfig.provider;
+  aiBaseUrlField.hidden = provider !== "openai";
+  aiKeyField.hidden = provider === "apple";
+  aiModelField.hidden = provider === "apple";
+  aiScanBtn.hidden = provider === "apple";
+  updateOpenRouterButtons();
+  aiBaseUrlInput.value = aiConfig.baseUrl || AI_PROVIDERS.openai.defaultBaseUrl;
+  aiKeyInput.value = aiConfig.apiKey;
+  aiModelInput.value = aiConfig.model;
+  aiNoteEl.innerHTML = AI_PROVIDER_NOTES[provider];
+  renderAiStatusLine();
+}
+
+aiProviderSel.addEventListener("change", () => {
+  const provider = aiProviderSel.value as AiProviderId;
+  aiConfig.provider = provider;
+  aiConfig.model = AI_PROVIDERS[provider].defaultModel;
+  if (provider === "openai" && !aiConfig.baseUrl.trim()) {
+    aiConfig.baseUrl = AI_PROVIDERS.openai.defaultBaseUrl;
+  }
+  saveAiConfig(aiConfig);
+  aiModelList.replaceChildren(); // a catalog scanned from another endpoint is stale
+  renderAiPanel();
+});
+aiBaseUrlInput.addEventListener("input", () => {
+  aiConfig.baseUrl = aiBaseUrlInput.value;
+  saveAiConfig(aiConfig);
+  renderAiStatusLine();
+});
+aiKeyInput.addEventListener("input", () => {
+  aiConfig.apiKey = aiKeyInput.value;
+  saveAiConfig(aiConfig);
+  updateOpenRouterButtons();
+  renderAiStatusLine();
+});
+aiModelInput.addEventListener("input", () => {
+  aiConfig.model = aiModelInput.value;
+  saveAiConfig(aiConfig);
+  renderAiStatusLine();
+});
+
+// Fill the model datalist from the endpoint's own catalog (GET /models).
+aiScanBtn.addEventListener("click", async () => {
+  aiScanBtn.disabled = true;
+  setAiStatus("scanning the endpoint's model catalog…");
+  try {
+    const models = await nativeInvoke<string[]>("ai_models", { config: invokeAiConfig(aiConfig) });
+    aiModelList.replaceChildren(
+      ...models.map((id) => {
+        const option = document.createElement("option");
+        option.value = id;
+        return option;
+      })
+    );
+    if (!aiConfig.model.trim() && models.length) {
+      aiConfig.model = models[0];
+      aiModelInput.value = models[0];
+      saveAiConfig(aiConfig);
+    }
+    setAiStatus(
+      models.length
+        ? `found ${models.length} models — the Model field now autocompletes`
+        : "the endpoint returned no models — enter a model id manually"
+    );
+  } catch (e) {
+    setAiStatus(`model scan failed: ${e}`, "err");
+  } finally {
+    aiScanBtn.disabled = false;
+  }
+});
+
+// A real chat round trip — the only probe that proves the key AND model work.
+aiTestBtn.addEventListener("click", async () => {
+  const problem = aiEnhanceProblem();
+  if (problem) {
+    setAiStatus(problem, "err");
+    return;
+  }
+  aiTestBtn.disabled = true;
+  setAiStatus(`testing ${aiConfig.provider === "apple" ? "the on-device model" : aiConfig.model.trim()}…`);
+  try {
+    const reply = await nativeInvoke<string>("test_ai", { config: invokeAiConfig(aiConfig) });
+    setAiStatus(`connection works — replied “${reply}”`, "done");
+  } catch (e) {
+    setAiStatus(`${e}`, "err");
+  } finally {
+    aiTestBtn.disabled = false;
+  }
+});
+
+async function probeAppleAvailability() {
+  if (!nativeRuntime) return;
+  try {
+    const res = await nativeInvoke<{ status: string }>("plugin:local-llm|availability");
+    appleStatus = res?.status ?? "unavailable";
+  } catch {
+    appleStatus = "unavailable";
+  }
+  renderAiPanel();
+}
+
+// --- OpenRouter one-tap sign-in (PKCE) ---
+// The login navigates the whole webview to openrouter.ai and back, so this
+// module reloads mid-flow: the verifier (and, after the return leg, the code)
+// live in storage until the exchange finishes. Ported from Wormdrop.
+const OPENROUTER_PKCE_STORAGE_KEY = "ukejam.openrouter.pkce.v1";
+const OPENROUTER_PKCE_MAX_AGE_MS = 15 * 60 * 1000;
+
+type PendingPkce = { verifier: string; createdAt?: number; code?: string };
+
+function pendingOpenRouterRecord(): PendingPkce | null {
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      const raw = storage.getItem(OPENROUTER_PKCE_STORAGE_KEY);
+      if (!raw) continue;
+      const saved = JSON.parse(raw) as PendingPkce;
+      if (saved?.verifier && Date.now() - Number(saved.createdAt) < OPENROUTER_PKCE_MAX_AGE_MS) {
+        return saved;
+      }
+    } catch {
+      // Try the other storage implementation.
+    }
+  }
+  return null;
+}
+
+function pendingOpenRouterVerifier(): string {
+  return pendingOpenRouterRecord()?.verifier ?? "";
+}
+
+// The one-shot auth code arrives in the URL, which the return leg cleans
+// immediately — persist it next to the verifier so a webview crash between
+// the return and the exchange can resume at next boot instead of eating the
+// sign-in (field-hit in Wormdrop: WebContent died mid-boot).
+function stampPendingOpenRouterCode(code: string | null) {
+  const record = pendingOpenRouterRecord();
+  if (!record?.verifier || !code) return;
+  const pending = JSON.stringify({ ...record, code });
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      storage.setItem(OPENROUTER_PKCE_STORAGE_KEY, pending);
+    } catch {}
+  }
+}
+
+function clearOpenRouterVerifier() {
+  try {
+    localStorage.removeItem(OPENROUTER_PKCE_STORAGE_KEY);
+  } catch {}
+  try {
+    sessionStorage.removeItem(OPENROUTER_PKCE_STORAGE_KEY);
+  } catch {}
+}
+
+function updateOpenRouterButtons() {
+  const isOpenRouter = aiConfig.provider === "openrouter";
+  const hasKey = Boolean(aiConfig.apiKey.trim());
+  aiOrActions.hidden = !isOpenRouter;
+  aiOrLoginBtn.hidden = hasKey;
+  aiOrDisconnectBtn.hidden = !hasKey;
+}
+
+// Land the player on the Setup screen (where the OpenRouter card and its
+// status line live) — used by every OAuth return path.
+function openSetupView() {
+  (document.querySelector('.util-btn[data-mode="cal-mic"]') as HTMLButtonElement | null)?.click();
+}
+
+// The verifier must survive the round-trip through openrouter.ai. If the
+// browser blocks BOTH storages (private mode, storage denied), the return
+// leg could never complete — report that here, before navigating away,
+// instead of silently after sign-in.
+function storeOpenRouterVerifier(verifier: string): boolean {
+  const pending = JSON.stringify({ verifier, createdAt: Date.now() });
+  let stored = false;
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      storage.setItem(OPENROUTER_PKCE_STORAGE_KEY, pending);
+      stored = true;
+    } catch {
+      // Try the other storage implementation.
+    }
+  }
+  return stored;
+}
+
+// Sign in through the OS browser sheet (iOS: ASWebAuthenticationSession),
+// where the player gets a Cancel button, Safari's existing openrouter.ai
+// session, Keychain autofill and passkeys — none of which exist in the app's
+// own webview. The app is never unloaded, so the fragile parts of the web
+// flow (verifier round-trip, return-leg detection, crash resume) simply
+// don't apply on this path.
+//
+// Returns false when there is no native sheet on this host, which is the
+// signal to fall back to the in-page redirect below.
+async function startNativeOpenRouterLogin(verifier: string): Promise<boolean> {
+  try {
+    const callbackUrl = await authorizeInSystemBrowser({
+      authUrl: await buildOpenRouterAuthorizeUrl(verifier),
+      callbackParam: OPENROUTER_CALLBACK_PARAM,
+    });
+    const code = openRouterCodeFromCallback(callbackUrl);
+    if (!code) throw new Error("OpenRouter finished without returning a sign-in code");
+    await finishOpenRouterExchange(code, verifier);
+    return true;
+  } catch (error) {
+    if (error instanceof SystemAuthUnavailable) return false;
+    clearOpenRouterVerifier();
+    if (error instanceof SystemAuthCancelled) {
+      setAiStatus("sign-in cancelled — tap Connect OpenRouter whenever you're ready");
+    } else {
+      setAiStatus(`${error} — please try connecting again`, "err");
+    }
+    return true;
+  }
+}
+
+async function startOpenRouterLogin() {
+  const verifier = createCodeVerifier();
+  if (!storeOpenRouterVerifier(verifier)) {
+    setAiStatus(
+      "your browser is blocking site storage, so the secure sign-in can't complete — allow storage for this site and try again",
+      "err"
+    );
+    return;
+  }
+  if (nativeRuntime) {
+    aiOrLoginBtn.disabled = true;
+    setAiStatus("opening the secure OpenRouter sign-in…");
+    try {
+      if (await startNativeOpenRouterLogin(verifier)) return;
+    } finally {
+      aiOrLoginBtn.disabled = false;
+    }
+  }
+  // No native sheet here (browser build, dev server, desktop package): the
+  // page navigates to openrouter.ai and comes back with ?code=…. In the
+  // packaged app the callback is a localhost sentinel OpenRouter will accept
+  // (its tauri:// origin would be rejected, stranding the player on
+  // openrouter.ai); the Rust hook routes that redirect back here.
+  const callback = openRouterCallbackUrl(window.location.href, nativeRuntime);
+  try {
+    window.location.assign(await buildOpenRouterLoginUrl(callback.toString(), verifier));
+  } catch (e) {
+    setAiStatus(`could not start the OpenRouter sign-in: ${e}`, "err");
+  }
+}
+
+async function finishOpenRouterExchange(code: string, verifier: string) {
+  setAiStatus("finishing secure sign-in…");
+  try {
+    const apiKey = nativeRuntime
+      ? await nativeInvoke<string>("openrouter_exchange", { code, verifier })
+      : await exchangeOpenRouterCodeInBrowser(code, verifier);
+    aiConfig.provider = "openrouter";
+    aiConfig.apiKey = apiKey;
+    if (!aiConfig.model.trim()) aiConfig.model = AI_PROVIDERS.openrouter.defaultModel;
+    saveAiConfig(aiConfig);
+    renderAiPanel();
+    setAiStatus("connected to OpenRouter — test the connection to be sure", "done");
+  } catch (e) {
+    setAiStatus(`${e} — please try connecting again`, "err");
+  } finally {
+    clearOpenRouterVerifier();
+  }
+}
+
+// The Rust navigation hook re-entered the app because OpenRouter's login flow
+// dumped the webview on its homepage instead of resuming /auth (its bot
+// protection severs the redirect chain in embedded webviews). The sign-in
+// itself succeeded and the session cookie survived, so a plain retry goes
+// straight to the authorize screen.
+function reportStrandedOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  if (!isOpenRouterStrand(url)) return;
+  window.history.replaceState({}, "", cleanOpenRouterStrandUrl(url));
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  setAiStatus(
+    "OpenRouter signed you in but didn't return to the app — tap Connect OpenRouter again; you're signed in now, so it should go straight to the authorize screen",
+    "err"
+  );
+}
+
+async function completeOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  const verifier = pendingOpenRouterVerifier();
+  if (!isOpenRouterCallback(url) && !isOpenRouterCodeReturn(url, Boolean(verifier))) return;
+  const code = url.searchParams.get("code");
+  stampPendingOpenRouterCode(code);
+  window.history.replaceState({}, "", cleanOpenRouterCallbackUrl(url));
+  // Land back on the OpenRouter card whatever happens next — including the
+  // failure paths, whose messages render there.
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  if (!verifier) {
+    // The return leg arrived but the verifier is gone — expired (15-minute
+    // limit) or dropped by the browser between the two legs. The code can't
+    // be exchanged without it; say so instead of silently doing nothing.
+    setAiStatus(
+      "sign-in returned, but its secure verifier had expired or was lost — tap Connect OpenRouter to try again",
+      "err"
+    );
+    return;
+  }
+  await finishOpenRouterExchange(code ?? "", verifier);
+}
+
+// A webview crash between the return leg and the key exchange reloads the
+// page with a clean URL. The code was persisted next to the verifier, so
+// finish the interrupted exchange instead of losing the sign-in.
+async function resumeInterruptedOpenRouterLogin() {
+  const url = new URL(window.location.href);
+  if (isOpenRouterCallback(url) || isOpenRouterCodeReturn(url, Boolean(pendingOpenRouterVerifier()))) return;
+  const pending = pendingOpenRouterRecord();
+  if (!pending?.code || !pending?.verifier || aiConfig.apiKey.trim()) return;
+  aiConfig.provider = "openrouter";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+  openSetupView();
+  await finishOpenRouterExchange(pending.code, pending.verifier);
+}
+
+aiOrLoginBtn.addEventListener("click", () => void startOpenRouterLogin());
+aiOrDisconnectBtn.addEventListener("click", () => {
+  aiConfig.apiKey = "";
+  saveAiConfig(aiConfig);
+  renderAiPanel();
+});
+
+renderAiPanel();
+void probeAppleAvailability();
+reportStrandedOpenRouterLogin();
+void completeOpenRouterLogin();
+void resumeInterruptedOpenRouterLogin();
 
 // Render the target chord-tones as present/missing tokens (the "where your
 // fingers are wrong" visual). Pulls the target chord's pitch classes and marks

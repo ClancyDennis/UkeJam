@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="icon" type="image/png" href="/icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -291,6 +291,77 @@
             </p>
             <button class="listen-btn" id="calibrate-btn">Calibrate microphone</button>
             <div class="setup-status" id="setup-status">not yet calibrated this session</div>
+          </div>
+        </div>
+
+        <!-- AI enhance provider: on-device Apple Intelligence, OpenRouter, or
+             any OpenAI-compatible endpoint. Persisted natively (settings.json)
+             so an evicted webview store can't lose the key; the calls run in
+             Rust. -->
+        <div class="panel setup-panel ai-setup-panel">
+          <div class="panel-title">✨ AI Enhance <span class="tag">tab cleanup</span></div>
+          <div class="setup-body ai-setup-body">
+            <p class="setup-copy">
+              Adding a song can clean the pasted tab into ChordPro with an AI
+              model. Choose where that runs: privately on this device with
+              Apple Intelligence, through your OpenRouter account, or against
+              any OpenAI-compatible endpoint.
+            </p>
+            <label class="ai-field">
+              <span class="ai-label">Provider</span>
+              <select id="ai-provider" class="lib-input"></select>
+            </label>
+            <p class="ai-note" id="ai-note"></p>
+            <!-- OpenRouter one-tap PKCE sign-in (alternative to pasting a key) -->
+            <div class="ai-actions" id="ai-or-actions" hidden>
+              <button class="listen-btn" id="ai-or-login">Connect OpenRouter</button>
+              <button class="listen-btn ghost" id="ai-or-disconnect">Disconnect</button>
+            </div>
+            <label class="ai-field" id="ai-baseurl-field">
+              <span class="ai-label">Base URL</span>
+              <input
+                id="ai-base-url"
+                autocapitalize="off"
+                autocorrect="off"
+                class="lib-input"
+                type="text"
+                placeholder="https://api.openai.com/v1"
+                spellcheck="false"
+                autocomplete="off"
+              />
+            </label>
+            <label class="ai-field" id="ai-key-field">
+              <span class="ai-label">API key</span>
+              <input
+                id="ai-api-key"
+                autocapitalize="off"
+                autocorrect="off"
+                class="lib-input"
+                type="password"
+                placeholder="sk-…"
+                autocomplete="off"
+              />
+            </label>
+            <label class="ai-field" id="ai-model-field">
+              <span class="ai-label">Model</span>
+              <input
+                id="ai-model"
+                autocapitalize="off"
+                autocorrect="off"
+                class="lib-input"
+                type="text"
+                list="ai-model-list"
+                placeholder="model id"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <datalist id="ai-model-list"></datalist>
+            </label>
+            <div class="ai-actions">
+              <button class="listen-btn ghost" id="ai-scan-btn">⌕ Fetch models</button>
+              <button class="listen-btn" id="ai-test-btn">Test connection</button>
+            </div>
+            <div class="setup-status" id="ai-status"></div>
           </div>
         </div>
       </main>
