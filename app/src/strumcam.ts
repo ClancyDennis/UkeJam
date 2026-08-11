@@ -9,19 +9,27 @@
 // the MIC owns *when* (its onset event is the trigger), the CAMERA only answers
 // *which way the hand was moving at that instant*.
 //
-// Deliberately no ML. The first cut tracks the vertical velocity of the motion
-// centroid between frames — the strumming hand is the dominant mover in a
-// sensibly framed shot, and frame differencing needs no model download, no
-// WASM, and no per-platform integration risk inside the Tauri webview. The
-// analysis core below is pure (no DOM) so `verify:strumcam` can drive it with
-// synthetic frames; if the simple signal proves insufficient on real hands, a
-// landmark tracker (e.g. MediaPipe) can replace MotionField behind the same
-// MotionSample stream without touching the fusion or the UI.
+// Two tracking backends produce the same MotionSample stream:
+//
+//   "hand"   — MediaPipe HandLandmarker (on-device, WASM). Tracks the palm
+//              centroid of the strumming hand, immune to background motion,
+//              and yields a full 21-point skeleton — which is also the raw
+//              material for hand graphics on the practice highway later.
+//   "motion" — dependency-free frame differencing: vertical velocity of the
+//              motion centroid on a tiny luma grid. The automatic fallback
+//              when the model assets aren't present (they're fetched at build
+//              time, not committed) or the model fails to load in the webview.
+//
+// Everything downstream of the sample stream — the direction call at an onset,
+// stroke segmentation, ghosts, the UI — is backend-agnostic, and the analysis
+// core is pure (no DOM) so `verify:strumcam` drives it with synthetic input.
 //
 // Sign convention: +v = motion DOWN the frame (rows grow downward), which is a
 // downstroke when the camera is upright facing the player. A rotated or
 // mirrored-vertical mount flips it — that's the `flip` toggle in the view, not
 // something the maths can know.
+
+import type { HandLandmarker } from "@mediapipe/tasks-vision";
 
 // ---------------------------------------------------------------------------
 // Pure analysis core (no DOM — everything below is exercised by verify-strumcam)
@@ -30,13 +38,14 @@
 export interface MotionSample {
   /// Timestamp, ms, performance.now() domain.
   t: number;
-  /// Vertical velocity of the motion centroid, frame-heights per second.
+  /// Vertical velocity of the tracked point, frame-heights per second.
   /// Positive = downward on screen.
   v: number;
-  /// Motion centroid row, 0 = top .. 1 = bottom of frame.
+  /// Tracked point's row, 0 = top .. 1 = bottom of frame.
   y: number;
-  /// Mean per-pixel |frame difference| (0..255). Doubles as the sample's
-  /// weight: vigorous motion is worth more than a flicker.
+  /// Sample weight for the direction call. Frame differencing puts its mean
+  /// per-pixel |diff| here (vigorous motion counts for more); the hand tracker
+  /// puts its detection confidence (scaled) here.
   energy: number;
 }
 
@@ -60,33 +69,75 @@ export interface Stroke {
   peak: number;
 }
 
-export interface MotionFieldOptions {
+export interface VelocityChainOptions {
+  /// EMA factor applied to the raw velocity (1 = no smoothing).
+  ema?: number;
+  /// A gap between samples longer than this breaks the chain, ms — otherwise a
+  /// pause followed by reappearance elsewhere reads as one huge fake sweep.
+  maxGapMs?: number;
+}
+
+/// Turns a stream of (y, t) positions into smoothed velocity samples. Shared
+/// by both backends so their streams behave identically downstream.
+export class VelocityChain {
+  private readonly ema: number;
+  private readonly maxGapMs: number;
+  private lastY: number | null = null;
+  private lastT = 0;
+  private lastV = 0;
+
+  constructor(opts: VelocityChainOptions = {}) {
+    this.ema = opts.ema ?? 0.5;
+    this.maxGapMs = opts.maxGapMs ?? 250;
+  }
+
+  /// Position is 0..1 top..bottom; weight becomes the sample's energy.
+  feed(y: number, t: number, weight: number): MotionSample | null {
+    const dt = t - this.lastT;
+    const chained = this.lastY !== null && dt > 0 && dt <= this.maxGapMs;
+    const prevY = this.lastY;
+    this.lastY = y;
+    this.lastT = t;
+    if (!chained || prevY === null) {
+      // First sighting (or a stall): position is valid, velocity isn't yet.
+      this.lastV = 0;
+      return null;
+    }
+    const raw = Math.max(-8, Math.min(8, ((y - prevY) / dt) * 1000));
+    const v = this.lastV + this.ema * (raw - this.lastV);
+    this.lastV = v;
+    return { t, v, y, energy: weight };
+  }
+
+  /// The tracked thing vanished (stillness, hand out of frame, low score).
+  reset(): void {
+    this.lastY = null;
+    this.lastV = 0;
+  }
+}
+
+export interface MotionFieldOptions extends VelocityChainOptions {
   /// Mean per-pixel |diff| below this is treated as a still frame (sensor
   /// noise), producing no sample. 0..255 scale.
   energyFloor?: number;
-  /// EMA factor applied to the raw centroid velocity (1 = no smoothing).
-  ema?: number;
 }
 
-/// Frame-difference motion tracker. Feed grayscale frames; get back one
-/// MotionSample per frame of visible motion. The centroid of |cur - prev|
-/// covers both the vacated and newly-occupied pixels of whatever moved, so it
-/// travels with the mover at the mover's speed.
+/// Frame-difference motion tracker — the no-model fallback backend. Feed
+/// grayscale frames; get back one MotionSample per frame of visible motion.
+/// The centroid of |cur - prev| covers both the vacated and newly-occupied
+/// pixels of whatever moved, so it travels with the mover at the mover's speed.
 export class MotionField {
   private readonly w: number;
   private readonly h: number;
   private readonly energyFloor: number;
-  private readonly ema: number;
+  private readonly chain: VelocityChain;
   private prev: Uint8Array | null = null;
-  private prevT = 0;
-  private lastY: number | null = null;
-  private lastV = 0;
 
   constructor(width: number, height: number, opts: MotionFieldOptions = {}) {
     this.w = width;
     this.h = height;
     this.energyFloor = opts.energyFloor ?? 3.5;
-    this.ema = opts.ema ?? 0.5;
+    this.chain = new VelocityChain(opts);
   }
 
   /// One grayscale frame (w*h bytes, row-major). Returns a sample when there
@@ -96,10 +147,7 @@ export class MotionField {
     const prev = this.prev;
     // keep a copy for next time regardless of what we decide about this frame
     this.prev = Uint8Array.from(gray);
-    if (!prev) {
-      this.prevT = t;
-      return null;
-    }
+    if (!prev) return null;
 
     let total = 0;
     let weighted = 0;
@@ -113,30 +161,43 @@ export class MotionField {
       weighted += (r + 0.5) * rowE;
     }
     const energy = total / (w * h);
-    const dt = (t - this.prevT) / 1000;
-    this.prevT = t;
-
     if (energy < this.energyFloor) {
-      // Still frame: drop the velocity chain so a long pause doesn't produce a
-      // huge fake velocity when motion resumes somewhere else in the frame.
-      this.lastY = null;
-      this.lastV = 0;
+      this.chain.reset();
       return null;
     }
+    return this.chain.feed(weighted / total / h, t, energy);
+  }
+}
 
-    const y = weighted / total / h; // 0..1, top..bottom
-    if (this.lastY === null || dt <= 0 || dt > 0.25) {
-      // First moving frame (or a stall): position is valid, velocity isn't yet.
-      this.lastY = y;
-      this.lastV = 0;
+/// Weight scale for hand-tracker samples: a confident detection should count
+/// like healthy motion energy does on the fallback path (which sits around
+/// 10–40 on the 0..255 |diff| scale for a real strumming hand).
+const HAND_WEIGHT = 30;
+
+export interface HandMotionOptions extends VelocityChainOptions {
+  /// Detections scoring below this are treated as "no hand".
+  minScore?: number;
+}
+
+/// Position→velocity adapter for the hand-landmark backend: feed the tracked
+/// palm row (or null when no hand is seen) and the detection score. Low-score
+/// and no-hand frames break the velocity chain, so the hand re-entering the
+/// frame far from where it left never reads as a sweep.
+export class HandMotion {
+  private readonly minScore: number;
+  private readonly chain: VelocityChain;
+
+  constructor(opts: HandMotionOptions = {}) {
+    this.minScore = opts.minScore ?? 0.5;
+    this.chain = new VelocityChain(opts);
+  }
+
+  feed(y: number | null, t: number, score = 1): MotionSample | null {
+    if (y === null || score < this.minScore) {
+      this.chain.reset();
       return null;
     }
-
-    const raw = Math.max(-8, Math.min(8, (y - this.lastY) / dt));
-    const v = this.lastV + this.ema * (raw - this.lastV);
-    this.lastY = y;
-    this.lastV = v;
-    return { t, v, y, energy };
+    return this.chain.feed(y, t, HAND_WEIGHT * score);
   }
 }
 
@@ -276,13 +337,82 @@ export class StrokeTracker {
 }
 
 // ---------------------------------------------------------------------------
-// Camera capture layer (DOM). Kept as thin as possible: grab frames, downscale
-// to a tiny luma grid, feed the core, ring-buffer the samples, and answer the
-// one question main.ts asks: "the mic heard a strum at time T — which way?"
+// Hand skeleton drawing — exported so other surfaces (the practice highway's
+// future graphics layer) can render the same hand the tracker sees.
 // ---------------------------------------------------------------------------
 
-/// Analysis grid. Tiny on purpose: at 64x48 a frame diff is ~3k adds, nothing
-/// at 30 fps, and hand-scale motion survives heavy downscaling just fine.
+/// The 21 HandLandmarker points in normalized video coordinates. Structurally
+/// compatible with MediaPipe's NormalizedLandmark so callers don't need the
+/// library's types.
+export interface HandPoint {
+  x: number;
+  y: number;
+}
+
+/// Bone list of the 21-point hand model (wrist, thumb, four fingers).
+export const HAND_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
+  [0, 5], [5, 6], [6, 7], [7, 8],           // index
+  [5, 9], [9, 10], [10, 11], [11, 12],      // middle
+  [9, 13], [13, 14], [14, 15], [15, 16],    // ring
+  [13, 17], [17, 18], [18, 19], [19, 20],   // pinky
+  [0, 17],                                  // palm edge
+];
+
+export interface DrawHandOptions {
+  /// Mirror horizontally (for a selfie-style preview). Default true.
+  mirror?: boolean;
+  color?: string;
+  jointColor?: string;
+  lineWidth?: number;
+}
+
+/// Paint a hand skeleton over a w×h canvas region.
+export function drawHand(
+  ctx: CanvasRenderingContext2D,
+  hand: readonly HandPoint[],
+  w: number,
+  h: number,
+  opts: DrawHandOptions = {}
+): void {
+  if (hand.length < 21) return;
+  const mirror = opts.mirror ?? true;
+  const px = (p: HandPoint) => (mirror ? (1 - p.x) * w : p.x * w);
+  const py = (p: HandPoint) => p.y * h;
+
+  ctx.strokeStyle = opts.color ?? "rgba(25, 227, 196, 0.85)";
+  ctx.lineWidth = opts.lineWidth ?? 2;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const [a, b] of HAND_CONNECTIONS) {
+    ctx.moveTo(px(hand[a]), py(hand[a]));
+    ctx.lineTo(px(hand[b]), py(hand[b]));
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = opts.jointColor ?? "rgba(245, 196, 81, 0.9)";
+  for (const p of hand) {
+    ctx.beginPath();
+    ctx.arc(px(p), py(p), (opts.lineWidth ?? 2) * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/// The palm centroid row (wrist + the four finger knuckles): the point whose
+/// vertical travel is the strum. Fingertips flick and blur; the palm moves
+/// with the stroke.
+export function palmY(hand: readonly HandPoint[]): number {
+  return (hand[0].y + hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 5;
+}
+
+// ---------------------------------------------------------------------------
+// Camera capture layer (DOM). Grab frames, run the active tracking backend,
+// ring-buffer the samples, and answer the one question main.ts asks: "the mic
+// heard a strum at time T — which way?"
+// ---------------------------------------------------------------------------
+
+/// Analysis grid for the fallback backend. Tiny on purpose: at 64x48 a frame
+/// diff is ~3k adds, and hand-scale motion survives heavy downscaling fine.
 const GRID_W = 64;
 const GRID_H = 48;
 /// How much history the sample ring keeps, ms. Must comfortably exceed the
@@ -294,6 +424,13 @@ const DECIDE_DELAY_MS = 160;
 /// A stroke with no onset within this distance is a ghost.
 const GHOST_MATCH_MS = 180;
 
+/// Where the build puts the MediaPipe assets (scripts/fetch-mediapipe.mjs —
+/// they are fetched/copied at build time, not committed).
+const MEDIAPIPE_WASM_BASE = "/mediapipe/wasm";
+const HAND_MODEL_PATH = "/mediapipe/hand_landmarker.task";
+
+export type StrumCamBackend = "hand" | "motion";
+
 export interface StrumCamEvents {
   /// Every motion sample, for the live trace.
   onSample?: (s: MotionSample) => void;
@@ -301,6 +438,9 @@ export interface StrumCamEvents {
   onCall?: (call: StrumCall, onsetT: number) => void;
   /// A completed hand stroke; `ghost` = no mic onset anywhere near it.
   onStroke?: (stroke: Stroke, ghost: boolean) => void;
+  /// The 21-point skeleton for every frame a hand is seen (hand backend only).
+  /// This is the hook for hand graphics on other surfaces, e.g. the highway.
+  onHand?: (hand: readonly HandPoint[], t: number) => void;
   /// Camera status line for the UI.
   onStatus?: (msg: string) => void;
 }
@@ -309,6 +449,12 @@ export class StrumCam {
   /// Flip the up/down sense for rotated mounts. Applied at the sample source
   /// so the trace, calls and strokes all agree.
   flip = false;
+  /// Which tracking backend is live. "hand" once the model loads; "motion"
+  /// until then and whenever the model can't be used.
+  backend: StrumCamBackend = "motion";
+  /// Latest skeleton in video coordinates (un-mirrored), null when no hand.
+  lastHand: readonly HandPoint[] | null = null;
+  fps = 0;
 
   private readonly events: StrumCamEvents;
   private stream: MediaStream | null = null;
@@ -316,7 +462,10 @@ export class StrumCam {
   private readonly grab = document.createElement("canvas");
   private readonly grabCtx = this.grab.getContext("2d", { willReadFrequently: true })!;
   private preview: HTMLCanvasElement | null = null;
+  private landmarker: HandLandmarker | null = null;
+  private modelTried = false;
   private field = new MotionField(GRID_W, GRID_H);
+  private hand = new HandMotion();
   private strokes = new StrokeTracker();
   private samples: MotionSample[] = [];
   private onsets: number[] = [];
@@ -325,7 +474,6 @@ export class StrumCam {
   private running = false;
   private frames = 0;
   private fpsAt = 0;
-  fps = 0;
 
   constructor(events: StrumCamEvents = {}) {
     this.events = events;
@@ -338,7 +486,7 @@ export class StrumCam {
   }
 
   /// The view's preview canvas; the capture loop paints the mirrored camera
-  /// image plus the motion centroid into it. Null detaches.
+  /// image plus the tracking overlay into it. Null detaches.
   attachPreview(canvas: HTMLCanvasElement | null): void {
     this.preview = canvas;
   }
@@ -361,14 +509,22 @@ export class StrumCam {
     video.srcObject = this.stream;
     await video.play();
     this.video = video;
+
+    this.events.onStatus?.("camera live · loading hand model…");
+    await this.loadHandModel();
+
     this.field = new MotionField(GRID_W, GRID_H);
+    this.hand = new HandMotion();
     this.strokes = new StrokeTracker();
     this.samples = [];
     this.onsets = [];
+    this.lastHand = null;
     this.frames = 0;
     this.fpsAt = performance.now();
     this.running = true;
-    this.events.onStatus?.("camera live");
+    this.events.onStatus?.(
+      this.backend === "hand" ? "camera live · hand model" : "camera live · motion fallback (no hand model)"
+    );
     this.tick();
   }
 
@@ -379,6 +535,7 @@ export class StrumCam {
     this.timers = [];
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    this.lastHand = null;
     if (this.video) {
       this.video.srcObject = null;
       this.video = null;
@@ -400,6 +557,39 @@ export class StrumCam {
     if (this.timers.length > 64) this.timers.shift();
   }
 
+  /// Load MediaPipe HandLandmarker once per app run. Every failure path lands
+  /// on the frame-diff fallback — the lab must work on a machine that has
+  /// never run scripts/fetch-mediapipe.mjs, just with the weaker signal.
+  private async loadHandModel(): Promise<void> {
+    if (this.landmarker) {
+      this.backend = "hand";
+      return;
+    }
+    if (this.modelTried) return; // failed before; don't re-pay the timeout
+    this.modelTried = true;
+    try {
+      const vision = await import("@mediapipe/tasks-vision");
+      const fileset = await vision.FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE);
+      // GPU first (WebGL2 — present in WKWebView/WebView2), CPU as the retry:
+      // some webviews expose WebGL2 but fail shader compilation.
+      for (const delegate of ["GPU", "CPU"] as const) {
+        try {
+          this.landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: HAND_MODEL_PATH, delegate },
+            runningMode: "VIDEO",
+            numHands: 1,
+          });
+          break;
+        } catch (e) {
+          console.warn(`HandLandmarker ${delegate} init failed`, e);
+        }
+      }
+    } catch (e) {
+      console.warn("MediaPipe assets unavailable, using motion fallback", e);
+    }
+    this.backend = this.landmarker ? "hand" : "motion";
+  }
+
   private tick = (): void => {
     if (!this.running || !this.video) return;
     // requestVideoFrameCallback paces to actual camera frames where available;
@@ -413,13 +603,6 @@ export class StrumCam {
   private processFrame(t: number): void {
     const video = this.video!;
     if (video.readyState < 2) return;
-    this.grabCtx.drawImage(video, 0, 0, GRID_W, GRID_H);
-    const rgba = this.grabCtx.getImageData(0, 0, GRID_W, GRID_H).data;
-    const gray = new Uint8Array(GRID_W * GRID_H);
-    for (let i = 0; i < gray.length; i++) {
-      const j = i * 4;
-      gray[i] = (rgba[j] * 77 + rgba[j + 1] * 150 + rgba[j + 2] * 29) >> 8;
-    }
 
     this.frames++;
     if (t - this.fpsAt >= 1000) {
@@ -428,7 +611,7 @@ export class StrumCam {
       this.fpsAt = t;
     }
 
-    const raw = this.field.feed(gray, t);
+    const raw = this.landmarker ? this.handFrame(video, t) : this.motionFrame(video, t);
     const sample = raw && this.flip ? { ...raw, v: -raw.v, y: 1 - raw.y } : raw;
     if (sample) {
       this.samples.push(sample);
@@ -440,6 +623,41 @@ export class StrumCam {
       if (stroke) this.emitStroke(stroke);
     }
     this.drawPreview(sample);
+  }
+
+  /// Hand backend: palm centroid of the best-scoring hand.
+  private handFrame(video: HTMLVideoElement, t: number): MotionSample | null {
+    let hand: readonly HandPoint[] | null = null;
+    let score = 1;
+    try {
+      const res = this.landmarker!.detectForVideo(video, t);
+      if (res.landmarks && res.landmarks.length > 0) {
+        hand = res.landmarks[0];
+        score = res.handedness?.[0]?.[0]?.score ?? 1;
+      }
+    } catch (e) {
+      // A broken inference session won't heal; fall back for the rest of the run.
+      console.warn("hand inference failed, switching to motion fallback", e);
+      this.landmarker = null;
+      this.backend = "motion";
+      this.events.onStatus?.("camera live · motion fallback (hand model failed)");
+      return this.motionFrame(video, t);
+    }
+    this.lastHand = hand;
+    if (hand) this.events.onHand?.(hand, t);
+    return this.hand.feed(hand ? palmY(hand) : null, t, score);
+  }
+
+  /// Fallback backend: frame differencing on a tiny luma grid.
+  private motionFrame(video: HTMLVideoElement, t: number): MotionSample | null {
+    this.grabCtx.drawImage(video, 0, 0, GRID_W, GRID_H);
+    const rgba = this.grabCtx.getImageData(0, 0, GRID_W, GRID_H).data;
+    const gray = new Uint8Array(GRID_W * GRID_H);
+    for (let i = 0; i < gray.length; i++) {
+      const j = i * 4;
+      gray[i] = (rgba[j] * 77 + rgba[j + 1] * 150 + rgba[j + 2] * 29) >> 8;
+    }
+    return this.field.feed(gray, t);
   }
 
   private emitStroke(stroke: Stroke): void {
@@ -470,6 +688,9 @@ export class StrumCam {
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, width, height);
     ctx.restore();
+
+    // Overlays are drawn in video pixel space (un-flip a flipped sample).
+    if (this.lastHand) drawHand(ctx, this.lastHand, width, height);
     if (sample) {
       const y = (this.flip ? 1 - sample.y : sample.y) * height;
       ctx.strokeStyle = "rgba(25, 227, 196, 0.9)";

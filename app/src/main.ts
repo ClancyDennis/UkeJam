@@ -3570,7 +3570,10 @@ function scFlashStatus(msg: string): void {
   scStatusEl.textContent = msg;
   if (scStatusTimer) clearTimeout(scStatusTimer);
   scStatusTimer = setTimeout(() => {
-    if (strumcam.active) scStatusEl.textContent = "camera live";
+    if (strumcam.active) {
+      scStatusEl.textContent =
+        strumcam.backend === "hand" ? "camera live · hand model" : "camera live · motion fallback";
+    }
   }, 1800);
 }
 
