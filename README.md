@@ -378,13 +378,27 @@ string contact. The split in the app is therefore strict: the **mic** says
 *when* (the proven onset detector), the **camera** only answers *which way the
 hand was moving at that instant*.
 
-The first cut is deliberately ML-free: `app/src/strumcam.ts` tracks the
-vertical velocity of the frame-difference motion centroid on a 64×48 luma grid
-— the strumming hand is the dominant mover in a sensibly framed shot. No model
-download, no WASM, no webview integration risk; if the simple signal proves
-insufficient on real hands, a landmark tracker (e.g. MediaPipe Hands) can
-replace `MotionField` behind the same `MotionSample` stream without touching
-the fusion or the UI.
+Two tracking backends in `app/src/strumcam.ts` produce the same
+`MotionSample` stream, so everything downstream — the direction call, stroke
+segmentation, ghosts, the UI — is backend-agnostic:
+
+- **hand** (primary): MediaPipe HandLandmarker, on-device WASM. Tracks the
+  palm centroid (wrist + four knuckles — fingertips flick and blur, the palm
+  moves with the stroke), is immune to background motion, and yields a full
+  21-point skeleton per frame. The skeleton is deliberately exposed
+  (`onHand`, `lastHand`, and the exported `drawHand`/`HAND_CONNECTIONS`) —
+  it's the raw material for a hand graphics layer on the practice highway
+  later, not just this lab's overlay.
+- **motion** (automatic fallback): vertical velocity of the frame-difference
+  motion centroid on a 64×48 luma grid. Dependency-free; runs when the model
+  assets are missing or the model fails to load in the webview, so StrumCam
+  never hard-fails — it just says which backend it's on in the status line.
+
+The model assets (~42 MB of WASM + the pinned float16 `hand_landmarker.task`)
+don't belong in git and can't be fetched from a CDN inside a Tauri webview, so
+`app/scripts/fetch-mediapipe.mjs` stages them into `public/mediapipe/`
+(gitignored) before every `pnpm dev` / `pnpm build`. A failed download is a
+warning, not an error: offline builds still work on the fallback backend.
 
 The **StrumCam** view (util bar → ◉ StrumCam) is the in-app feasibility rig,
 same philosophy as the Python strum lab below: camera preview with the motion
@@ -397,10 +411,12 @@ definition, and which is exactly how strumming rhythm is taught ("keep the hand
 moving, miss the strings on the silent beats"). A `⇅ flip` toggle covers
 rotated mounts, where every call would otherwise come out backwards.
 
-`pnpm --dir app verify:strumcam` drives the analysis core with synthetic frames
+`pnpm --dir app verify:strumcam` drives the analysis core with synthetic input
 of known motion: down/up sweeps at known speed, stillness, hover jitter (must
-read "unsure", never a coin flip), and direction-at-the-onset beating
-biggest-motion-in-history.
+read "unsure", never a coin flip), direction-at-the-onset beating
+biggest-motion-in-history, and the hand-backend adapter's failure cases — a
+tracking gap or a low-score detection must break the velocity chain rather
+than let a hand reappearing elsewhere read as a giant sweep.
 
 Camera + mic run together only on this screen for now; nothing camera-derived
 feeds practice scoring yet — that graduation depends on the numbers this view
@@ -522,8 +538,9 @@ re-run as the algorithm changes without playing everything again.
 | `app/tauri-plugin-web-auth/` | Tauri plugin running OAuth sign-in in the system browser sheet (iOS) |
 | `app/src/ai.ts` | AI provider config: persistence + provider registry |
 | `app/src/verdict.ts` | Per-bar scoring: HIT/WRONG/MISS, strum timing, coach digest |
-| `app/src/strumcam.ts` | Camera strum direction: motion field, per-onset calls, ghost strokes |
+| `app/src/strumcam.ts` | Camera strum direction: hand-landmark + motion backends, per-onset calls, ghost strokes |
 | `app/src/verify-strumcam.mjs` | Synthetic-motion checks for the StrumCam analysis core |
+| `app/scripts/fetch-mediapipe.mjs` | Stages MediaPipe wasm + hand model into `public/mediapipe/` at build time |
 | `strum_model.py` | Voicings read from `main.ts`; down/up templates, unison filter |
 | `strum_lab.py` | Live strum-direction lab (SSE server, shares the analyser) |
 | `strum_lab.html` | Lab page: shape to play, attack timeline, per-tempo tally |
@@ -627,12 +644,14 @@ Demucs weights are large and should stay out of git.
   remaining work, and it should gate on trackable-string count: four-string
   shapes carry three ordered pairs, two-string shapes carry one and can be
   flipped by a single bad reading.
-- The StrumCam motion tracker has **never seen a real hand** — every threshold
-  (energy floor, min speed, consistency, window) is a guess until the view's
-  tally is run against a player calling their own strokes. The camera path is
-  also untested inside the iOS webview (`getUserMedia` needs the
-  `NSCameraUsageDescription` now in `Info.plist`; the simulator has no camera
-  worth testing with).
+- StrumCam has **never seen a real hand** — every threshold (min speed,
+  consistency, window, min score) is a guess until the view's tally is run
+  against a player calling their own strokes. The camera path is also untested
+  inside the iOS webview (`getUserMedia` needs the `NSCameraUsageDescription`
+  now in `Info.plist`; the simulator has no camera worth testing with), and so
+  is HandLandmarker inference there — the GPU delegate may fail and drop to
+  CPU, whose per-frame cost on a phone is unmeasured. The fps readout in the
+  view is there to answer exactly that.
 
 ## Direction
 

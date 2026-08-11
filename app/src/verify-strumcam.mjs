@@ -11,7 +11,7 @@
 // Run with `pnpm verify:strumcam`. Plain node, no dependencies — it imports
 // strumcam.ts directly (node strips types natively) so it tests the real code.
 
-import { MotionField, StrokeTracker, classifyStrum } from "./strumcam.ts";
+import { HandMotion, MotionField, StrokeTracker, classifyStrum, palmY } from "./strumcam.ts";
 
 let failures = 0;
 
@@ -90,6 +90,45 @@ console.log("MotionField");
   for (let i = 0; i < 10; i++) field.feed(frame(8), 1100 + i * 20);
   const after = field.feed(frame(20), 1300);
   check("motion after a still gap restarts cleanly (no sample yet)", after === null);
+}
+
+// --- HandMotion (the hand-landmark backend's position→velocity adapter) -----
+
+console.log("HandMotion");
+{
+  // Palm sweeping down the frame: 0.2 → 0.8 over 9 frames @ 20ms ≈ 3.75 h/s.
+  const hm = new HandMotion();
+  const samples = [];
+  for (let i = 0; i < 9; i++) {
+    const s = hm.feed(0.2 + (0.6 * i) / 8, 1000 + i * 20, 0.95);
+    if (s) samples.push(s);
+  }
+  check("a palm sweep down produces positive samples", samples.length >= 6 && samples.every((s) => s.v > 0), JSON.stringify(samples.map((s) => +s.v.toFixed(2))));
+  const call = classifyStrum(samples, 1080);
+  check("hand-backend sweep classifies down", call.dir === "down", JSON.stringify(call));
+}
+{
+  // The hand leaves the frame mid-motion and reappears somewhere else: the
+  // gap must break the velocity chain, not read as a giant sweep.
+  const hm = new HandMotion();
+  for (let i = 0; i < 5; i++) hm.feed(0.3 + i * 0.05, 1000 + i * 20, 0.95);
+  for (let i = 0; i < 5; i++) hm.feed(null, 1100 + i * 20, 0);
+  const reappeared = hm.feed(0.9, 1200, 0.95);
+  check("a tracking gap breaks the chain (no sample on reappearance)", reappeared === null);
+}
+{
+  // Low-score detections are "no hand", not weak evidence of position.
+  const hm = new HandMotion();
+  hm.feed(0.3, 1000, 0.95);
+  hm.feed(0.5, 1020, 0.2); // garbage detection mid-chain
+  const next = hm.feed(0.35, 1040, 0.95);
+  check("a low-score frame resets rather than feeds", next === null);
+}
+{
+  // palmY is the mean of wrist + the four knuckles, ignoring fingertips.
+  const hand = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.9 }));
+  for (const i of [0, 5, 9, 13, 17]) hand[i] = { x: 0.5, y: 0.4 };
+  check("palmY reads the palm, not the fingers", Math.abs(palmY(hand) - 0.4) < 1e-9, `got ${palmY(hand)}`);
 }
 
 // --- classifyStrum ----------------------------------------------------------
