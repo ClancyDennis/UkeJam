@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows an OAuth sign-in to be presented in the platform's own browser sheet."
+permissions = ["allow-authorize"]

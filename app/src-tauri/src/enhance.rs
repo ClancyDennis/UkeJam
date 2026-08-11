@@ -1,16 +1,16 @@
 //! AI tab enhancement — normalize a messy pasted tab into clean ChordPro via
-//! an OpenAI-compatible LLM proxy. Ported from the prototype's importer.py.
+//! a chat model. Ported from the prototype's importer.py.
 //!
-//! The call lives in Rust (not the webview) so the API key stays out of the
-//! frontend and we avoid browser CORS to localhost:4000.
+//! The player picks the provider in Setup: Apple Intelligence (on-device, via
+//! the local-llm plugin), OpenRouter, or any OpenAI-compatible endpoint. The
+//! remote calls live in Rust (not the webview) to avoid browser CORS against
+//! arbitrary endpoints; the config travels with each invoke so the frontend
+//! owns persistence.
 
+use serde::Deserialize;
 use serde_json::json;
-
-// Defaults target the local dev proxy; override with env vars so the URL/key
-// aren't baked into the binary (and can point at a different proxy per machine).
-const DEFAULT_PROXY_URL: &str = "http://localhost:4000/v1/chat/completions";
-const DEFAULT_PROXY_KEY: &str = "sk-1234";
-const MODEL: &str = "claude-sonnet-4-6";
+use tauri::AppHandle;
+use tauri_plugin_local_llm::{ChatMessage, ChatRequest, LocalLlmExt};
 
 const SYSTEM: &str = "\
 You convert guitar/ukulele tabs and chord charts into ChordPro format for a \
@@ -98,36 +98,202 @@ pub enum Mode {
     Fuse,
 }
 
-/// Resolve the proxy endpoint: env var > saved setting (Setup screen) >
-/// compiled-in localhost default. Saved settings matter most on iOS, where a
-/// localhost proxy can't exist and env vars can't be set.
-pub fn resolve_proxy(saved: &crate::settings::Settings) -> (String, String) {
-    let pick = |env: &str, saved: &str, default: &str| {
-        std::env::var(env)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| {
-                if saved.trim().is_empty() {
-                    default.to_string()
-                } else {
-                    saved.trim().to_string()
-                }
-            })
-    };
-    (
-        pick("UKEJAM_PROXY_URL", &saved.proxy_url, DEFAULT_PROXY_URL),
-        pick("UKEJAM_PROXY_KEY", &saved.proxy_key, DEFAULT_PROXY_KEY),
-    )
+/// The provider settings chosen in Setup, persisted natively (settings.rs) and
+/// sent along with every AI invoke.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfig {
+    /// `apple` (on-device), `openrouter`, or `openai` (any compatible endpoint).
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
 }
 
-/// Send tab text to the proxy; return cleaned ChordPro (or an error string).
-/// `mode` selects the system prompt; `lyrics` is the second payload for Fuse.
+impl AiConfig {
+    fn is_apple(&self) -> bool {
+        self.provider == "apple"
+    }
+
+    /// The endpoint and key to actually call, with the legacy
+    /// `UKEJAM_PROXY_URL`/`UKEJAM_PROXY_KEY` env vars taking precedence for
+    /// the OpenAI-compatible provider. Those env vars predate the provider
+    /// picker (they configured the localhost dev proxy), so honouring them
+    /// keeps existing dev machines working without touching Setup. They are
+    /// deliberately ignored for OpenRouter, whose endpoint is fixed and whose
+    /// key comes from the sign-in.
+    fn endpoint(&self) -> (String, String) {
+        let env = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if self.provider != "openai" {
+            return (self.base_url.trim().to_string(), self.api_key.trim().to_string());
+        }
+        (
+            // The env var names a full chat-completions URL (that is what the
+            // old proxy config was), so strip the suffix chat_url re-appends.
+            env("UKEJAM_PROXY_URL")
+                .map(|url| url.trim_end_matches("/chat/completions").to_string())
+                .unwrap_or_else(|| self.base_url.trim().to_string()),
+            env("UKEJAM_PROXY_KEY").unwrap_or_else(|| self.api_key.trim().to_string()),
+        )
+    }
+
+    fn chat_url(&self) -> Result<String, String> {
+        let base = self.endpoint().0;
+        let base = base.trim_end_matches('/');
+        if base.is_empty() {
+            return Err("no endpoint configured — set up AI enhance in ⚙ Setup".into());
+        }
+        Ok(format!("{base}/chat/completions"))
+    }
+}
+
+/// Whether to send `temperature: 0` to this model. Reasoning models (o-series,
+/// GPT-5 family) and the temperature-rejecting Claude generations (all Opus,
+/// the "5" line) 400 on a custom temperature; omitting it just uses the model
+/// default. Ported from Wormdrop's modelSupportsTemperature.
+fn model_accepts_temperature(model: &str) -> bool {
+    // OpenRouter ids carry "vendor/" (and "~" auto-router) prefixes — judge the
+    // bare id so "openai/gpt-5" behaves like "gpt-5".
+    let bare = model.trim_start_matches('~');
+    let name = bare.rsplit('/').next().unwrap_or(bare).to_ascii_lowercase();
+    let reasoning = (name.starts_with('o')
+        && name.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
+        || (name.starts_with("gpt-5") && !name.contains("chat"));
+    let claude_no_temp = name.contains("claude")
+        && (name.contains("opus")
+            || ["sonnet-5", "haiku-5", "fable-5", "mythos-5"]
+                .iter()
+                .any(|family| name.contains(&format!("claude-{family}"))));
+    !reasoning && !claude_no_temp
+}
+
+/// One completion through whichever provider the config names.
+/// Blocking — callers run it on `spawn_blocking`.
+fn chat(app: &AppHandle, config: &AiConfig, system: &str, user: &str) -> Result<String, String> {
+    if config.is_apple() {
+        return apple_chat(app, config, system, user);
+    }
+    remote_chat(config, system, user)
+}
+
+/// On-device completion via the local-llm plugin (macOS helper / iOS Swift).
+fn apple_chat(
+    app: &AppHandle,
+    _config: &AiConfig,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let mut messages = Vec::new();
+    if !system.is_empty() {
+        messages.push(ChatMessage {
+            role: "system".into(),
+            content: system.into(),
+        });
+    }
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: user.into(),
+    });
+    let reply = app
+        .local_llm()
+        .chat(ChatRequest {
+            messages,
+            max_tokens: None,
+            temperature: Some(0.0),
+        })
+        .map_err(|e| format!("on-device model: {e}"))?;
+    Ok(reply.content)
+}
+
+/// Remote completion against an OpenAI-compatible `/chat/completions`.
+fn remote_chat(config: &AiConfig, system: &str, user: &str) -> Result<String, String> {
+    let model = config.model.trim();
+    if model.is_empty() {
+        return Err("no model selected — set up AI enhance in ⚙ Setup".into());
+    }
+    let mut body = json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ]
+    });
+    if model_accepts_temperature(model) {
+        body["temperature"] = json!(0);
+    }
+
+    let url = config.chat_url()?;
+    let resp = http_client()?
+        .post(&url)
+        .headers(auth_headers(config))
+        .json(&body)
+        .send()
+        // Naming the URL matters most for the custom-endpoint provider, where
+        // an unreachable host is the likeliest failure and the player is the
+        // one who typed the address.
+        .map_err(|e| format!("request to {url} failed (endpoint reachable? configurable in ⚙ Setup): {e}"))?;
+
+    let status = resp.status();
+    let data: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("bad response ({status}): {e}"))?;
+    if !status.is_success() {
+        // Surface the endpoint's own message when it sends one — a bare 401/404
+        // hides whether the key or the model id was wrong.
+        let detail = data["error"]["message"]
+            .as_str()
+            .or_else(|| data["message"].as_str())
+            .unwrap_or("");
+        return Err(if detail.is_empty() {
+            format!("endpoint returned {status}")
+        } else {
+            format!("endpoint returned {status}: {detail}")
+        });
+    }
+
+    Ok(data["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("no content in response")?
+        .to_string())
+}
+
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("http client: {e}"))
+}
+
+fn auth_headers(config: &AiConfig) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    // Keyless local endpoints (LM Studio, Ollama's compatible API) are fine —
+    // only send Authorization when there is something to send.
+    let key = config.endpoint().1;
+    if !key.is_empty() {
+        if let Ok(value) = format!("Bearer {key}").parse() {
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+        }
+    }
+    headers
+}
+
+/// Send tab text through the configured provider; return cleaned ChordPro (or
+/// an error string). `mode` selects the system prompt; `lyrics` is the second
+/// payload for Fuse.
 pub fn enhance_tab(
+    app: &AppHandle,
     raw: &str,
     mode: Mode,
     lyrics: Option<&str>,
-    proxy_url: &str,
-    proxy_key: &str,
+    config: &AiConfig,
 ) -> Result<String, String> {
     let (system, user) = match mode {
         Mode::Midi => (
@@ -143,37 +309,8 @@ pub fn enhance_tab(
         ),
         Mode::Messy => (SYSTEM, format!("Convert this tab to ChordPro:\n\n{raw}")),
     };
-    let body = json!({
-        "model": MODEL,
-        "temperature": 0,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user }
-        ]
-    });
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-
-    let resp = client
-        .post(proxy_url)
-        .header("Authorization", format!("Bearer {proxy_key}"))
-        .json(&body)
-        .send()
-        .map_err(|e| format!("request to {proxy_url} failed (endpoint reachable? configurable in Setup): {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("proxy returned {}", resp.status()));
-    }
-
-    let data: serde_json::Value = resp.json().map_err(|e| format!("bad response: {e}"))?;
-    let mut text = data["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or("no content in response")?
-        .trim()
-        .to_string();
+    let mut text = chat(app, config, system, &user)?.trim().to_string();
 
     // strip accidental ``` fences
     if text.starts_with("```") {
@@ -186,4 +323,78 @@ pub fn enhance_tab(
         text = text.trim().to_string();
     }
     Ok(text)
+}
+
+/// List the model ids a remote endpoint offers (GET `{base}/models`), for the
+/// Setup view's model picker. Works unauthenticated where the endpoint allows
+/// it (OpenRouter's catalog does).
+pub fn list_models(config: &AiConfig) -> Result<Vec<String>, String> {
+    // endpoint() so an env-var override is scanned rather than the stale
+    // saved URL — the catalog must match what a request would actually hit.
+    let base = config.endpoint().0;
+    let base = base.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("enter a base URL first".into());
+    }
+    let resp = http_client()?
+        .get(format!("{base}/models"))
+        .headers(auth_headers(config))
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("model scan failed ({})", resp.status()));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| format!("bad response: {e}"))?;
+    let rows = data["data"].as_array().or_else(|| data.as_array());
+    let mut ids: Vec<String> = rows
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    row.as_str()
+                        .or_else(|| row["id"].as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+const OPENROUTER_KEY_URL: &str = "https://openrouter.ai/api/v1/auth/keys";
+
+/// Finish the OpenRouter PKCE login: trade the one-shot auth code (plus the
+/// verifier the frontend kept) for a long-lived API key. Runs in Rust so the
+/// webview never has to POST cross-origin to openrouter.ai.
+pub fn openrouter_exchange(code: &str, verifier: &str) -> Result<String, String> {
+    let resp = http_client()?
+        .post(OPENROUTER_KEY_URL)
+        .json(&json!({
+            "code": code,
+            "code_verifier": verifier,
+            "code_challenge_method": "S256",
+        }))
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("OpenRouter sign-in failed ({})", resp.status()));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| format!("bad response: {e}"))?;
+    data["key"]
+        .as_str()
+        .or_else(|| data["api_key"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "OpenRouter did not return an API key".into())
+}
+
+/// A live-fire round trip that proves the whole configuration works — key,
+/// model id, endpoint, or the on-device model. Returns the model's reply.
+pub fn test_connection(app: &AppHandle, config: &AiConfig) -> Result<String, String> {
+    let reply = chat(app, config, "", "Reply with exactly: ready")?;
+    let reply = reply.trim();
+    if reply.is_empty() {
+        return Err("the model replied with empty text".into());
+    }
+    Ok(reply.chars().take(80).collect())
 }
