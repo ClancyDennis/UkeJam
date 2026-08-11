@@ -90,6 +90,21 @@
   }
   button:hover { border-color: var(--teal-dim); color: var(--teal); }
   button.on { border-color: var(--gold); color: var(--gold); }
+  button.rec { color: var(--wrong); }
+  button.rec.on { border-color: var(--wrong); color: var(--wrong);
+                  box-shadow: 0 0 10px rgba(255,93,108,.35); }
+  .recstate { font-size: 11px; color: var(--dim); align-self: center; }
+  .recstate.on { color: var(--wrong); }
+
+  /* Level meter. Its own row because signal strength turned out to matter as much
+     as anything else: a weak attack has a mushier envelope edge, which inflates the
+     timing error this whole rig exists to measure. */
+  .level { margin: 9px 0 11px; }
+  .level .bar { height: 7px; margin: 4px 0 3px; }
+  .level .bar > i { transition: width .06s linear; }
+  .lvhint { font-size: 11px; color: var(--dim); }
+  .lvhint.bad { color: var(--gold); }
+  .lvhint.clip { color: var(--wrong); }
 
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   th, td { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
@@ -146,6 +161,18 @@
       <button id="metro">▶ metronome</button>
       <button id="dirtog">↓ down</button>
       <button id="reset">reset tally</button>
+    </div>
+    <!-- Recording captures RAW AUDIO, so a session can be re-analysed after the
+         algorithm changes instead of asking for another performance. Get set up
+         first, then record. -->
+    <div class="row">
+      <button id="rec" class="rec">● record</button>
+      <span class="recstate mono" id="recstate">not recording</span>
+    </div>
+    <div class="level">
+      <span class="mono" id="levtext">level –</span>
+      <div class="bar"><i id="levbar" style="width:0%"></i></div>
+      <span class="lvhint" id="lvhint"></span>
     </div>
     <div class="cells" id="cells"></div>
     <div class="tally" id="tally"></div>
@@ -315,24 +342,55 @@ function onStrum(e) {
     e.outcome === "right" ? `correct — heard ${e.direction}`
     : e.outcome === "wrong" ? `WRONG — you played ${e.expected}, it heard ${e.direction}`
     : "unknown — strings too close together to order";
-  $("vmeta").textContent =
-    `gap ${e.gapMs === null ? "–" : e.gapMs + "ms"} · margin ${e.margin} · ` +
-    `${e.tracked} strings tracked${e.peak > 0.98 ? " · CLIPPED" : ""}`;
+  $("vmeta").innerHTML =
+    `gap ${e.gapMs === null ? "–" : e.gapMs + "ms"} · ` +
+    `span ${e.spanMs === null ? "–" : e.spanMs + "ms"} · margin ${e.margin} · ` +
+    `${e.tracked} strings` +
+    // Level is called out per strum because it changes how much the timing can be
+    // trusted, and it is invisible otherwise: the first real session ran at a
+    // seventh of full scale and reported a stagger barely above the noise floor.
+    (e.level === "clipped"
+      ? ` · <span style="color:var(--wrong)">CLIPPED — timing unreliable</span>`
+      : e.level === "low"
+        ? ` · <span style="color:var(--gold)">QUIET (peak ${e.peak}) — timing unreliable</span>`
+        : ` · peak ${e.peak}`);
 
   drawTimeline(e);
 
   rows.unshift(e);
   rows.length = Math.min(rows.length, 12);
+
+  // A run dominated by quiet strums can't answer the question either way, so say
+  // so rather than letting the tally imply a physics result. Counted AFTER the
+  // push, so the strum just shown is included.
+  const lows = rows.filter((r) => r.level === "low").length;
+  const hint = $("lvhint");
+  if (e.level === "clipped") {
+    hint.className = "lvhint clip";
+    hint.textContent = "clipping — move back or lower input gain";
+  } else if (lows >= 3) {
+    hint.className = "lvhint bad";
+    hint.textContent = `${lows} of the last ${rows.length} strums were quiet — ` +
+      `play closer or louder, the stagger figures are unreliable below peak ` +
+      `${CFG.thresholds.goodPeak}`;
+  } else {
+    hint.className = "lvhint";
+    hint.textContent = "";
+  }
+
   $("rows").innerHTML = rows.map((r) => {
     const c = r.outcome === "right" ? "r" : r.outcome === "wrong" ? "w" : "u";
+    const lvl = r.level === "ok" ? "" : r.level === "low" ? " ·q" : " ·CLIP";
     return `<tr><td>${r.seq}</td><td>${r.chord}</td><td>${r.expected}</td>
       <td class="${c}">${r.direction ?? "unknown"}</td>
-      <td>${r.gapMs === null ? "–" : r.gapMs}</td><td>${r.margin}</td></tr>`;
+      <td>${r.gapMs === null ? "–" : r.gapMs}${lvl}</td><td>${r.margin}</td></tr>`;
   }).join("");
 
   const k = cellKey(e.chord, e.expected, e.bpm);
-  const st = tally[k] || (tally[k] = { right: 0, wrong: 0, unknown: 0, gaps: [] });
+  const st = tally[k] ||
+    (tally[k] = { right: 0, wrong: 0, unknown: 0, gaps: [], low: 0 });
   st[e.outcome]++;
+  if (e.level === "low") st.low++;
   if (e.gapMs !== null) st.gaps.push(e.gapMs);
   markActive();
   renderTally();
@@ -357,14 +415,16 @@ function drawTimeline(e) {
 }
 
 function renderTally() {
-  let right = 0, wrong = 0, unknown = 0, gaps = [];
+  let right = 0, wrong = 0, unknown = 0, low = 0, gaps = [];
   const perBpm = {};
   for (const [k, st] of Object.entries(tally)) {
     const bpm = +k.split("|")[2];
-    right += st.right; wrong += st.wrong; unknown += st.unknown;
+    right += st.right; wrong += st.wrong; unknown += st.unknown; low += st.low || 0;
     gaps = gaps.concat(st.gaps);
-    const p = perBpm[bpm] || (perBpm[bpm] = { right: 0, wrong: 0, unknown: 0, gaps: [] });
+    const p = perBpm[bpm] ||
+      (perBpm[bpm] = { right: 0, wrong: 0, unknown: 0, gaps: [], low: 0 });
     p.right += st.right; p.wrong += st.wrong; p.unknown += st.unknown;
+    p.low += st.low || 0;
     p.gaps = p.gaps.concat(st.gaps);
   }
   const total = right + wrong + unknown;
@@ -374,6 +434,13 @@ function renderTally() {
       `<b>${unknown}</b> unknown of ${total}` +
       (med(gaps) !== null ? ` · median gap <b>${med(gaps).toFixed(1)}ms</b>` : "")
     : "no strums yet";
+  // A mostly-quiet run can't settle the question either way. Saying so next to the
+  // numbers stops a gain problem being read as a physics result.
+  if (low > total * 0.3) {
+    html += `<br><span style="color:var(--gold);font-size:11px">` +
+      `${low}/${total} strums were quiet — these figures are not trustworthy; ` +
+      `play louder and re-run</span>`;
+  }
   // Speed is the variable that decides viability, so break the tally out by tempo.
   const bpms = Object.keys(perBpm).map(Number).sort((a, b) => a - b);
   if (bpms.length) {
@@ -423,13 +490,62 @@ $("reset").addEventListener("click", () => {
   markActive(); renderTally();
 });
 
+// ---------- recording ----------
+// Raw audio, not just the measurements: it lets the same performance be re-run
+// through changed code, so a threshold tweak doesn't cost another take.
+let recOn = false;
+$("rec").addEventListener("click", async () => {
+  const url = recOn ? "/stop" : "/record";
+  const body = recOn ? "{}" : JSON.stringify({
+    label: `${target.chord}_${target.direction}_${target.bpm}`,
+  });
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body,
+  });
+  const d = await r.json();
+  recOn = !!d.recording;
+  paintRec();
+  if (!recOn && d.file) {
+    $("recstate").textContent =
+      `saved ${d.seconds.toFixed(1)}s · ${d.strums} strums · peak ${d.peak}`;
+  }
+});
+
+function paintRec() {
+  $("rec").classList.toggle("on", recOn);
+  $("rec").textContent = recOn ? "■ stop" : "● record";
+  $("recstate").classList.toggle("on", recOn);
+  if (!recOn) return;
+  $("recstate").textContent = "recording…";
+}
+
+// Live level. Shown continuously so you can set your distance/gain BEFORE
+// recording — the first real session was captured at a seventh of full scale and
+// there was no way to see that while playing.
+function paintLevel(d) {
+  const rms = d.rms || 0;
+  // rms of a strummed chord runs well below its peak; scale so a healthy strum
+  // fills most of the bar rather than a sliver.
+  const pct = Math.min(100, (rms / 0.25) * 100);
+  const bar = $("levbar");
+  bar.style.width = pct.toFixed(0) + "%";
+  bar.style.background = rms > 0.22 ? "var(--wrong)"
+    : rms > 0.06 ? "var(--right)" : "var(--gold)";
+  $("levtext").textContent = `level ${rms.toFixed(3)}`;
+  if (d.recording) {
+    $("recstate").textContent =
+      `recording ${d.recSeconds.toFixed(0)}s · ${d.recStrums} strums`;
+  }
+  if (recOn !== !!d.recording) { recOn = !!d.recording; paintRec(); }
+}
+
 // ---------- stream ----------
 function connect() {
   const es = new EventSource("/stream");
   es.onmessage = (m) => {
     const d = JSON.parse(m.data);
     if (d.type === "strum") onStrum(d);
-    else if (d.type === "level") $("dot").classList.add("live");
+    else if (d.type === "level") { $("dot").classList.add("live"); paintLevel(d); }
   };
   es.onerror = () => $("dot").classList.remove("live");
 }

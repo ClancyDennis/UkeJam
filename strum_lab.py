@@ -78,6 +78,15 @@ ONSET_RISE_RATIO = 1.30    # chunk RMS must exceed the previous chunk by this mu
 # strum must actually be audible. Raise this if quiet room noise still triggers.
 ONSET_MIN_PEAK = 0.05
 
+# Level quality. The first real session came in at median peak 0.15 — audible, but
+# only a seventh of full scale, and a weak attack has a mushier envelope edge, which
+# inflates the very timing error the study is trying to measure. That session
+# reported a 2.3ms median stagger, uncomfortably close to the 2.8ms leakage floor,
+# and there was no way to tell how much of that was the player and how much was gain.
+# Now a strum below this is flagged so a quiet take is visibly untrustworthy rather
+# than silently wrong.
+LEVEL_GOOD_PEAK = 0.30
+
 # The drill: speed is the variable that matters most, since it decides whether the
 # stagger clears the leakage floor. Shapes cover both decision paths — C/G settle
 # on the first attack, Am/F only on the second (their first attack is a unison).
@@ -85,11 +94,27 @@ DRILL_BPMS = [60, 90, 120, 160]
 DRILL_SHAPES = ["C", "Am", "G", "F"]
 DRILL_STRUMS = 8  # per (shape, direction, bpm) cell
 
+CLIP_DIR = "clips"
+
 _lock = threading.Lock()
 _events = deque(maxlen=64)   # measured strums awaiting delivery to the browser
 _seq = {"n": 0}
 _target = {"chord": "C", "direction": "down", "bpm": 60, "tuning": "standard"}
 _mic = {"sr": SR, "name": "?", "rms": 0.0, "floor": 0.0}
+
+# Recording state. Capturing RAW AUDIO (not just the measurements) is the point:
+# it means a session can be re-analysed after the algorithm changes, instead of
+# asking the player to perform everything again. Every threshold in this file is a
+# guess until it has been tried against a real recording, and each guess costs
+# another take if the audio wasn't kept.
+_rec = {
+    "on": False,
+    "chunks": [],       # raw mono audio for the session
+    "strums": [],       # measurements, saved alongside as JSONL
+    "label": "",
+    "started": 0.0,
+    "samples": 0,
+}
 
 
 def shape_info(chord, tuning):
@@ -150,6 +175,13 @@ class Listener:
         rms = float(np.sqrt(np.mean(chunk ** 2)))
         _mic["rms"] = rms
         _mic["floor"] = self.floor
+
+        # Keep the raw audio while recording, so the session can be re-analysed
+        # later against a changed algorithm.
+        with _lock:
+            if _rec["on"]:
+                _rec["chunks"].append(chunk.copy())
+                _rec["samples"] += n
 
         # Two conditions, each catching what the other misses:
         #   - above the noise FLOOR: there is signal at all
@@ -215,6 +247,7 @@ class Listener:
         got, margin = classify(m["attacks"], frets, tuning)
         ts = [a[3] for a in m["attacks"]]
         gaps = [abs(b - a) * 1000 for a, b in zip(ts, ts[1:])]
+        peak = round(float(np.max(np.abs(seg))), 3)
 
         _seq["n"] += 1
         event = {
@@ -232,11 +265,97 @@ class Listener:
             "attacks": [{"note": midi_to_name(a[1]), "freq": round(a[2], 1),
                          "ms": round(a[3] * 1000, 2)} for a in m["attacks"]],
             "gapMs": round(gaps[0], 2) if gaps else None,
+            # Full span across all measured attacks, not just the first pair. A
+            # 4-string shape can have a small first gap and a wide overall sweep.
+            "spanMs": round((ts[-1] - ts[0]) * 1000, 2) if len(ts) > 1 else None,
             "tracked": m["tracked"],
-            "peak": round(float(np.max(np.abs(seg))), 3),
+            "peak": peak,
+            # Level quality is reported per strum because it changes how much the
+            # timing can be trusted: a weak attack has a mushier envelope edge, so a
+            # quiet strum's stagger figure carries more error than a loud one's.
+            "level": ("clipped" if peak > 0.98
+                      else "low" if peak < LEVEL_GOOD_PEAK else "ok"),
         }
         with _lock:
             _events.append(event)
+            if _rec["on"]:
+                _rec["strums"].append(event)
+        log_strum(event)
+
+
+# --------------------------------------------------------------------------
+# logging + session recording
+# --------------------------------------------------------------------------
+def log_strum(e):
+    """One line per strum on the terminal.
+
+    The first real session had a live screen and no record: when the numbers looked
+    confusing there was nothing to point at, and the session had to be reconstructed
+    by scraping the SSE buffer. A terminal line costs nothing and means the run is
+    always inspectable afterwards.
+    """
+    arrow = {"down": "v", "up": "^"}.get(e["direction"], "?")
+    mark = {"right": "ok   ", "wrong": "WRONG", "unknown": "?    "}[e["outcome"]]
+    gap = "   -  " if e["gapMs"] is None else f"{e['gapMs']:5.1f}ms"
+    span = "   -  " if e["spanMs"] is None else f"{e['spanMs']:5.1f}ms"
+    warn = "" if e["level"] == "ok" else f"  [{e['level'].upper()} peak {e['peak']}]"
+    notes = " ".join(f"{a['note']}@{a['ms']:.1f}" for a in e["attacks"])
+    print(f"  #{e['seq']:<4d} {e['chord']:<3s} {e['expected']:<4s} "
+          f"{e['bpm']:>3d}bpm  heard {arrow}  {mark}  "
+          f"gap {gap} span {span} margin {e['margin']:.2f}{warn}")
+    if notes:
+        print(f"         attacks: {notes}")
+
+
+def start_recording(label):
+    with _lock:
+        _rec.update({"on": True, "chunks": [], "strums": [], "label": label,
+                     "started": time.time(), "samples": 0})
+    print(f"\n=== RECORDING '{label}' — play now ===")
+    return {"recording": True, "label": label}
+
+
+def stop_recording():
+    """Write the session's RAW AUDIO plus its measurements.
+
+    The audio is what makes this worth doing: every threshold in this file is a
+    guess until tried against a real take, and without the samples each new guess
+    costs another performance. With them, `analyse_strums.py <file>.npy` re-runs the
+    same playing through changed code.
+    """
+    with _lock:
+        if not _rec["on"]:
+            return {"recording": False, "error": "not recording"}
+        chunks, strums = _rec["chunks"], _rec["strums"]
+        label = _rec["label"] or "session"
+        _rec.update({"on": False, "chunks": [], "strums": []})
+
+    if not chunks:
+        print("=== stopped: no audio captured ===\n")
+        return {"recording": False, "error": "no audio captured"}
+
+    audio = np.concatenate(chunks)
+    os.makedirs(CLIP_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = os.path.join(CLIP_DIR, f"lab_{label}_{stamp}")
+    np.save(base + ".npy", audio)
+    with _lock:
+        target = dict(_target)
+    meta = {**target, "sr": SR, "label": label, "seconds": len(audio) / SR,
+            "strums": len(strums), "recorded": stamp}
+    with open(base + ".meta.json", "w") as fh:
+        json.dump(meta, fh, indent=2)
+    with open(base + ".strums.jsonl", "w") as fh:
+        for s in strums:
+            fh.write(json.dumps(s) + "\n")
+
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    print(f"=== stopped: {len(audio)/SR:.1f}s, {len(strums)} strums, "
+          f"peak {peak:.2f} ===")
+    print(f"    {base}.npy  (+ .meta.json, .strums.jsonl)")
+    print(f"    re-analyse: .venv/bin/python analyse_strums.py {base}.npy\n")
+    return {"recording": False, "file": base + ".npy", "seconds": len(audio) / SR,
+            "strums": len(strums), "peak": round(peak, 3)}
 
 
 def audio_loop():
@@ -292,7 +411,9 @@ class Handler(BaseHTTPRequestHandler):
                     "minSeparationMs": MIN_SEPARATION_MS,
                     "fullConfidenceMs": FULL_CONFIDENCE_MS,
                     "minMargin": MIN_MARGIN,
+                    "goodPeak": LEVEL_GOOD_PEAK,
                 },
+                "recording": _rec["on"],
             }).encode())
         elif self.path == "/stream":
             self._stream_sse()
@@ -312,6 +433,16 @@ class Handler(BaseHTTPRequestHandler):
                 "target": target,
                 "shape": shape_info(target["chord"], target["tuning"]),
             }).encode())
+        elif self.path == "/record":
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            with _lock:
+                t = dict(_target)
+            label = data.get("label") or f"{t['chord']}_{t['direction']}_{t['bpm']}"
+            self._send(200, "application/json",
+                       json.dumps(start_recording(label)).encode())
+        elif self.path == "/stop":
+            self._send(200, "application/json", json.dumps(stop_recording()).encode())
         else:
             self._send(404, "text/plain", b"not found")
 
@@ -328,7 +459,10 @@ class Handler(BaseHTTPRequestHandler):
                 with _lock:
                     new = [e for e in _events if e["seq"] > sent]
                     level = {"rms": round(_mic["rms"], 5),
-                             "floor": round(_mic["floor"], 5)}
+                             "floor": round(_mic["floor"], 5),
+                             "recording": _rec["on"],
+                             "recSeconds": round(_rec["samples"] / SR, 1),
+                             "recStrums": len(_rec["strums"])}
                 for e in new:
                     sent = max(sent, e["seq"])
                     self.wfile.write(
