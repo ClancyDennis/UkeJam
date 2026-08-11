@@ -55,6 +55,12 @@ import {
 import { StrumCam, type MotionSample, type Stroke, type StrumCall } from "./strumcam";
 import { TUNINGS, type TuningId, type TuningSpec } from "./tunings";
 import { barOfBeat, beatsPerBarOf, buildBeatTimeline, fmtTime, isTimedSong } from "./time";
+import {
+  hideSoundfontOpenFolder,
+  initSoundfont,
+  maybeSoundfontError,
+  playBacking,
+} from "./views/setup/soundfont";
 import { PITCH_CLASSES, chordPitchClasses, pcNameToIndex } from "./theory/chords";
 import {
   chordShapeState,
@@ -319,13 +325,6 @@ const backingControlsEl = document.getElementById("backing-controls")!;
 const tpTracksBtn = document.getElementById("tp-tracks") as HTMLButtonElement;
 const tpWaitBtn = document.getElementById("tp-wait") as HTMLButtonElement;
 const trackPickerEl = document.getElementById("track-picker")!;
-const sfOverlayEl = document.getElementById("sf-overlay")!;
-const sfCloseBtn = document.getElementById("sf-close") as HTMLButtonElement;
-const sfDownloadBtn = document.getElementById("sf-download") as HTMLButtonElement;
-const sfProgressEl = document.getElementById("sf-progress") as HTMLProgressElement;
-const sfStatusEl = document.getElementById("sf-status")!;
-const sfPathEl = document.getElementById("sf-path")!;
-const sfOpenFolderBtn = document.getElementById("sf-open-folder") as HTMLButtonElement;
 const arrTransportEl = document.getElementById("arr-transport")!;
 const arrPlayBtn = document.getElementById("arr-play") as HTMLButtonElement;
 const arrRestartBtn = document.getElementById("arr-restart") as HTMLButtonElement;
@@ -2327,63 +2326,12 @@ nativeListen<{ reason: number }>("audio_route_change", (event) => {
   updatePracticeUi();
 });
 
-// ---- SoundFont install/download ----
-// Backing playback renders MIDI through a General MIDI SoundFont. None is
-// bundled (the good banks aren't free to redistribute), so the Rust side
-// resolves one from disk and returns the "no-soundfont" sentinel until the
-// user installs one. This panel downloads a free SoundFont or explains how to
-// supply your own.
-interface SoundfontInfo {
-  installed: boolean;
-  path: string | null;
-  data_dir: string;
-}
-let soundfontInstalled = false;
-
-// True if `e` was the missing-SoundFont sentinel (and the panel was shown), so
-// callers can skip their own logging.
-function maybeSoundfontError(e: unknown): boolean {
-  if (typeof e === "string" && e.includes("no-soundfont")) {
-    showSoundfontPanel();
-    return true;
-  }
-  return false;
-}
-
-function playBacking(): void {
-  if (!soundfontInstalled) {
-    showSoundfontPanel();
-    return;
-  }
-  nativeInvoke("play_backing").catch((e) => {
-    if (!maybeSoundfontError(e)) console.warn("play_backing failed", e);
-  });
-}
-
-function showSoundfontPanel(): void {
-  sfOverlayEl.hidden = false;
-}
-function hideSoundfontPanel(): void {
-  sfOverlayEl.hidden = true;
-}
-
-async function refreshSoundfontStatus(): Promise<void> {
-  try {
-    const info = await nativeInvoke<SoundfontInfo>("soundfont_status");
-    soundfontInstalled = info.installed;
-    if (info.data_dir) sfPathEl.textContent = info.data_dir;
-  } catch {
-    /* browser build (no native runtime): leave defaults */
-  }
-}
-void refreshSoundfontStatus();
-
-sfCloseBtn.addEventListener("click", hideSoundfontPanel);
-sfOverlayEl.addEventListener("click", (e) => {
-  if (e.target === sfOverlayEl) hideSoundfontPanel();
-});
-sfOpenFolderBtn.addEventListener("click", () => {
-  nativeInvoke("open_data_dir").catch((e) => console.warn("open_data_dir failed", e));
+initSoundfont({
+  // A song loaded before a SoundFont existed still has its MIDI staged; hand it
+  // to the engine now that one is installed.
+  onInstalled: () => {
+    if (hasBacking) loadBackingIntoEngine();
+  },
 });
 
 // Mobile platforms have no user-facing file manager to open into the app's
@@ -2393,45 +2341,11 @@ void nativeInvoke<string>("platform")
   .then((os) => {
     if (os === "ios" || os === "android") {
       document.body.classList.add("mobile");
-      sfOpenFolderBtn.hidden = true;
+      hideSoundfontOpenFolder();
     }
   })
   .catch(() => {});
 
-nativeListen<{ received: number; total: number }>("soundfont_progress", (event) => {
-  const { received, total } = event.payload;
-  const mb = (n: number) => (n / 1e6).toFixed(1);
-  if (total > 0) {
-    sfProgressEl.max = total;
-    sfProgressEl.value = received;
-    sfStatusEl.textContent = `${mb(received)} / ${mb(total)} MB`;
-  } else {
-    sfProgressEl.removeAttribute("value"); // indeterminate
-    sfStatusEl.textContent = `${mb(received)} MB`;
-  }
-});
-
-sfDownloadBtn.addEventListener("click", async () => {
-  sfDownloadBtn.disabled = true;
-  sfProgressEl.hidden = false;
-  sfProgressEl.value = 0;
-  sfStatusEl.classList.remove("err");
-  sfStatusEl.textContent = "Starting…";
-  try {
-    await nativeInvoke<string>("download_soundfont");
-    soundfontInstalled = true;
-    await refreshSoundfontStatus();
-    hideSoundfontPanel();
-    // pick up the new SoundFont for the currently-loaded song, if any
-    if (hasBacking) loadBackingIntoEngine();
-  } catch (e) {
-    sfStatusEl.classList.add("err");
-    sfStatusEl.textContent = typeof e === "string" ? e : "Download failed";
-  } finally {
-    sfDownloadBtn.disabled = false;
-    sfProgressEl.hidden = true;
-  }
-});
 
 // --- tuning (Setup screen) ---
 // Persisted through Rust into app-data settings.json. `set_settings` merges, so
