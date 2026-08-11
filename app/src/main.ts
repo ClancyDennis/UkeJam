@@ -32,6 +32,14 @@ import { initTabSearch } from "./views/tabSearch";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
 import { escapeHtml } from "./dom";
 import { initIosAudio } from "./iosAudio";
+import { drawGauge, initGauge, setGaugeReadout } from "./views/play/gauge";
+import {
+  decaySpectrum,
+  drawFFT,
+  easeSpectrum,
+  initFft,
+  setFftGoldPitchClasses,
+} from "./views/play/fft";
 import {
   accumulateReading,
   backingTrackList,
@@ -117,6 +125,8 @@ function syncKeepAwake() {
 }
 
 initTuner({ setConn, syncKeepAwake });
+initGauge();
+initFft();
 
 
 // =====================================================================
@@ -150,17 +160,11 @@ const arrPlayBtn = document.getElementById("arr-play") as HTMLButtonElement;
 const arrRestartBtn = document.getElementById("arr-restart") as HTMLButtonElement;
 const arrTimeEl = document.getElementById("arr-time")!;
 const arrBpmEl = document.getElementById("arr-bpm")!;
-const cleanValEl = document.getElementById("clean-val")!;
-const cleanStatusEl = document.getElementById("clean-status")!;
 const cleanTargetEl = document.getElementById("clean-target")!;
 const coachEl = document.getElementById("coach")!;
 const targetNotesEl = document.getElementById("target-notes")!;
 const listenBtn2 = document.getElementById("listen-btn-2") as HTMLButtonElement;
-const gauge = document.getElementById("gauge") as HTMLCanvasElement;
-const gctx = gauge.getContext("2d")!;
 const chromaEl = document.getElementById("chroma")!;
-const fft = document.getElementById("fft") as HTMLCanvasElement;
-const fctx = fft.getContext("2d")!;
 const currentFretboardEl = document.getElementById("current-fretboard")!;
 const currentFingerTagEl = document.getElementById("current-finger-tag")!;
 const currentFingerTitleEl = document.getElementById("current-finger-title")!;
@@ -184,10 +188,8 @@ const coachAdviceEl = document.getElementById("coach-advice")!;
 // analyzer panel (right column)
 const mMatchEl = document.getElementById("m-match")!;
 const mfMatchEl = document.getElementById("mf-match") as HTMLElement;
-const mPeakCountEl = document.getElementById("m-peakcount")!;
 const mFluxEl = document.getElementById("m-flux")!;
 const mOnsetEl = document.getElementById("m-onset")!;
-const peaksListEl = document.getElementById("peaks-list")!;
 const arrangementTagEl = document.getElementById("arrangement-tag")!;
 const arrangementNowEl = document.getElementById("arr-now")!;
 const arrangementNextEl = document.getElementById("arr-next")!;
@@ -206,20 +208,6 @@ let lastChordAt = 0;
 // enough to perceive — an onset is true for one reading only.
 let lastOnsetAt = 0;
 let smoothClean = 0;
-
-// FFT spectrum config + smoothed buffer. Must match the Rust log_spectrum:
-// 96 bins log-spaced over 70..2000 Hz.
-const FFT_BINS = 96;
-const F_MIN = 70;
-const F_MAX = 2000;
-const smoothSpec = new Float32Array(FFT_BINS); // eased toward incoming spectrum
-const logF = (f: number) => Math.log(f / F_MIN) / Math.log(F_MAX / F_MIN); // 0..1 across axis
-// center frequency of each log-spaced bin (matches Rust binning)
-const binF = Array.from({ length: FFT_BINS }, (_, i) =>
-  F_MIN * Math.pow(F_MAX / F_MIN, (i + 0.5) / FFT_BINS)
-);
-// pitch classes the current chord "owns" — bins matching these glow gold
-let fftGoldPCs: number[] = [];
 
 // build chromagram bars (vertical bars; `.fill` height is driven from chroma values)
 const chromaFills: HTMLElement[] = [];
@@ -1529,11 +1517,13 @@ function renderChords() {
   let fretboardMatched = false;
   const targetPcs = chordPitchClasses(currentTarget());
   // FFT gold highlight follows the target chord if set, else the detected one
-  fftGoldPCs = currentTarget()
-    ? targetPcs
-    : c && c.active && c.detected
-      ? chordPitchClasses(c.detected)
-      : [];
+  setFftGoldPitchClasses(
+    currentTarget()
+      ? targetPcs
+      : c && c.active && c.detected
+        ? chordPitchClasses(c.detected)
+        : []
+  );
   if (c && c.active) {
     const pct = Math.round(c.cleanliness * 100);
     const clean = c.cleanliness >= 0.85;
@@ -1555,8 +1545,7 @@ function renderChords() {
           ? "Locked in"
           : `heard ${c.detected || "—"}`;
     smoothClean += (c.cleanliness - smoothClean) * 0.2;
-    cleanValEl.innerHTML = `${pct}<span class="pct">%</span>`;
-    cleanStatusEl.textContent = clean ? "clean" : pct >= 70 ? "almost" : "off";
+    setGaugeReadout(`${pct}<span class="pct">%</span>`, clean ? "clean" : pct >= 70 ? "almost" : "off");
     cleanTargetEl.textContent = currentTarget() ? `target · ${currentTarget()}` : "free play";
 
     // coach text from missing/extra
@@ -1588,10 +1577,7 @@ function renderChords() {
     }
 
     // spectrum: ease smoothed buffer toward incoming 96 real bins
-    for (let i = 0; i < FFT_BINS; i++) {
-      const v = c.spectrum && i < c.spectrum.length ? c.spectrum[i] : 0;
-      smoothSpec[i] += (v - smoothSpec[i]) * 0.25;
-    }
+    easeSpectrum(c.spectrum ?? []);
 
     // analyzer: match% follows cleanliness vs the target (or detection conf)
     mMatchEl.textContent = `${pct}%`;
@@ -1623,8 +1609,7 @@ function renderChords() {
     chordNameEl.className = "chord-name";
     chordSubEl.textContent = currentTarget() ? "Play this" : "Playing";
     smoothClean += (0 - smoothClean) * 0.15;
-    cleanValEl.innerHTML = `0<span class="pct">%</span>`;
-    cleanStatusEl.textContent = chordListening ? "listening…" : "idle";
+    setGaugeReadout(`0<span class="pct">%</span>`, chordListening ? "listening…" : "idle");
     cleanTargetEl.textContent = currentTarget() ? `target · ${currentTarget()}` : "free play";
     coachEl.className = "coach good";
     coachEl.textContent = chordListening ? "play a chord" : "press start to listen";
@@ -1638,7 +1623,7 @@ function renderChords() {
       chromaBars[i].classList.toggle("target", targetPcs.includes(i));
     }
     // flat FFT when idle
-    for (let i = 0; i < FFT_BINS; i++) smoothSpec[i] += (0 - smoothSpec[i]) * 0.2;
+    decaySpectrum();
     const nowFb = currentFretboardChord("", false);
     const nextFb = nextFretboardChord();
     lastCurrentFretChord = drawFretboard(
@@ -1932,236 +1917,7 @@ function drawFretboard(
   return key;
 }
 
-// --- radial cleanliness gauge (square canvas, 270deg sweep, centered readout) ---
-function drawGauge(value: number, active: boolean) {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = gauge.getBoundingClientRect();
-  const w = rect.width || 240;
-  const h = rect.height || 240;
-  if (gauge.width !== Math.round(w * dpr) || gauge.height !== Math.round(h * dpr)) {
-    gauge.width = Math.round(w * dpr);
-    gauge.height = Math.round(h * dpr);
-  }
-  gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  gctx.clearRect(0, 0, w, h);
 
-  const cx = w / 2;
-  const cy = h / 2;
-  const R = Math.min(w, h) * 0.38;
-  const A0 = Math.PI * 0.75;
-  const A1 = Math.PI * 2.25; // 270deg sweep from lower-left
-  const v = Math.min(1, Math.max(0, value));
-
-  // value color: teal when clean, gold/amber when not
-  const clean = v >= 0.85;
-  const color = !active ? "#3a5450" : clean ? "#19e3c4" : v >= 0.7 ? "#f5c451" : "#ff9d4d";
-
-  // tick ring
-  for (let i = 0; i <= 40; i++) {
-    const a = A0 + (A1 - A0) * (i / 40);
-    const major = i % 5 === 0;
-    const r1 = R + 8;
-    const r2 = R + (major ? 18 : 13);
-    gctx.strokeStyle = `rgba(25,227,196,${major ? 0.32 : 0.13})`;
-    gctx.lineWidth = major ? 1.4 : 1;
-    gctx.beginPath();
-    gctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
-    gctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2);
-    gctx.stroke();
-  }
-
-  // background track
-  gctx.lineCap = "round";
-  gctx.lineWidth = 12;
-  gctx.strokeStyle = "rgba(25,227,196,0.10)";
-  gctx.beginPath();
-  gctx.arc(cx, cy, R, A0, A1);
-  gctx.stroke();
-
-  // value arc
-  const a = A0 + (A1 - A0) * v;
-  gctx.strokeStyle = color;
-  gctx.shadowColor = color;
-  gctx.shadowBlur = active ? 20 : 0;
-  gctx.beginPath();
-  gctx.arc(cx, cy, R, A0, a);
-  gctx.stroke();
-  gctx.shadowBlur = 0;
-
-  // moving tip dot
-  if (active) {
-    const tx = cx + Math.cos(a) * R;
-    const ty = cy + Math.sin(a) * R;
-    gctx.fillStyle = "#fff";
-    gctx.shadowColor = color;
-    gctx.shadowBlur = 14;
-    gctx.beginPath();
-    gctx.arc(tx, ty, 4.5, 0, Math.PI * 2);
-    gctx.fill();
-    gctx.shadowBlur = 0;
-  }
-
-  // 85% threshold mark
-  const ah = A0 + (A1 - A0) * 0.85;
-  gctx.strokeStyle = "rgba(245,196,81,0.45)";
-  gctx.lineWidth = 1.5;
-  gctx.beginPath();
-  gctx.moveTo(cx + Math.cos(ah) * (R - 8), cy + Math.sin(ah) * (R - 8));
-  gctx.lineTo(cx + Math.cos(ah) * (R + 6), cy + Math.sin(ah) * (R + 6));
-  gctx.stroke();
-
-  // push color into readout
-  cleanValEl.style.color = color;
-  cleanValEl.style.textShadow = `0 0 18px ${color}99, 0 0 40px ${color}4d`;
-  cleanStatusEl.style.color = color;
-  cleanStatusEl.style.textShadow = `0 0 10px ${color}99`;
-}
-
-// --- full-width live FFT spectrum (real 96-bin log-spaced `spectrum` array) ---
-function drawFFT() {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = fft.getBoundingClientRect();
-  const w = rect.width || 600;
-  const h = rect.height || 150;
-  if (fft.width !== Math.round(w * dpr) || fft.height !== Math.round(h * dpr)) {
-    fft.width = Math.round(w * dpr);
-    fft.height = Math.round(h * dpr);
-  }
-  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  fctx.clearRect(0, 0, w, h);
-
-  const padL = 6;
-  const padR = 6;
-  const padB = 18;
-  const padT = 6;
-  const plotW = w - padL - padR;
-  const plotH = h - padT - padB;
-
-  // baseline
-  fctx.strokeStyle = "rgba(25,227,196,0.14)";
-  fctx.lineWidth = 1;
-  fctx.beginPath();
-  fctx.moveTo(padL, h - padB);
-  fctx.lineTo(w - padR, h - padB);
-  fctx.stroke();
-
-  // log frequency gridlines + labels
-  const ticks = [80, 147, 196, 294, 440, 659, 1000, 2000];
-  fctx.font = '10px "JetBrains Mono", monospace';
-  fctx.textAlign = "center";
-  for (const fr of ticks) {
-    const x = padL + logF(fr) * plotW;
-    fctx.strokeStyle = "rgba(25,227,196,0.06)";
-    fctx.beginPath();
-    fctx.moveTo(x, padT);
-    fctx.lineTo(x, h - padB);
-    fctx.stroke();
-    fctx.fillStyle = "rgba(25,227,196,0.4)";
-    fctx.fillText(fr >= 1000 ? `${fr / 1000}k` : `${fr}`, x, h - 5);
-  }
-
-  // bins are log-spaced across F_MIN..F_MAX, so plot evenly across the log axis
-  const xAt = (i: number) => padL + (i / (FFT_BINS - 1)) * plotW;
-  const yAt = (i: number) => h - padB - Math.min(1, smoothSpec[i]) * plotH;
-
-  // bins whose pitch class is a chord tone glow gold (catches harmonics too,
-  // since a chord tone's octaves share its pitch class)
-  const isGold = (i: number) => {
-    if (!fftGoldPCs.length) return false;
-    const pc = ((Math.round(69 + 12 * Math.log2(binF[i] / 440)) % 12) + 12) % 12;
-    return fftGoldPCs.includes(pc);
-  };
-
-  // area fill under the curve
-  fctx.beginPath();
-  fctx.moveTo(padL, h - padB);
-  for (let i = 0; i < FFT_BINS; i++) fctx.lineTo(xAt(i), yAt(i));
-  fctx.lineTo(w - padR, h - padB);
-  fctx.closePath();
-  const grad = fctx.createLinearGradient(0, padT, 0, h - padB);
-  grad.addColorStop(0, "rgba(25,227,196,0.22)");
-  grad.addColorStop(1, "rgba(25,227,196,0.02)");
-  fctx.fillStyle = grad;
-  fctx.fill();
-
-  // glowing line, per-segment teal/gold; brighter where the peak is tall
-  fctx.lineWidth = 1.7;
-  fctx.lineJoin = "round";
-  for (let i = 0; i < FFT_BINS - 1; i++) {
-    const gold = isGold(i) || isGold(i + 1);
-    const tall = smoothSpec[i] > 0.22 || smoothSpec[i + 1] > 0.22;
-    fctx.strokeStyle = gold
-      ? `rgba(245,196,81,${tall ? 0.98 : 0.62})`
-      : `rgba(25,227,196,${tall ? 0.92 : 0.5})`;
-    fctx.shadowColor = gold ? "rgba(245,196,81,0.9)" : "rgba(25,227,196,0.8)";
-    fctx.shadowBlur = (gold ? 11 : 7) * (tall ? 1.4 : 0.7);
-    fctx.beginPath();
-    fctx.moveTo(xAt(i), yAt(i));
-    fctx.lineTo(xAt(i + 1), yAt(i + 1));
-    fctx.stroke();
-  }
-  fctx.shadowBlur = 0;
-
-  // labeled peak markers: find the strongest local maxima and name them
-  const peaks: { i: number; v: number }[] = [];
-  for (let i = 2; i < FFT_BINS - 2; i++) {
-    if (
-      smoothSpec[i] > 0.18 &&
-      smoothSpec[i] >= smoothSpec[i - 1] &&
-      smoothSpec[i] > smoothSpec[i + 1]
-    ) {
-      peaks.push({ i, v: smoothSpec[i] });
-    }
-  }
-  peaks.sort((a, b) => b.v - a.v);
-  fctx.textAlign = "center";
-  fctx.font = '600 11px "JetBrains Mono", monospace';
-  const top = peaks.slice(0, 4);
-  for (const p of top) {
-    const f = binF[p.i];
-    const midi = Math.round(69 + 12 * Math.log2(f / 440));
-    const pc = ((midi % 12) + 12) % 12;
-    const name = PITCH_CLASSES[pc] + (Math.floor(midi / 12) - 1);
-    const gold = fftGoldPCs.includes(pc);
-    const col = gold ? "245,196,81" : "25,227,196";
-    const x = xAt(p.i);
-    const y = yAt(p.i);
-    fctx.fillStyle = `rgba(${col},1)`;
-    fctx.shadowColor = `rgba(${col},0.9)`;
-    fctx.shadowBlur = 10;
-    fctx.beginPath();
-    fctx.arc(x, y, 3, 0, Math.PI * 2);
-    fctx.fill();
-    fctx.shadowBlur = 0;
-    fctx.fillStyle = `rgba(${col},0.95)`;
-    fctx.fillText(`${name} ${Math.round(f)}Hz`, x, Math.max(padT + 11, y - 9));
-  }
-  updatePeaksList(top);
-}
-
-// mirror the FFT's strongest peaks into the right-column analyzer list
-let lastPeaksKey = "";
-function updatePeaksList(peaks: { i: number; v: number }[]) {
-  mPeakCountEl.textContent = String(peaks.length);
-  const key = peaks.map((p) => p.i).join(",");
-  if (key === lastPeaksKey) return; // avoid rebuilding the DOM every frame
-  lastPeaksKey = key;
-  if (!peaks.length) {
-    peaksListEl.innerHTML = "";
-    return;
-  }
-  let html = "";
-  for (const p of peaks) {
-    const f = binF[p.i];
-    const midi = Math.round(69 + 12 * Math.log2(f / 440));
-    const pc = ((midi % 12) + 12) % 12;
-    const name = PITCH_CLASSES[pc] + (Math.floor(midi / 12) - 1);
-    const gold = fftGoldPCs.includes(pc);
-    const role = gold ? "chord tone" : "harmonic / other";
-    html += `<div class="peak-row"><span class="dot ${gold ? "t" : "h"}"></span><span class="pn">${name}</span><span>${role}</span><span class="pf">${Math.round(f)} Hz</span></div>`;
-  }
-  peaksListEl.innerHTML = html;
-}
 
 requestAnimationFrame(renderChords);
 
