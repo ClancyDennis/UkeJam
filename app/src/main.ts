@@ -9,16 +9,7 @@ import {
 import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
 import { invokeAiConfig } from "./ai";
-import {
-  parseMidi,
-  midiToChordChart,
-  parseChordChart,
-  buildFusedChordPro,
-  titleFromFilename,
-  suggestChordChannels,
-  channelChordScores,
-  type MidiData,
-} from "./midi";
+import { parseChordChart, buildFusedChordPro } from "./midi";
 import {
   VerdictBuffer,
   accumulate,
@@ -46,6 +37,9 @@ import {
   setAiStatus,
 } from "./views/setup/aiSettings";
 import { initOpenRouterAuth, resumeOpenRouterLogin } from "./views/setup/openrouterAuth";
+import { initTabSearch } from "./views/tabSearch";
+import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
+import { escapeHtml } from "./dom";
 import { PITCH_CLASSES, chordPitchClasses, pcNameToIndex } from "./theory/chords";
 import {
   chordShapeState,
@@ -515,10 +509,6 @@ const pasteBox = document.getElementById("paste-box") as HTMLTextAreaElement;
 const songTitleInput = document.getElementById("song-title") as HTMLInputElement;
 const songArtistInput = document.getElementById("song-artist") as HTMLInputElement;
 const addSongBtn = document.getElementById("add-song-btn") as HTMLButtonElement;
-const loadMidiBtn = document.getElementById("load-midi-btn") as HTMLButtonElement;
-const midiInput = document.getElementById("midi-input") as HTMLInputElement;
-const chanPickerEl = document.getElementById("chan-picker")!;
-const chanChipsEl = document.getElementById("chan-chips")!;
 const lyricsBox = document.getElementById("lyrics-box") as HTMLTextAreaElement;
 const aiEnhanceToggle = document.getElementById("ai-enhance") as HTMLInputElement;
 const libAddStatus = document.getElementById("lib-add-status")!;
@@ -702,20 +692,6 @@ function updatePracticeUi() {
   practiceNextEl.textContent = next ? `next ${next}` : "last chord";
 }
 
-// MIDI staged by the importer, carried to addSong() when the user clicks Add so
-// the saved song keeps its backing track + channel list. Cleared after Add or
-// when the paste box is edited away from the imported chart.
-let pendingMidi: { b64: string; tracks: import("./library").BackingTrackInfo[] } | null = null;
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let s = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    s += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(s);
-}
-
 // Parse the LLM's "barNumber: words" reply into a map, ignoring anything that
 // isn't a valid `N: text` line or points outside 1..barCount. The LLM only
 // supplies words; we never trust it with structure.
@@ -743,7 +719,8 @@ addSongBtn.addEventListener("click", async () => {
   const lyricTab = lyricsBox.value.trim();
   // mode: fuse a lyric tab onto a MIDI chart, simplify a MIDI chart, or convert
   // a messy pasted tab. (fuse needs both a staged MIDI and pasted lyrics.)
-  const mode = pendingMidi && lyricTab ? "fuse" : pendingMidi ? "midi" : "messy";
+  const staged = stagedMidi();
+  const mode = staged && lyricTab ? "fuse" : staged ? "midi" : "messy";
   // The saved provider config is read from the native store asynchronously at
   // boot; a song added before that lands would otherwise be enhanced with the
   // seeded default rather than what the player configured.
@@ -814,8 +791,8 @@ addSongBtn.addEventListener("click", async () => {
     rec = addSong(source, {
       title: songTitleInput.value,
       artist: songArtistInput.value,
-      midi: pendingMidi?.b64,
-      tracks: pendingMidi?.tracks,
+      midi: stagedMidi()?.b64,
+      tracks: stagedMidi()?.tracks,
     });
   } catch (e) {
     // most likely the localStorage quota (large MIDI imports) — surface it
@@ -829,7 +806,7 @@ addSongBtn.addEventListener("click", async () => {
   }
   if (!aiSkipNote && !libAddStatus.textContent?.includes("failed")) {
     libAddStatus.classList.add("done");
-    const withMidi = pendingMidi ? " · backing track ♪" : "";
+    const withMidi = stagedMidi() ? " · backing track ♪" : "";
     libAddStatus.textContent = `added "${rec.title}"${rec.artist ? " — " + rec.artist : ""}${withMidi}`;
   }
   pasteBox.value = "";
@@ -841,247 +818,29 @@ addSongBtn.addEventListener("click", async () => {
   loadSongIntoPlay(rec);
 });
 
-// =====================================================================
-// In-app tab search — find a chord sheet online (Rust scrapes Ultimate
-// Guitar), preview it in an in-app WebKit window, and pull the text into
-// the paste box so it flows through the normal ✨ enhance → Add pipeline.
-// =====================================================================
-interface TabHit {
-  artist: string;
-  song: string;
-  url: string;
-  kind: string;
-  rating: number;
-  votes: number;
-  version: number;
-}
-interface TabSearchOutcome {
-  queries: string[];
-  hits: TabHit[];
-}
-interface TabContent {
-  title: string;
-  artist: string;
-  text: string;
-  url: string;
-}
-
-const tabSearchInput = document.getElementById("tab-search-input") as HTMLInputElement;
-const tabSearchBtn = document.getElementById("tab-search-btn") as HTMLButtonElement;
-const smartSearchToggle = document.getElementById("smart-search") as HTMLInputElement;
-const tabResultsEl = document.getElementById("tab-results")!;
-const tabSearchStatus = document.getElementById("tab-search-status")!;
-
-let tabSearching = false;
-
-function setTabSearchStatus(text: string, done = false) {
-  tabSearchStatus.hidden = !text;
-  tabSearchStatus.textContent = text;
-  tabSearchStatus.classList.toggle("done", done);
-}
-
-async function runTabSearch() {
-  const q = tabSearchInput.value.trim();
-  if (!q || tabSearching) return;
-  tabSearching = true;
-  tabSearchBtn.disabled = true;
-  tabResultsEl.hidden = true;
-  tabResultsEl.replaceChildren();
-  setTabSearchStatus(smartSearchToggle.checked ? "✨ working out what to search…" : "searching…");
-  try {
-    // smart mode goes through the configured AI provider — wait for the
-    // durable settings so a saved key/model is actually used
-    if (smartSearchToggle.checked) await aiConfigReady;
-    const out = await nativeInvoke<TabSearchOutcome>("search_tabs", {
-      query: q,
-      smart: smartSearchToggle.checked,
-      config: smartSearchToggle.checked ? invokeAiConfig(aiConfig) : null,
-    });
-    renderTabResults(q, out);
-  } catch (e) {
-    setTabSearchStatus(`search failed: ${e}`);
-  } finally {
-    tabSearching = false;
-    tabSearchBtn.disabled = false;
-  }
-}
-
-function renderTabResults(rawQuery: string, out: TabSearchOutcome) {
-  if (out.hits.length === 0) {
-    setTabSearchStatus("no chord tabs found — try adding the artist, or ✨ smart");
-    return;
-  }
-  // when smart mode rewrote the query, show what was actually searched
-  const rewrote = out.queries.length > 1 || out.queries[0] !== rawQuery;
-  const searched = rewrote ? ` · searched: ${out.queries.join(" / ")}` : "";
-  setTabSearchStatus(`${out.hits.length} chord tabs${searched}`, true);
-
-  for (const hit of out.hits) {
-    const row = document.createElement("div");
-    row.className = "tab-hit";
-    row.title = "Load this tab into the paste box";
-
-    const song = document.createElement("span");
-    song.className = "t-song";
-    song.textContent = hit.song;
-    const artist = document.createElement("span");
-    artist.className = "t-artist";
-    artist.textContent = hit.artist;
-    const meta = document.createElement("span");
-    meta.className = "t-meta";
-    const stars = hit.votes ? ` · ★${hit.rating.toFixed(1)} (${hit.votes})` : "";
-    meta.textContent = `${hit.kind.toLowerCase()}${stars} · v${hit.version}`;
-    const open = document.createElement("button");
-    open.className = "t-open";
-    open.textContent = "view ↗";
-    open.title = "Open the tab page in an in-app preview window";
-    open.addEventListener("click", (e) => {
-      e.stopPropagation();
-      nativeInvoke("open_tab_page", { url: hit.url }).catch((err) =>
-        setTabSearchStatus(`couldn't open preview: ${err}`)
-      );
-    });
-
-    row.append(song, artist, meta, open);
-    row.addEventListener("click", () => useTabHit(hit));
-    tabResultsEl.appendChild(row);
-  }
-  tabResultsEl.hidden = false;
-}
-
-// Pull a chosen tab's text into the add-a-song form. Deliberately does NOT
-// auto-add: the user reviews (and can ✨ enhance) exactly like a manual paste.
-async function useTabHit(hit: TabHit) {
-  setTabSearchStatus(`⇣ fetching ${hit.song}…`);
-  try {
-    const tab = await nativeInvoke<TabContent>("fetch_tab", { url: hit.url });
+initTabSearch({
+  onTabLoaded: (tab) => {
     clearMidiStaging(); // fetched text replaces any staged MIDI chart
     pasteBox.value = tab.text;
-    songTitleInput.value = tab.title || hit.song;
-    songArtistInput.value = tab.artist || hit.artist;
-    setTabSearchStatus(`loaded "${tab.title || hit.song}" — review below, then Add to library`, true);
+    songTitleInput.value = tab.title;
+    songArtistInput.value = tab.artist;
     libAddStatus.classList.remove("done");
     libAddStatus.textContent = "";
-  } catch (e) {
-    setTabSearchStatus(`couldn't fetch that tab: ${e}`);
-  }
-}
-
-tabSearchBtn.addEventListener("click", runTabSearch);
-tabSearchInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") runTabSearch();
+  },
 });
 
-// dropping the imported chart text invalidates the staged MIDI association
-pasteBox.addEventListener("input", () => {
-  if (pendingMidi || importedMidi) clearMidiStaging();
+
+initMidiImport({
+  pasteBox,
+  titleInput: songTitleInput,
+  artistInput: songArtistInput,
+  lyricsBox,
+  setStatus: (text, done = false) => {
+    libAddStatus.classList.toggle("done", done);
+    libAddStatus.textContent = text;
+  },
 });
 
-// the parsed MIDI currently being reviewed (for the channel picker)
-let importedMidi: MidiData | null = null;
-let chordChannelSel: number[] | null = null;
-
-function clearMidiStaging() {
-  pendingMidi = null;
-  importedMidi = null;
-  chordChannelSel = null;
-  chanPickerEl.hidden = true;
-  lyricsBox.hidden = true;
-}
-
-// --- MIDI import: a .mid becomes a timed chord chart in the library ---
-// We extract a chord-per-bar timeline (with tempo + bar markers) and feed the
-// resulting ChordPro text through the same addSong() path as a pasted tab, so
-// storage / parser / strip / highway all just work and it stays editable.
-loadMidiBtn.addEventListener("click", () => midiInput.click());
-
-midiInput.addEventListener("change", async () => {
-  const file = midiInput.files?.[0];
-  if (!file) return;
-  libAddStatus.classList.remove("done");
-  libAddStatus.textContent = `♪ reading ${file.name}…`;
-  try {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const data = parseMidi(buf);
-    const named = titleFromFilename(file.name);
-    importedMidi = data;
-    // auto-pick the chord channels (a default; the user can change it below).
-    chordChannelSel = suggestChordChannels(data);
-    if (!songTitleInput.value.trim()) songTitleInput.value = named.title;
-    if (!songArtistInput.value.trim()) songArtistInput.value = named.artist;
-    // stage the raw MIDI + track list so Add saves a backing track with it
-    pendingMidi = { b64: bytesToBase64(buf), tracks: data.tracks };
-    buildChannelPicker();
-    lyricsBox.hidden = false; // offer to lay lyrics over the timed chart
-    rederiveChart();
-  } catch (e) {
-    libAddStatus.textContent = `couldn't read MIDI: ${e}`;
-  } finally {
-    midiInput.value = ""; // allow re-selecting the same file
-  }
-});
-
-// Build the channel chips for the imported MIDI; each shows the instrument
-// name + a chordality score (higher = more chord-like). Toggling re-derives.
-function buildChannelPicker() {
-  if (!importedMidi) return;
-  const scores = channelChordScores(importedMidi);
-  chanChipsEl.innerHTML = "";
-  // channels that actually sound notes (skip drums — never chords)
-  const chans = importedMidi.tracks.filter((t) => !t.isDrums);
-  if (!chans.length) {
-    chanPickerEl.hidden = true;
-    return;
-  }
-  for (const t of chans) {
-    const on = chordChannelSel === null || chordChannelSel.includes(t.channel);
-    const chip = document.createElement("button");
-    chip.className = "chan-chip" + (on ? " on" : "");
-    const sc = scores.get(t.channel) ?? 0;
-    chip.innerHTML = `${escapeHtml(t.name)}<span class="ch-score">${sc.toFixed(1)}</span>`;
-    chip.title = `${sc >= 1.5 ? "chordal" : "melodic / single-note"} — ${t.noteCount} notes`;
-    chip.addEventListener("click", () => {
-      // null means "all"; materialize to an explicit list on first toggle
-      if (chordChannelSel === null) {
-        chordChannelSel = chans.map((c) => c.channel);
-      }
-      if (chordChannelSel.includes(t.channel)) {
-        chordChannelSel = chordChannelSel.filter((c) => c !== t.channel);
-      } else {
-        chordChannelSel.push(t.channel);
-      }
-      if (!chordChannelSel.length) chordChannelSel = null; // none -> treat as all
-      buildChannelPicker();
-      rederiveChart();
-    });
-    chanChipsEl.appendChild(chip);
-  }
-  chanPickerEl.hidden = false;
-}
-
-// Re-derive the chord chart text from the imported MIDI + current channel
-// selection and drop it into the paste box (without clearing the staging).
-function rederiveChart() {
-  if (!importedMidi) return;
-  const chart = midiToChordChart(importedMidi, {
-    title: songTitleInput.value.trim() || undefined,
-    artist: songArtistInput.value.trim() || undefined,
-    collapseRuns: false,
-    chordChannels: chordChannelSel,
-  });
-  // set value directly (programmatic set doesn't fire 'input', so staging stays)
-  pasteBox.value = chart;
-  const bars = parseChordChart(chart).bars.length;
-  const src =
-    chordChannelSel === null
-      ? "all parts"
-      : chordChannelSel.length === 1
-        ? importedMidi.tracks.find((t) => t.channel === chordChannelSel![0])?.name ??
-          `ch${chordChannelSel[0] + 1}`
-        : `${chordChannelSel.length} parts`;
-  libAddStatus.classList.add("done");
-  libAddStatus.textContent = `${importedMidi.tempoBpm} bpm · ${bars} bars · chords from ${src} — review, then Add`;
-}
 
 function renderSongList() {
   const songs = listSongs();
@@ -1126,12 +885,6 @@ function renderSongList() {
 void libraryReady.then(() => {
   if (mode === "library") renderSongList();
 });
-
-function escapeHtml(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
 
 function loadSongIntoPlay(rec: SongRecord) {
   const song = getSong(rec.id);
