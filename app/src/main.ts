@@ -4,7 +4,6 @@ import {
   nativeRuntime,
   type BackingStatus,
   type ChordReading,
-  type TunerReading,
 } from "./native";
 import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
@@ -19,7 +18,7 @@ import {
   type BarAccumulator,
   type BarVerdict,
 } from "./verdict";
-import { activeTuning, setActiveTuning, type TuningId } from "./tunings";
+import { activeTuning } from "./tunings";
 import { barOfBeat, beatsPerBarOf, buildBeatTimeline, fmtTime, isTimedSong } from "./time";
 import {
   hideSoundfontOpenFolder,
@@ -40,6 +39,15 @@ import { initTabSearch } from "./views/tabSearch";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
 import { escapeHtml } from "./dom";
 import { currentMode, isPracticeMode, setMode, type AppMode } from "./state/appMode";
+import {
+  initTuner,
+  isTunerListening,
+  noteTunerRms,
+  rebuildStringRows,
+  startTunerListening,
+  stopTunerListening,
+} from "./views/tuner";
+import { initTuningSetup } from "./views/setup/tuningSetup";
 import { initStrumCam, stopStrumcamSession, strumcamOnset } from "./views/strumcamView";
 import { PITCH_CLASSES, chordPitchClasses, pcNameToIndex } from "./theory/chords";
 import {
@@ -51,228 +59,31 @@ import {
 } from "./theory/voicings";
 
 
-const IN_TUNE_CENTS = 5; // within +/- this many cents counts as in tune
-
-// --- element refs ---
-const noteNameEl = document.getElementById("note-name")!;
-const noteFreqEl = document.getElementById("note-freq")!;
-const centsValEl = document.getElementById("cents-val")!;
-const verdictEl = document.getElementById("verdict")!;
-const listenBtn = document.getElementById("listen-btn") as HTMLButtonElement;
 const connEl = document.querySelector(".conn") as HTMLElement;
 const connText = document.getElementById("conn-text")!;
-const stringsEl = document.getElementById("strings")!;
-const needle = document.getElementById("needle") as HTMLCanvasElement;
-const nctx = needle.getContext("2d")!;
 
-let listening = false;
-let lastFrameAt = 0;
-let smoothCents = 0; // eased needle position
-let current: TunerReading | null = null;
-
-// mic-calibration state (used by both audio listeners and the Setup screen)
-let calibrating = false;
-let calibSamples: number[] = [];
-function noteRms(rms: number) {
-  if (calibrating) calibSamples.push(rms);
-}
-
-// --- build per-string rows (rebuilt when the tuning changes) ---
-const stringRows = new Map<string, HTMLElement>();
-function buildStringRows() {
-  stringsEl.textContent = "";
-  stringRows.clear();
-  for (const s of activeTuning().strings) {
-    const row = document.createElement("div");
-    row.className = "string-row";
-    row.innerHTML = `
-      <span class="string-note">${s.note[0]}</span>
-      <span class="string-meta">${s.note} · ${s.hz.toFixed(1)} Hz</span>
-      <span class="string-check">○</span>`;
-    stringsEl.appendChild(row);
-    stringRows.set(s.note, row);
-  }
-}
-buildStringRows();
-
-// --- listen toggle ---
-listenBtn.addEventListener("click", async () => {
-  if (!listening) {
-    try {
-      await nativeInvoke("start_tuner");
-      listening = true;
-      listenBtn.textContent = "Stop listening";
-      listenBtn.classList.add("on");
-      setConn(false);
-      syncKeepAwake();
-    } catch (e) {
-      verdictEl.textContent = `mic error: ${e}`;
-    }
-  } else {
-    await nativeInvoke("stop_tuner");
-    listening = false;
-    listenBtn.textContent = "Start listening";
-    listenBtn.classList.remove("on");
-    setConn(false);
-    syncKeepAwake();
-  }
-});
-
-// --- receive readings from Rust ---
-nativeListen<TunerReading>("tuner", (event) => {
-  current = event.payload;
-  lastFrameAt = performance.now();
-  setConn(true);
-  noteRms(event.payload.rms);
-});
-
+/// The one "is the mic actually feeding us" indicator, shared by the tuner and
+/// the practice screens.
 function setConn(live: boolean) {
   connEl.classList.toggle("live", live);
-  connText.textContent = live ? "live" : listening ? "listening…" : "idle";
+  connText.textContent = live ? "live" : isTunerListening() ? "listening…" : "idle";
 }
 
 // --- keep the screen awake while the app is actually in use ---
 // On iOS the idle timer would lock the screen mid-song: you play for minutes
-// without touching the glass. Anything that changes `listening`,
+// without touching the glass. Anything that changes tuner listening,
 // `chordListening` or `playing` calls this, and the native side is only poked
 // when the combined state flips (setIdleTimerDisabled is a main-thread hop).
 let keepAwake = false;
 function syncKeepAwake() {
-  const want = listening || chordListening || playing;
+  const want = isTunerListening() || chordListening || playing;
   if (want === keepAwake) return;
   keepAwake = want;
   nativeInvoke("set_keep_awake", { awake: want }).catch(() => {});
 }
 
-// --- render loop ---
-function render() {
-  // Only the tuner view needs this loop; idle otherwise (keep self-rescheduling
-  // so returning to the tuner resumes instantly).
-  if (currentMode() !== "tuner") {
-    requestAnimationFrame(render);
-    return;
-  }
-  const now = performance.now();
-  // If no frame for >300ms while listening, treat as silence/idle.
-  if (listening && now - lastFrameAt > 300) {
-    current = { active: false, freq: 0, nearest: "", cents: 0, rms: 0 };
-    if (now - lastFrameAt > 1500) setConn(false);
-  }
+initTuner({ setConn, syncKeepAwake });
 
-  const r = current;
-  if (r && r.active) {
-    const cls =
-      Math.abs(r.cents) <= IN_TUNE_CENTS ? "in-tune" : r.cents < 0 ? "flat" : "sharp";
-
-    noteNameEl.textContent = r.nearest.replace(/[0-9]/g, "");
-    noteNameEl.className = "note-name " + cls;
-    noteFreqEl.textContent = `${r.freq.toFixed(1)} Hz`;
-    centsValEl.textContent = (r.cents > 0 ? "+" : "") + r.cents.toFixed(0);
-
-    verdictEl.className = "verdict " + cls;
-    verdictEl.textContent =
-      cls === "in-tune" ? "in tune ✓" : cls === "flat" ? "tune up ↑" : "tune down ↓";
-
-    for (const [note, row] of stringRows) {
-      row.classList.toggle("active", note === r.nearest);
-      const tuned = note === r.nearest && cls === "in-tune";
-      row.classList.toggle("tuned", tuned);
-      row.querySelector(".string-check")!.textContent = tuned ? "✓" : "○";
-    }
-
-    smoothCents += (clamp(r.cents, -50, 50) - smoothCents) * 0.25;
-  } else {
-    noteNameEl.textContent = "—";
-    noteNameEl.className = "note-name";
-    noteFreqEl.textContent = "0.0 Hz";
-    centsValEl.textContent = "0";
-    verdictEl.className = "verdict";
-    verdictEl.textContent = listening ? "play a string" : "press start";
-    for (const row of stringRows.values()) {
-      row.classList.remove("active", "tuned");
-      row.querySelector(".string-check")!.textContent = "○";
-    }
-    smoothCents += (0 - smoothCents) * 0.15;
-  }
-
-  drawNeedle(smoothCents, r?.active ?? false);
-  requestAnimationFrame(render);
-}
-
-function clamp(x: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, x));
-}
-
-// --- needle canvas (drawn in CSS pixels via DPR transform) ---
-function drawNeedle(cents: number, active: boolean) {
-  const dpr = window.devicePixelRatio || 1;
-  const w = needle.width / dpr;
-  const h = needle.height / dpr;
-  nctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  nctx.clearRect(0, 0, w, h);
-
-  const cx = w / 2;
-  const span = w / 2 - 40; // px from center to +/-50 cents
-  const top = 14;
-  const baseY = h - 20;
-
-  // tick marks
-  nctx.strokeStyle = "#16242a";
-  nctx.lineWidth = 1;
-  for (let c = -50; c <= 50; c += 10) {
-    const x = cx + (c / 50) * span;
-    nctx.globalAlpha = c % 50 === 0 ? 0.9 : 0.5;
-    nctx.beginPath();
-    nctx.moveTo(x, top + 8);
-    nctx.lineTo(x, baseY);
-    nctx.stroke();
-  }
-  nctx.globalAlpha = 1;
-
-  // center in-tune zone glow
-  const zoneW = (IN_TUNE_CENTS / 50) * span;
-  const grad = nctx.createLinearGradient(cx - zoneW, 0, cx + zoneW, 0);
-  grad.addColorStop(0, "rgba(25,227,196,0)");
-  grad.addColorStop(0.5, "rgba(25,227,196,0.20)");
-  grad.addColorStop(1, "rgba(25,227,196,0)");
-  nctx.fillStyle = grad;
-  nctx.fillRect(cx - zoneW, top + 8, zoneW * 2, baseY - top - 8);
-
-  // moving indicator
-  const x = cx + (cents / 50) * span;
-  const inTune = Math.abs(cents) <= IN_TUNE_CENTS && active;
-  const color = !active ? "#3a5450" : inTune ? "#19e3c4" : "#f5c451";
-
-  nctx.shadowColor = color;
-  nctx.shadowBlur = active ? 24 : 0;
-  nctx.strokeStyle = color;
-  nctx.lineWidth = 3;
-  nctx.beginPath();
-  nctx.moveTo(x, top + 6);
-  nctx.lineTo(x, baseY);
-  nctx.stroke();
-
-  // pointer triangle
-  nctx.fillStyle = color;
-  nctx.beginPath();
-  nctx.moveTo(x, top + 6);
-  nctx.lineTo(x - 9, top - 6);
-  nctx.lineTo(x + 9, top - 6);
-  nctx.closePath();
-  nctx.fill();
-  nctx.shadowBlur = 0;
-}
-
-function sizeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = needle.getBoundingClientRect();
-  needle.width = rect.width * dpr;
-  needle.height = 170 * dpr;
-}
-
-window.addEventListener("resize", sizeCanvas);
-sizeCanvas();
-requestAnimationFrame(render);
 
 // =====================================================================
 // Play mode — live chord detection
@@ -401,10 +212,8 @@ modeBtns.forEach((btn) => {
     // state can continue while moving between them.
     if (!(fromPractice && toPractice)) {
       await nativeInvoke("stop_audio").catch(() => {});
-      listening = false;
+      stopTunerListening();
       chordListening = false;
-      listenBtn.textContent = "Start listening";
-      listenBtn.classList.remove("on");
       listenBtn2.textContent = "Start listening";
       listenBtn2.classList.remove("on");
       setConn(false);
@@ -1963,7 +1772,7 @@ nativeListen<ChordReading>("chord", (event) => {
   chord = event.payload;
   lastChordAt = performance.now();
   setConn(true);
-  noteRms(event.payload.rms);
+  noteTunerRms(event.payload.rms);
   // Fold this window into the bar being scored. Gated on the transport being
   // engaged so noodling with the song paused isn't graded — but NOT on `waiting`:
   // wait-for-me parks the playhead mid-bar precisely so the player can find the
@@ -2001,15 +1810,13 @@ let wasChordListeningBeforeInterruption = false;
 
 nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
   if (event.payload.began) {
-    wasListeningBeforeInterruption = listening;
+    wasListeningBeforeInterruption = isTunerListening();
     wasChordListeningBeforeInterruption = chordListening;
     // The streams are already dead; drop our own state so the buttons and the
     // "live" dot don't lie, and pause the transport so we don't silently run
     // the playhead past the whole song while the audio is gone.
-    listening = false;
+    stopTunerListening();
     chordListening = false;
-    listenBtn.textContent = "Start listening";
-    listenBtn.classList.remove("on");
     listenBtn2.textContent = "Start listening";
     listenBtn2.classList.remove("on");
     setConn(false);
@@ -2031,12 +1838,9 @@ nativeListen<{ began: boolean }>("audio_interruption", async (event) => {
       listenBtn2.textContent = "Stop listening";
       listenBtn2.classList.add("on");
     } else if (wasListeningBeforeInterruption) {
-      await nativeInvoke("start_tuner");
-      listening = true;
-      listenBtn.textContent = "Stop listening";
-      listenBtn.classList.add("on");
+      await startTunerListening();
     }
-    if (chordListening || listening) coachEl.textContent = "";
+    if (chordListening || isTunerListening()) coachEl.textContent = "";
   } catch (e) {
     coachEl.textContent = `mic didn't come back: ${e} — press Start listening`;
   }
@@ -2080,88 +1884,19 @@ void nativeInvoke<string>("platform")
   .catch(() => {});
 
 
-// --- tuning (Setup screen) ---
-// Persisted through Rust into app-data settings.json. `set_settings` merges, so
-// writing `{tuning}` here cannot disturb the AI provider config that ai.ts owns.
-const taglineEl = document.getElementById("tagline")!;
-const tuningChoiceEl = document.getElementById("tuning-choice")!;
-const tuningStatus = document.getElementById("tuning-status")!;
-
-/// Switch tuning and refresh everything derived from it: the tuner's target
-/// strings (native + the row list), every cached voicing, and the labels. Safe
-/// to call while listening — the native side swaps on the next window.
-function applyTuning(id: TuningId, persist: boolean) {
-  setActiveTuning(id);
-  taglineEl.textContent = `${id === "baritone" ? "baritone" : "standard"} · ${activeTuning().spelling}`;
-  tuningChoiceEl
-    .querySelectorAll<HTMLInputElement>('input[name="tuning"]')
-    .forEach((r) => (r.checked = r.value === id));
-
-  buildStringRows();
-  // Voicings and the chosen shape index are per-tuning; a G shape on a
-  // baritone is a different list, so a stale index would point at nothing.
-  resetVoicingsForTuningChange();
-  invalidateFretboards();
-  if (loadedSong) buildArrangement();
-  updateArrangementState(true);
-
-  nativeInvoke("set_tuning", { tuning: id }).catch(() => {});
-  if (!persist) return;
-  nativeInvoke("set_settings", { settings: { tuning: id } })
-    .then(() => {
-      tuningStatus.classList.add("done");
-      tuningStatus.textContent = `saved — activeTuning() to ${activeTuning().spelling}`;
-    })
-    .catch((e) => {
-      tuningStatus.classList.remove("done");
-      tuningStatus.textContent = `save failed: ${e}`;
-    });
-}
-
-tuningChoiceEl.addEventListener("change", (e) => {
-  const input = e.target as HTMLInputElement;
-  if (input.name !== "tuning") return;
-  applyTuning(input.value === "baritone" ? "baritone" : "standard", true);
+initTuningSetup({
+  onTuningChanged: () => {
+    rebuildStringRows();
+    // Voicings and the chosen shape index are per-tuning; a G shape on a
+    // baritone is a different list, so a stale index would point at nothing.
+    resetVoicingsForTuningChange();
+    invalidateFretboards();
+    if (loadedSong) buildArrangement();
+    updateArrangementState(true);
+  },
+  markDisconnected: () => setConn(false),
 });
 
-// Rust applies the saved tuning to the tuner at startup; this aligns the UI with
-// it (and is a no-op re-send when the setting is absent/standard).
-void nativeInvoke<{ tuning?: string }>("get_settings")
-  .then((s) => applyTuning(s?.tuning === "baritone" ? "baritone" : "standard", false))
-  .catch(() => {});
-// --- mic calibration (Setup screen) ---
-const calibrateBtn = document.getElementById("calibrate-btn") as HTMLButtonElement;
-const setupStatus = document.getElementById("setup-status")!;
-
-calibrateBtn.addEventListener("click", async () => {
-  if (calibrating) return;
-  calibrating = true;
-  calibSamples = [];
-  calibrateBtn.disabled = true;
-  setupStatus.classList.remove("done");
-  setupStatus.textContent = "measuring… stay silent";
-  try {
-    await nativeInvoke("start_tuner"); // any capture mode emits rms
-    await new Promise((r) => setTimeout(r, 2000));
-    await nativeInvoke("stop_audio");
-    // robust noise floor: 90th percentile of measured silence
-    let gate = 0.012;
-    if (calibSamples.length) {
-      const sorted = calibSamples.slice().sort((a, b) => a - b);
-      const floor = sorted[Math.floor(sorted.length * 0.9)] || sorted[sorted.length - 1];
-      gate = Math.max(0.006, floor * 4); // gate = noise floor x4
-    }
-    await nativeInvoke("set_gate", { gate });
-    setupStatus.classList.add("done");
-    setupStatus.textContent = `calibrated · gate ${gate.toFixed(4)} (this session)`;
-  } catch (e) {
-    setupStatus.textContent = `calibration error: ${e}`;
-  } finally {
-    calibrating = false;
-    calibrateBtn.disabled = false;
-    setConn(false);
-  }
-});
 
 // Setup-screen panels. OpenRouter binds first: the AI panel's first render
 // asks it for the Connect/Disconnect button state.
