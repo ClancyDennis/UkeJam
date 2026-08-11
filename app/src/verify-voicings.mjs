@@ -1,38 +1,23 @@
-// Checks every hand-written chord shape in main.ts against the chord's pitch
-// classes: a shape must sound EVERY tone of the chord and NOTHING else.
+// Checks every hand-written chord shape against the chord's pitch classes: a
+// shape must sound EVERY tone of the chord and NOTHING else.
 //
 // The tables are hand-maintained (the generator optimises for coverage and low
 // frets, not for the shapes players actually learn), and a wrong fret is
 // invisible in the UI — it just teaches the wrong chord. This caught 16 bad
 // standard-tuning shapes on the first run, so it earns its keep.
 //
-// Run with `pnpm verify:voicings`. Plain node, no dependencies: it reads the
-// tables straight out of main.ts so it can never drift from the real data.
+// Run with `pnpm verify:voicings`. Plain node, no dependencies — it imports the
+// real tables from theory/voicings.ts, so it can never drift from the data the
+// app draws.
+//
+// The pitch-class maths below is deliberately a SECOND implementation rather
+// than an import of chordPitchClasses(). It is the oracle: if the app's
+// interval table were wrong, importing it would check each shape against the
+// same wrong tones and pass. The same goes for the open-string pitch classes —
+// they say what "G C E A" means, independently of TUNINGS.
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { BARITONE_VOICINGS, STANDARD_VOICINGS } from "./theory/voicings.ts";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, "main.ts"), "utf8");
-
-/// Extract a `const <name>: Record<string, Voicing> = {...}` literal from the
-/// source by brace matching, then evaluate just that object.
-function extractTable(name) {
-  const start = src.indexOf(`const ${name}: Record<string, Voicing> = {`);
-  if (start < 0) throw new Error(`table ${name} not found in main.ts`);
-  const open = src.indexOf("{", start);
-  let depth = 0;
-  let i = open;
-  for (; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) break;
-  }
-  const body = src.slice(open, i + 1).replace(/\/\/[^\n]*/g, "");
-  return eval(`(${body})`);
-}
-
-// Mirrors chordPitchClasses() in main.ts.
 const BASE = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const INTERVALS = {
   "": [0, 4, 7],
@@ -64,17 +49,16 @@ function chordPitchClasses(name) {
   return iv.map((x) => (root + x) % 12);
 }
 
-// Open-string pitch classes per table, matching TUNINGS in main.ts.
 const TABLES = [
-  { name: "STANDARD_VOICINGS", openPc: [7, 0, 4, 9], spelling: "G C E A" },
-  { name: "BARITONE_VOICINGS", openPc: [2, 7, 11, 4], spelling: "D G B E" },
+  { name: "STANDARD_VOICINGS", table: STANDARD_VOICINGS, openPc: [7, 0, 4, 9], spelling: "G C E A" },
+  { name: "BARITONE_VOICINGS", table: BARITONE_VOICINGS, openPc: [2, 7, 11, 4], spelling: "D G B E" },
 ];
 
 let checked = 0;
 const problems = [];
 
-for (const { name, openPc, spelling } of TABLES) {
-  for (const [chord, voicing] of Object.entries(extractTable(name))) {
+for (const { table, openPc, spelling } of TABLES) {
+  for (const [chord, voicing] of Object.entries(table)) {
     checked++;
     const tones = new Set(chordPitchClasses(chord));
     const sounded = voicing
