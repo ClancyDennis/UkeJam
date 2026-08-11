@@ -1,5 +1,10 @@
 # Refactoring plan: breaking up `src/main.ts`
 
+> **Status.** Phases 0–4 are done; Phase 5 is partly done. `main.ts` is
+> 4,380 → 1,797 lines. Every commit passes `tsc --noEmit`, all six verify
+> scripts and `pnpm build`. See **Progress** at the end for exactly what is
+> left and the three places the sequencing below was changed on contact.
+
 `src/main.ts` is 4,380 lines — about 40% of the frontend — and contains every
 screen of the app in one script, separated only by banner comments. The rest of
 the codebase already follows the pattern this plan extends: small focused
@@ -289,3 +294,68 @@ last time. Target: main.ts ≤ 200 lines.
 - Transport timing, bar scoring, and chord theory are importable by plain-node
   verify scripts — the property that made `song.ts`/`verdict.ts` bugs
   catchable before they reached a device.
+
+---
+
+## Progress
+
+`main.ts`: **4,380 → 1,797 lines** (59% smaller). Twelve commits, each one
+green on `tsc --noEmit`, all six verify scripts, and `pnpm build`.
+
+### Done
+
+| Phase | Outcome |
+|---|---|
+| 0 | Baseline recorded green: tsc, four verify scripts, `pnpm build`. |
+| 1 | `native.ts` (+ the one-subscription-per-event bus), `tunings.ts`, `theory/chords.ts`, `theory/voicings.ts`, `time.ts`. `verify-voicings.mjs` converted from text-scraping to a real import. **New:** `verify-theory.mjs` (2,866 generated shapes checked to sound exactly their chord tones) and `verify-timing.mjs` (chord placement, bar boundaries, the shared-bar split). |
+| 2 | `views/setup/soundfont.ts`, `views/setup/aiSettings.ts`, `views/setup/openrouterAuth.ts`, `views/tabSearch.ts`, `views/midiImport.ts`, `views/strumcamView.ts`, plus `dom.ts` for `escapeHtml`. |
+| 3 | `state/appMode.ts` and the active-tuning store; `views/tuner.ts`; `views/setup/tuningSetup.ts`. |
+| 4 | `session.ts` — the whole song + transport + scoring cluster, DOM-free, read through getters, eleven named callbacks out. `iosAudio.ts`. |
+| 5 (partial) | `views/play/gauge.ts`, `views/play/fft.ts`, `views/play/coach.ts`. |
+
+### Still to do
+
+All of it inside `main.ts`, all of it Phase 5/6 work:
+
+- `views/play/highway.ts` — `drawHighway`, `drawTrailToken`, `roundRect`
+- `views/play/fretboard.ts` — `drawFretboard`, the two shape panels, the
+  transition coach (the largest remaining block, ~350 lines)
+- `views/play/strip.ts`, `views/play/lyrics.ts` — the build/update pairs
+- `views/play/chroma.ts`, `views/play/breakdown.ts`, `views/play/diagnostics.ts`
+- `views/arrangement.ts`, `views/libraryView.ts`
+- `views/play/index.ts` — `renderChords` as the orchestrating rAF loop
+- **Phase 6**: reduce `main.ts` to the bootstrap (target ≤ 200 lines)
+
+### Where the plan changed on contact
+
+1. **`tunings.ts` landed in Phase 1, not Phase 3.** Parameterising the voicing
+   generator on a tuning (Phase 1, item 3) needs `TuningSpec` to exist. The
+   type and table moved early; the mutable store still landed in Phase 3.
+2. **`tuningSetup` and mic calibration moved from Phase 2 to Phase 3, and
+   `iosAudio.ts` from Phase 2 to Phase 4.** Both orchestrate state the later
+   phases were about to formalise. Extracted at the listed point, `iosAudio`
+   would have needed ten callbacks; after `session.ts` and `views/tuner.ts`
+   existed it needed seven, and three of those became direct imports.
+3. **`session.ts` moved in one commit, not three.** The plan split it to
+   reduce risk, but the three sub-steps share one state cluster — splitting
+   would have left half the cluster in `main.ts` behind temporary accessors
+   for two commits. Moving the cluster whole was the smaller change.
+
+The diagnostics drawer is not a separate module: it is ten lines, and its
+`renderBreakdown` belongs with the render loop, so it folds into Phase 5.
+
+### Two bugs this refactor introduced and fixed
+
+Both from bulk identifier rewrites hitting prose rather than code, and both
+caught by reading the diff against the original rather than by the type
+checker — neither would have failed a build:
+
+- `"saved — tuning to …"` briefly became `"saved — activeTuning() to …"` in
+  the tuning-save confirmation.
+- The practice status line's `waiting`/`playing` words became
+  `isWaiting()`/`isPlaying()`.
+
+Ten comments took the same damage during the `session.ts` move and were
+restored from the pre-refactor file. Worth knowing for the remaining phases:
+a rename sweep over a file this size needs a diff review of every string and
+comment it touched, not just a green typecheck.
