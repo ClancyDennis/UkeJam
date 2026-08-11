@@ -40,6 +40,9 @@
           <button class="util-btn" data-mode="tuner" title="Tune your instrument">
             <span class="util-icon">♪</span> Tune
           </button>
+          <button class="util-btn" data-mode="strumcam" title="Camera strum-direction lab">
+            <span class="util-icon">◉</span> StrumCam
+          </button>
           <button class="util-btn" data-mode="cal-mic" title="Calibrate microphone">
             <span class="util-icon">⚙</span> Setup
           </button>
@@ -292,6 +295,65 @@
           <div class="panel-title">Chord Chart <span class="tag" id="arrangement-chord-tag">baritone</span></div>
           <div class="arrangement-chords" id="arrangement-chords"></div>
         </aside>
+      </main>
+
+      <!-- StrumCam view: camera strum-direction lab. The mic decides WHEN a
+           strum happened (the proven onset detector); the camera only answers
+           WHICH WAY the hand was moving at that instant. This screen is the
+           in-app feasibility rig: it shows every call it makes and tallies the
+           outcomes, so the motion tracker earns its way into practice
+           feedback with numbers rather than vibes. -->
+      <main class="strumcam-view" id="strumcam-view" hidden>
+        <div class="panel sc-cam-panel">
+          <div class="panel-title">
+            <button class="back-btn" data-mode="play">← Play</button>
+            Strum Cam <span class="tag">camera + mic</span>
+          </div>
+          <div class="sc-preview-wrap">
+            <canvas id="sc-preview" width="320" height="240"></canvas>
+            <div class="sc-glyph" id="sc-glyph" aria-label="last direction call">·</div>
+          </div>
+          <div class="sc-controls">
+            <button class="listen-btn" id="sc-start">Start camera + mic</button>
+            <label class="ai-toggle sc-flip" title="Tick if the arrows come out backwards (rotated mount)">
+              <input type="checkbox" id="sc-flip" />
+              <span>⇅ flip</span>
+            </label>
+          </div>
+          <p class="setup-copy">
+            Prop the device so your strumming hand fills the frame — an arm's
+            length away, hand near the middle. Strum normally: every strum the
+            mic hears gets a ▼/▲ call from the camera. Watch the
+            <b>wrong</b> ones, not the unsure ones.
+          </p>
+          <div class="setup-status" id="sc-status">camera off</div>
+        </div>
+
+        <div class="panel sc-trace-panel">
+          <div class="panel-title">
+            Hand Motion <span class="tag">vertical velocity · ● = mic onset</span>
+          </div>
+          <div class="sc-strip-wrap">
+            <canvas id="sc-strip" class="sc-strip"></canvas>
+          </div>
+          <div class="sc-tally">
+            <div class="sc-stat"><span class="sc-k">▼ down</span><span class="sc-v" id="sc-downs">0</span></div>
+            <div class="sc-stat"><span class="sc-k">▲ up</span><span class="sc-v" id="sc-ups">0</span></div>
+            <div class="sc-stat"><span class="sc-k">? unsure</span><span class="sc-v" id="sc-unsure">0</span></div>
+            <div class="sc-stat"><span class="sc-k">ghost strokes</span><span class="sc-v" id="sc-ghosts">0</span></div>
+            <div class="sc-stat"><span class="sc-k">fps</span><span class="sc-v" id="sc-fps">—</span></div>
+          </div>
+        </div>
+
+        <div class="panel sc-calls-panel">
+          <div class="panel-title">Calls <span class="tag">newest first</span></div>
+          <div class="sc-calls" id="sc-calls">
+            <div class="sc-calls-empty" id="sc-calls-empty">
+              Start the session and strum — each mic onset lands here with the
+              camera's direction call.
+            </div>
+          </div>
+        </div>
       </main>
 
       <!-- Setup / calibration view (secondary utility screen) -->
