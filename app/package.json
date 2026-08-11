@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "verify:voicings": "node src/verify-voicings.mjs",
+    "verify:verdicts": "node src/verify-verdicts.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "verify:songparse": "node src/verify-songparse.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -16,6 +16,12 @@
   --text-dim: #5d7b78;
   --text-faint: rgba(207, 232, 230, 0.34);
   --red: #ff5d6c;
+  /* Per-bar verdict palette. Kept in sync with the canvas trail colours in
+     drawHighway() — the strip and the highway grade the same bars, so a
+     mismatch would read as two different scores. */
+  --verdict-hit: #4cde80;
+  --verdict-wrong: #f59e42;
+  --verdict-miss: #788492;
   --panel-bg: linear-gradient(180deg, rgba(12, 20, 23, 0.82), rgba(8, 13, 15, 0.82));
   font-family: "Space Grotesk", system-ui, sans-serif;
 }
@@ -672,7 +678,10 @@ body {
 .bottom-band {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 1.7fr 1fr;
+  /* Three columns: song strip (widest), transition, coach. A wrapped row would
+     be clipped by the overflow:hidden backstop below rather than shown, so the
+     column count has to match the number of panels. */
+  grid-template-columns: 1.5fr 1fr 1fr;
   gap: 14px;
   max-height: 38vh;
   min-height: 0;
@@ -686,7 +695,8 @@ body {
   flex-direction: column;
   min-height: 0;
 }
-.bottom-band .transition-panel {
+.bottom-band .transition-panel,
+.bottom-band .coach-panel {
   min-height: 0;
 }
 
@@ -835,6 +845,73 @@ body {
   flex-direction: column;
   align-items: stretch;
   padding-bottom: 12px;
+}
+
+/* Onset lamp in the diagnostics metrics: dark until an attack is detected. */
+.onset-lamp {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--line);
+  vertical-align: middle;
+  transition: background 0.08s ease, box-shadow 0.08s ease;
+}
+
+.onset-lamp.lit {
+  background: var(--gold);
+  box-shadow: 0 0 8px var(--gold);
+}
+
+/* ---------- Coach panel (advice across bars) ---------- */
+.coach-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-bottom: 12px;
+  overflow: hidden;
+}
+
+.coach-advice {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.coach-idle {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* One piece of advice. The first two lines the model returns are things to fix,
+   the last is what's working — see SYSTEM_COACH in enhance.rs. */
+.coach-line {
+  padding-left: 11px;
+  border-left: 2px solid var(--verdict-wrong);
+}
+
+.coach-line.good {
+  border-left-color: var(--verdict-hit);
+}
+
+.coach-thinking {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--teal);
+  opacity: 0.75;
+}
+
+.coach-note {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .transition-coach {
@@ -2617,6 +2694,27 @@ body {
   border-color: var(--teal-dim);
 }
 
+/* Graded bars. Ordered before .current so the gold "you are here" highlight
+   still wins on the chord being played — the verdict for it doesn't exist yet
+   anyway (the bar is sealed when the playhead leaves it). */
+.strip-chord.hit {
+  color: var(--verdict-hit);
+  border-color: rgba(76, 222, 128, 0.45);
+  background: rgba(76, 222, 128, 0.08);
+}
+
+.strip-chord.wrong {
+  color: var(--verdict-wrong);
+  border-color: rgba(245, 158, 66, 0.5);
+  background: rgba(245, 158, 66, 0.09);
+}
+
+.strip-chord.miss {
+  color: var(--verdict-miss);
+  border-color: rgba(120, 132, 146, 0.4);
+  background: rgba(120, 132, 146, 0.06);
+}
+
 .strip-chord.current,
 .strip-chord.current:hover {
   color: var(--gold);
@@ -2859,6 +2957,80 @@ body {
   flex-wrap: wrap;
 }
 
+/* ---------- Tuning picker (Setup screen) ---------- */
+.tuning-choice {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.tuning-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-panel-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.tuning-option:hover {
+  border-color: var(--line-teal);
+}
+
+/* The radio itself is redundant once the whole card reads as selected. */
+.tuning-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tuning-option:has(input:checked) {
+  border-color: var(--teal);
+  background: rgba(25, 227, 196, 0.08);
+}
+
+/* Keyboard users still need to see focus, since the input is invisible. */
+.tuning-option:has(input:focus-visible) {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.tuning-name {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  color: var(--text);
+}
+
+.tuning-option:has(input:checked) .tuning-name {
+  color: var(--teal);
+}
+
+.tuning-spelling {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: var(--teal-2);
+}
+
+.tuning-note {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 860px) {
+  .tuning-choice {
+    flex-direction: column;
+  }
+}
+
 /* ---------- Corner label ---------- */
 .corner-label {
   position: fixed;
@@ -3004,6 +3176,25 @@ body {
 }
 .sf-close:hover {
   color: var(--teal);
+}
+
+/* ---------- Setup screen layout ---------- */
+.setup-view {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start; /* column direction: center would clip overflow */
+  gap: 16px;
+  overflow-y: auto;
+  padding-bottom: 40px;
+}
+/* Stacked panels must keep their natural height: as flex items they would
+   otherwise shrink to fit the viewport and clip their own body text. Only the
+   first keeps the top margin; `gap` spaces the rest. */
+.setup-panel {
+  flex: 0 0 auto;
+}
+.setup-panel ~ .setup-panel {
+  margin-top: 0;
 }
 
 /* ---------- Small screens (iPhone / iPad portrait) ----------

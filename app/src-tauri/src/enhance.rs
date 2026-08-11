@@ -1,5 +1,5 @@
-//! AI tab enhancement — normalize a messy pasted tab into clean ChordPro via
-//! a chat model. Ported from the prototype's importer.py.
+//! AI calls — tab enhancement (messy paste -> clean ChordPro, ported from the
+//! prototype's importer.py) and live practice coaching (graded bars -> advice).
 //!
 //! The player picks the provider in Setup: Apple Intelligence (on-device, via
 //! the local-llm plugin), OpenRouter, or any OpenAI-compatible endpoint. The
@@ -88,7 +88,48 @@ chorus), repeat the matching lyrics on those bar numbers.\n\
 (5) Keep the words verbatim from B; do not invent or translate lyrics.\n\
 (6) It's fine to leave many bars blank if B is short — only map what the lyrics cover.";
 
-/// What kind of enhancement to run.
+// Live practice coaching. Same split as SYSTEM_FUSE above: the app has already
+// graded every bar (see verdict.ts) and those verdicts are authoritative, so the
+// model is asked ONLY for the thing the app cannot compute — the pattern across
+// bars. It must never re-judge a bar or restate the note names, because it has
+// no audio and would be guessing at facts the app measured.
+const SYSTEM_COACH: &str = "\
+You are a ukulele practice coach. You are given a play-along app's own scoring of \
+the bars a player just performed. Each line is one bar:\n\
+  <barNumber>: expect <chord>, <what was heard> -> HIT | WRONG | MISS\n\
+HIT = played acceptably. WRONG = a different chord or wrong notes sounded. \
+MISS = nothing sounded (silence or a muted hand). 'late 120ms' / 'early 90ms' is \
+when the strum landed relative to the bar's downbeat.\n\
+'2 strums in 4 beats, 2 in time' means the player strummed twice in a four-beat \
+bar and both landed on the rhythmic grid. Two rules about this:\n\
+- The strum COUNT is not a score. The app does not know what strumming pattern the \
+song wants, so two strums in four beats may be exactly right. Never tell the player \
+to strum more or fewer times, and never call a low count a mistake.\n\
+- 'in time' counts strums that landed on the beat or the half-beat between beats. \
+Strums NOT in time mean loose timing, which is a real and useful thing to raise — \
+but you cannot tell whether they were early or late, so do not say which.\n\
+Rhythm is often more useful for a beginner than chord shapes, so prefer it when \
+the bars show a pattern in it.\n\
+These verdicts are measured facts. Treat them as correct.\n\
+Rules:\n\
+(1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \
+late' or 'the chorus is solid, the bridge falls apart' is useful. 'Bar 12 was \
+wrong' is not — the player already saw that on screen.\n\
+(2) Output at most 3 lines, each one short sentence, in this order: up to two \
+things to fix (most important first), then one thing that is working. Fewer lines \
+is fine. No line may exceed about 20 words.\n\
+(3) Do NOT restate note names, chord spellings, or bar numbers as a list, and do \
+NOT re-judge any bar. The app already shows all of that.\n\
+(4) Speak to the player in the second person, plainly and without praise padding. \
+No emoji, no markdown, no bullet characters, no headings, no code fences.\n\
+(5) Only mention timing if the lines actually carry early/late figures. If the \
+input says it is untimed, say nothing about timing or rhythm at all.\n\
+(6) If the bars show no clear pattern, say only what is working. Never invent a \
+problem to have something to report.";
+
+/// What kind of tab enhancement to run. Coaching is deliberately not a variant
+/// here: it has its own model and timeout, so it gets its own entry point
+/// (`coach_bars`) rather than a mode that would inherit enhancement's.
 pub enum Mode {
     /// Convert a messy pasted tab into clean ChordPro.
     Messy,
@@ -358,6 +399,29 @@ pub fn interpret_search(
         .take(3)
         .map(str::to_string)
         .collect())
+}
+
+/// Turn a digest of graded bars (see `VerdictBuffer::digest`) into short practice
+/// advice.
+///
+/// Goes through the same provider the player picked in Setup rather than a
+/// separately-configured endpoint. An earlier version of this had its own model
+/// setting and its own HTTP path, on the reasoning that coaching is a short
+/// latency-sensitive turn while tab conversion is one long offline job. The
+/// provider picker makes that redundant: Apple Intelligence is on-device and
+/// already fast, and a second model field in Setup is a knob most players would
+/// never touch. One provider, one place to configure it.
+pub fn coach_bars(
+    app: &AppHandle,
+    digest: &str,
+    reason: &str,
+    config: &AiConfig,
+) -> Result<String, String> {
+    // The reason is context, not an instruction — it tells the model whether the
+    // player just stopped, finished, or is mid-struggle, which changes what is
+    // worth saying.
+    let user = format!("Trigger: {reason}\n\nBars just played:\n\n{digest}");
+    Ok(chat(app, config, SYSTEM_COACH, &user)?.trim().to_string())
 }
 
 /// List the model ids a remote endpoint offers (GET `{base}/models`), for the

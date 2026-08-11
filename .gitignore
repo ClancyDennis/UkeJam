@@ -38,3 +38,9 @@ outputs/
 
 # Large icon design master (generated icons are committed; master is not)
 app/src/assets/ukejam-app-icon-master.png
+
+# Swift SDK copies + resolved deps that `tauri ios` generates inside the local
+# plugins. Build output, not source: they appear after any iOS build and would
+# otherwise be committed by an unwitting `git add -A`.
+app/tauri-plugin-*/.tauri/
+app/tauri-plugin-*/ios/Package.resolved
