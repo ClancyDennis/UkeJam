@@ -6,6 +6,7 @@ mod ios_audio;
 mod library;
 mod settings;
 mod soundfont;
+mod tabsearch;
 
 use std::sync::Mutex;
 
@@ -14,7 +15,7 @@ use backing::{BackingState, BackingStatus};
 use base64::Engine as _;
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
-    AppHandle, Runtime, State, Url,
+    AppHandle, Manager, Runtime, State, Url, WebviewUrl, WebviewWindowBuilder,
 };
 
 // ---- OpenRouter OAuth return hook (ported from Wormdrop Battleground) ----
@@ -234,6 +235,69 @@ async fn test_ai(app: AppHandle, config: enhance::AiConfig) -> Result<String, St
         .map_err(|e| format!("task join: {e}"))?
 }
 
+// ---- in-app tab search (Ultimate Guitar) ----
+
+/// Search for chord tabs. `smart` first expands a fuzzy description into
+/// concrete queries through the configured AI provider; any failure there (no
+/// provider set up, endpoint down) degrades to a plain search so smart mode
+/// is never less capable than the plain one. Blocking network, so off the
+/// main thread.
+#[tauri::command]
+async fn search_tabs(
+    app: AppHandle,
+    query: String,
+    smart: Option<bool>,
+    config: Option<enhance::AiConfig>,
+) -> Result<tabsearch::SearchOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let queries = match (smart.unwrap_or(false), &config) {
+            (true, Some(cfg)) => enhance::interpret_search(&app, cfg, &query)
+                .ok()
+                .filter(|qs| !qs.is_empty())
+                .unwrap_or_else(|| vec![query.clone()]),
+            _ => vec![query.clone()],
+        };
+        tabsearch::run_search(&queries)
+    })
+    .await
+    .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Fetch a tab page and return its text + metadata for the paste box.
+#[tauri::command]
+async fn fetch_tab(url: String) -> Result<tabsearch::TabContent, String> {
+    tauri::async_runtime::spawn_blocking(move || tabsearch::fetch_tab(&url))
+        .await
+        .map_err(|e| format!("task join: {e}"))?
+}
+
+/// Open a tab page in an in-app preview window (a second Tauri webview — the
+/// system WebKit/WebView2), so the user can eyeball a tab without leaving the
+/// app. One shared window, reused/navigated on subsequent opens. The remote
+/// page gets no IPC: capabilities only cover the "main" window, so this is a
+/// plain sandboxed browser view.
+#[tauri::command]
+fn open_tab_page(app: AppHandle, url: String) -> Result<(), String> {
+    tabsearch::validate_tab_url(&url)?;
+    if let Some(w) = app.get_webview_window("tab-preview") {
+        let js_url = serde_json::to_string(&url).map_err(|e| e.to_string())?;
+        w.eval(&format!("window.location.replace({js_url})"))
+            .map_err(|e| format!("navigate preview: {e}"))?;
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    } else {
+        let external = url
+            .parse()
+            .map_err(|e| format!("bad url: {e}"))?;
+        WebviewWindowBuilder::new(&app, "tab-preview", WebviewUrl::External(external))
+            .title("ukejam — tab preview")
+            .inner_size(1080.0, 840.0)
+            .build()
+            .map_err(|e| format!("open preview window: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Trade an OpenRouter PKCE auth code for an API key (see openrouter.ts).
 #[tauri::command]
 async fn openrouter_exchange(code: String, verifier: String) -> Result<String, String> {
@@ -337,6 +401,9 @@ pub fn run() {
             ai_models,
             test_ai,
             openrouter_exchange,
+            search_tabs,
+            fetch_tab,
+            open_tab_page,
             load_backing,
             set_backing_channels,
             play_backing,

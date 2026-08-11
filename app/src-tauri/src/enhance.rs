@@ -176,7 +176,8 @@ fn model_accepts_temperature(model: &str) -> bool {
 }
 
 /// One completion through whichever provider the config names.
-/// Blocking — callers run it on `spawn_blocking`.
+/// Blocking — callers run it on `spawn_blocking`. Shared by tab enhancement
+/// and the tab-search query interpreter below.
 fn chat(app: &AppHandle, config: &AiConfig, system: &str, user: &str) -> Result<String, String> {
     if config.is_apple() {
         return apple_chat(app, config, system, user);
@@ -309,7 +310,6 @@ pub fn enhance_tab(
         ),
         Mode::Messy => (SYSTEM, format!("Convert this tab to ChordPro:\n\n{raw}")),
     };
-
     let mut text = chat(app, config, system, &user)?.trim().to_string();
 
     // strip accidental ``` fences
@@ -323,6 +323,41 @@ pub fn enhance_tab(
         text = text.trim().to_string();
     }
     Ok(text)
+}
+
+// The LLM leg of the tab search's ✨ smart mode: the user types a loose
+// description (a lyric fragment, a vibe, a misremembered title) and the model
+// emits concrete artist-title queries the normal search then runs.
+const SYSTEM_FIND: &str = "\
+You turn a loose description of a song into concrete search queries for a \
+guitar/ukulele chord-sheet website. The description may be a lyric fragment, \
+a vibe ('that whistling indie song from 2012'), a misremembered title, or \
+already a clean artist + title.\n\
+Rules:\n\
+(1) Output 1 to 3 search queries, ONE PER LINE, most likely candidate first.\n\
+(2) Each query is plain text in the form: Artist SongTitle — no quotes, no \
+numbering, no dashes, no commentary.\n\
+(3) If the description already names the song, just echo a cleaned-up \
+'Artist Title' line.\n\
+(4) Output ONLY the query lines.";
+
+/// Expand a fuzzy song description into up to 3 concrete search queries via
+/// the configured provider (tab search's ✨ smart mode).
+pub fn interpret_search(
+    app: &AppHandle,
+    config: &AiConfig,
+    description: &str,
+) -> Result<Vec<String>, String> {
+    let reply = chat(app, config, SYSTEM_FIND, description)?;
+    Ok(reply
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim())
+        // tolerate "1. Artist Title" style numbering despite the prompt
+        .map(|l| l.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')').trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("```"))
+        .take(3)
+        .map(str::to_string)
+        .collect())
 }
 
 /// List the model ids a remote endpoint offers (GET `{base}/models`), for the
