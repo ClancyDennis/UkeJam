@@ -47,3 +47,17 @@ export const TUNINGS: Record<TuningId, TuningSpec> = {
     stringLabels: ["D", "G", "B", "E"],
   },
 };
+
+// The tuning in force. Standard is the default: it's what most ukuleles are.
+// Replaced by the saved setting during startup (see applyTuning in
+// views/setup/tuningSetup.ts), before the user can play anything.
+let active: TuningSpec = TUNINGS.standard;
+
+export function activeTuning(): TuningSpec {
+  return active;
+}
+
+export function setActiveTuning(id: TuningId): TuningSpec {
+  active = TUNINGS[id];
+  return active;
+}

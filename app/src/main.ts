@@ -19,7 +19,7 @@ import {
   type BarAccumulator,
   type BarVerdict,
 } from "./verdict";
-import { TUNINGS, type TuningId, type TuningSpec } from "./tunings";
+import { activeTuning, setActiveTuning, type TuningId } from "./tunings";
 import { barOfBeat, beatsPerBarOf, buildBeatTimeline, fmtTime, isTimedSong } from "./time";
 import {
   hideSoundfontOpenFolder,
@@ -39,6 +39,7 @@ import { initOpenRouterAuth, resumeOpenRouterLogin } from "./views/setup/openrou
 import { initTabSearch } from "./views/tabSearch";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport";
 import { escapeHtml } from "./dom";
+import { currentMode, isPracticeMode, setMode, type AppMode } from "./state/appMode";
 import { initStrumCam, stopStrumcamSession, strumcamOnset } from "./views/strumcamView";
 import { PITCH_CLASSES, chordPitchClasses, pcNameToIndex } from "./theory/chords";
 import {
@@ -49,11 +50,6 @@ import {
   voicingKey,
 } from "./theory/voicings";
 
-type AppMode = "tuner" | "play" | "arrangement" | "cal-mic" | "library" | "strumcam";
-
-// Standard is the default: it's what most ukuleles are. Replaced by the saved
-// setting during startup (see applyTuning), before the user can play anything.
-let tuning: TuningSpec = TUNINGS.standard;
 
 const IN_TUNE_CENTS = 5; // within +/- this many cents counts as in tune
 
@@ -86,7 +82,7 @@ const stringRows = new Map<string, HTMLElement>();
 function buildStringRows() {
   stringsEl.textContent = "";
   stringRows.clear();
-  for (const s of tuning.strings) {
+  for (const s of activeTuning().strings) {
     const row = document.createElement("div");
     row.className = "string-row";
     row.innerHTML = `
@@ -152,7 +148,7 @@ function syncKeepAwake() {
 function render() {
   // Only the tuner view needs this loop; idle otherwise (keep self-rescheduling
   // so returning to the tuner resumes instantly).
-  if (mode !== "tuner") {
+  if (currentMode() !== "tuner") {
     requestAnimationFrame(render);
     return;
   }
@@ -358,7 +354,6 @@ const arrangementChordTagEl = document.getElementById("arrangement-chord-tag")!;
 
 
 
-let mode: AppMode = "play";
 let chordListening = false;
 let chord: ChordReading | null = null;
 let lastChordAt = 0;
@@ -399,9 +394,9 @@ modeBtns.forEach((btn) => {
   btn.addEventListener("click", async () => {
     const m = btn.dataset.mode as AppMode | undefined;
     if (m !== "tuner" && m !== "play" && m !== "arrangement" && m !== "cal-mic" && m !== "library" && m !== "strumcam") return;
-    if (m === mode) return;
-    const fromPractice = mode === "play" || mode === "arrangement";
-    const toPractice = m === "play" || m === "arrangement";
+    if (m === currentMode()) return;
+    const fromPractice = isPracticeMode(currentMode());
+    const toPractice = isPracticeMode(m);
     // Chart and Play are both practice surfaces, so transport/backing/listening
     // state can continue while moving between them.
     if (!(fromPractice && toPractice)) {
@@ -420,9 +415,9 @@ modeBtns.forEach((btn) => {
       nativeInvoke("stop_backing").catch(() => {});
     }
 
-    if (mode === "strumcam" && m !== "strumcam") stopStrumcamSession();
+    if (currentMode() === "strumcam" && m !== "strumcam") stopStrumcamSession();
 
-    mode = m;
+    setMode(m);
     tunerView.hidden = m !== "tuner";
     playView.hidden = m !== "play";
     arrangementView.hidden = m !== "arrangement";
@@ -485,7 +480,7 @@ diagCloseBtn.addEventListener("click", () => toggleDiagnostics(false));
 // play/pause, ←/→ step the current chord, d toggles the diagnostics drawer.
 // Only active on the Play screen and never when typing in a field.
 addEventListener("keydown", (e) => {
-  if (mode !== "play") return;
+  if (currentMode() !== "play") return;
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
   if (e.code === "Space") {
@@ -883,7 +878,7 @@ function renderSongList() {
 // The list renders from the in-memory library, which starts on the
 // localStorage seed; refresh it once the durable native store has loaded.
 void libraryReady.then(() => {
-  if (mode === "library") renderSongList();
+  if (currentMode() === "library") renderSongList();
 });
 
 function loadSongIntoPlay(rec: SongRecord) {
@@ -1491,7 +1486,7 @@ function buildArrangement() {
 
   if (!loadedSong) {
     arrangementTagEl.textContent = "no song";
-    arrangementChordTagEl.textContent = tuning.spelling;
+    arrangementChordTagEl.textContent = activeTuning().spelling;
     arrangementEmptyEl.hidden = false;
     arrangementSheetEl.hidden = true;
     updateArrangementState();
@@ -1559,7 +1554,7 @@ function buildArrangement() {
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Jump to first ${ch}`);
-    const state = chordShapeState(ch, tuning);
+    const state = chordShapeState(ch, activeTuning());
     card.innerHTML =
       `<span class="arr-card-head">` +
       `<span class="arr-card-name">${escapeHtml(ch)}</span>` +
@@ -1976,7 +1971,7 @@ nativeListen<ChordReading>("chord", (event) => {
   // offset is meaningless in wait mode, which is the point of the mode.)
   // The mic now also runs under the StrumCam view; only the practice surfaces
   // grade bars or advance the song, so noodling in the lab can't touch a score.
-  const practicing = mode === "play" || mode === "arrangement";
+  const practicing = isPracticeMode(currentMode());
   if (practicing && loadedSong && (!timed || playing)) {
     accumulate(barAccum, event.payload, lastChordAt);
   }
@@ -2096,8 +2091,8 @@ const tuningStatus = document.getElementById("tuning-status")!;
 /// strings (native + the row list), every cached voicing, and the labels. Safe
 /// to call while listening — the native side swaps on the next window.
 function applyTuning(id: TuningId, persist: boolean) {
-  tuning = TUNINGS[id];
-  taglineEl.textContent = `${id === "baritone" ? "baritone" : "standard"} · ${tuning.spelling}`;
+  setActiveTuning(id);
+  taglineEl.textContent = `${id === "baritone" ? "baritone" : "standard"} · ${activeTuning().spelling}`;
   tuningChoiceEl
     .querySelectorAll<HTMLInputElement>('input[name="tuning"]')
     .forEach((r) => (r.checked = r.value === id));
@@ -2115,7 +2110,7 @@ function applyTuning(id: TuningId, persist: boolean) {
   nativeInvoke("set_settings", { settings: { tuning: id } })
     .then(() => {
       tuningStatus.classList.add("done");
-      tuningStatus.textContent = `saved — tuning to ${tuning.spelling}`;
+      tuningStatus.textContent = `saved — activeTuning() to ${activeTuning().spelling}`;
     })
     .catch((e) => {
       tuningStatus.classList.remove("done");
@@ -2216,11 +2211,11 @@ function renderChords() {
   // This loop only paints the Play view. On other views, skip all the canvas /
   // DOM work but keep the transport tick alive on the Arrangement view so a
   // timed song without backing audio (wall-clock playhead) still advances.
-  if (mode !== "play" && mode !== "arrangement") {
+  if (!isPracticeMode(currentMode())) {
     requestAnimationFrame(renderChords);
     return;
   }
-  if (mode === "arrangement") {
+  if (currentMode() === "arrangement") {
     tickTransport();
     requestAnimationFrame(renderChords);
     return;
@@ -2379,7 +2374,7 @@ function renderChords() {
 
 
 function shapeTag(name: string, state: { index: number; count: number }, extra = ""): string {
-  if (!name) return tuning.spelling;
+  if (!name) return activeTuning().spelling;
   const shape = state.count > 1 ? `shape ${shapeLabel(state)}` : "shape 1/1";
   return `${name}${extra} · ${shape}`;
 }
@@ -2391,7 +2386,7 @@ function setShapeControls(
   prevBtn: HTMLButtonElement,
   nextBtn: HTMLButtonElement
 ) {
-  const state = chordShapeState(name, tuning);
+  const state = chordShapeState(name, activeTuning());
   const canCycle = state.count > 1;
   controls.hidden = !canCycle;
   countEl.textContent = shapeLabel(state);
@@ -2410,7 +2405,7 @@ function redrawArrangementChordCards() {
     const svg = card.querySelector(".arr-mini-fret");
     const shape = card.querySelector(".arr-card-shape");
     if (!svg || !shape) return;
-    const state = chordShapeState(name, tuning);
+    const state = chordShapeState(name, activeTuning());
     shape.textContent = state.count > 1 ? `shape ${shapeLabel(state)}` : "shape 1/1";
     card.querySelectorAll<HTMLButtonElement>(".arr-shape-btn").forEach((btn) => {
       btn.disabled = state.count <= 1;
@@ -2430,7 +2425,7 @@ function redrawArrangementChordCards() {
 }
 
 function cycleChordShape(name: string, delta: number) {
-  if (!cycleShapeChoice(name, tuning, delta)) return;
+  if (!cycleShapeChoice(name, activeTuning(), delta)) return;
   invalidateFretboards();
   redrawArrangementChordCards();
   updateTransitionCoach(true);
@@ -2490,7 +2485,7 @@ function updateFretboardPanelState(matched: boolean) {
   setShapeControls(next.name, nextShapeControlsEl, nextShapeCountEl, nextShapePrevBtn, nextShapeNextBtn);
   if (next.name) {
     const eta = timed ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
-    fingerTagEl.textContent = shapeTag(next.name, chordShapeState(next.name, tuning), eta);
+    fingerTagEl.textContent = shapeTag(next.name, chordShapeState(next.name, activeTuning()), eta);
   }
   updateTransitionCoach();
 }
@@ -2509,8 +2504,8 @@ function updateTransitionCoach(force = false) {
   const nowName = currentFretboardChord(chord?.detected ?? "", false).name;
   const next = nextDistinctChordInfo();
   const nextName = next.name;
-  const nowState = chordShapeState(nowName, tuning);
-  const nextState = chordShapeState(nextName, tuning);
+  const nowState = chordShapeState(nowName, activeTuning());
+  const nextState = chordShapeState(nextName, activeTuning());
   const eta = timed && nextName ? ` · ${formatBeatDistance(next.beatsUntil)}` : "";
   const key = `${nowName}|${nowState.index}|${nextName}|${nextState.index}|${songIdx}|${eta}`;
   if (!force && key === lastTransitionKey) return;
@@ -2525,7 +2520,7 @@ function updateTransitionCoach(force = false) {
   }
 
   transitionTagEl.textContent = `${nowName} -> ${nextName}${eta}`;
-  const actions = tuning.stringLabels.map((label, i) => {
+  const actions = activeTuning().stringLabels.map((label, i) => {
     const from = nowState.voicing![i];
     const to = nextState.voicing![i];
     let kind = "move";
@@ -2573,7 +2568,7 @@ function drawFretboard(
   els: { svg: Element; title: Element; tag: Element },
   lastKey: string
 ): string {
-  const state = chordShapeState(name, tuning);
+  const state = chordShapeState(name, activeTuning());
   const key = `${label}|${name}|${played}|${state.index}|${state.count}|${state.voicing ? voicingKey(state.voicing) : "none"}`;
   if (key === lastKey) return lastKey;
 
@@ -2597,7 +2592,7 @@ function drawFretboard(
   els.title.textContent = label;
   if (!voicing) {
     els.svg.innerHTML = `<text x="75" y="105" fill="${dim}" font-size="11" font-family="JetBrains Mono, monospace" text-anchor="middle">no diagram</text>`;
-    els.tag.textContent = name ? `${name} · ${tuning.spelling}` : tuning.spelling;
+    els.tag.textContent = name ? `${name} · ${activeTuning().spelling}` : activeTuning().spelling;
     return key;
   }
   els.tag.textContent = shapeTag(name, state);
@@ -2625,7 +2620,7 @@ function drawFretboard(
   for (let s = 0; s < nS; s++) {
     const x = x0 + s * dx;
     parts.push(`<line x1="${x}" y1="${y0}" x2="${x}" y2="${y0 + h}" stroke="${dim}" stroke-width="1.2"/>`);
-    parts.push(`<text x="${x}" y="${y0 + h + 18}" fill="${dim}" font-size="11" font-family="Chakra Petch, sans-serif" text-anchor="middle">${tuning.stringLabels[s]}</text>`);
+    parts.push(`<text x="${x}" y="${y0 + h + 18}" fill="${dim}" font-size="11" font-family="Chakra Petch, sans-serif" text-anchor="middle">${activeTuning().stringLabels[s]}</text>`);
 
     const fret = voicing[s];
     if (fret === null) {
@@ -2876,7 +2871,7 @@ function updatePeaksList(peaks: { i: number; v: number }[]) {
 requestAnimationFrame(renderChords);
 
 initStrumCam({
-  isActiveView: () => mode === "strumcam",
+  isActiveView: () => currentMode() === "strumcam",
   setMicActive: (on) => {
     chordListening = on;
     syncKeepAwake();
