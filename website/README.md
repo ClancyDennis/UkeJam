@@ -30,11 +30,27 @@ Cloud Run injects `PORT`; the nginx image's entrypoint substitutes it into
 `nginx/default.conf.template` at startup, so the container honors whatever port
 Cloud Run assigns (8080 by default).
 
-To use a custom domain (e.g. `ukejam.app`), map it after the first deploy:
+## Custom domain: ukejam.otti-tech.de
+
+The site lives at `https://ukejam.otti-tech.de`. After the first deploy, map the
+domain (requires `otti-tech.de` to be a verified domain in the project):
 
 ```bash
-gcloud run domain-mappings create --service ukejam-website --domain ukejam.app
+gcloud run domain-mappings create \
+  --service ukejam-website \
+  --domain ukejam.otti-tech.de \
+  --region us-central1
 ```
+
+Then add the DNS record the command prints at your DNS provider for
+`otti-tech.de` — for a subdomain this is a CNAME:
+
+```text
+ukejam  CNAME  ghs.googlehosted.com.
+```
+
+Cloud Run provisions the TLS certificate automatically once the record
+propagates (can take up to an hour).
 
 ## Local preview
 
@@ -52,12 +68,11 @@ python3 -m http.server 8080 --directory public
 
 ## App Store Connect values
 
-Once deployed, plug the service URL (or your mapped domain) into App Store
-Connect:
+Values to enter in App Store Connect:
 
-- **Support URL:** `https://<your-domain>/support`
-- **Marketing URL:** `https://<your-domain>/`
-- **Privacy Policy URL:** `https://<your-domain>/privacy`
+- **Support URL:** `https://ukejam.otti-tech.de/support`
+- **Marketing URL:** `https://ukejam.otti-tech.de/`
+- **Privacy Policy URL:** `https://ukejam.otti-tech.de/privacy`
 
 ## Updating content
 
