@@ -864,13 +864,39 @@ let arrangementLineOfIdx: HTMLElement[] = [];
 let arrangementChordCards = new Map<string, HTMLElement>();
 let lastArrangementScrollIdx = -1;
 
+// Whether the detector could actually parse the current target. False for a
+// chord name neither side understands (a typo, or a quality we don't support):
+// Rust then holds no target, so `missing`/`extra` come back empty, which looks
+// exactly like a flawless chord. Everything that grades must check this first.
+let targetGradeable = false;
+
 function setTarget(chord: string) {
   targetChord = chord;
-  nativeInvoke("set_target", { chord: chord || null }).catch(() => {});
+  // Assume ungradeable until Rust confirms it parsed. Optimistic-then-correct
+  // would flash a false "Locked in" for a frame on every chord change.
+  targetGradeable = false;
+  nativeInvoke<boolean>("set_target", { chord: chord || null })
+    .then((ok) => {
+      // Ignore a stale reply: the player may have moved on while it was in flight.
+      if (targetChord === chord) targetGradeable = ok && !!chord;
+      updatePracticeUi();
+    })
+    .catch(() => {
+      // The call itself failed (no native runtime, or a transient IPC error), so
+      // Rust never told us either way. Fall back to our own resolver, which
+      // shares its vocabulary: a real chord stays gradeable rather than grading
+      // switching itself off silently for the rest of the session.
+      if (targetChord === chord) targetGradeable = chordPitchClasses(chord).length > 0;
+      updatePracticeUi();
+    });
   updatePracticeUi();
 }
 
 function isCleanHit(reading: ChordReading | null): boolean {
+  // No parseable target => nothing was compared => cannot be a hit. Without this
+  // guard an empty diff reads as perfect, which auto-advanced the song and
+  // scored every bar HIT while the player hadn't touched the strings.
+  if (!targetGradeable) return false;
   return !!reading?.active && reading.missing.length === 0 && reading.extra.length <= 1;
 }
 
@@ -1551,11 +1577,17 @@ function resetScoring() {
 // downbeat timestamp used for the timing offset is the one we actually crossed.
 function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number | null) {
   let sealed: BarVerdict | null = null;
-  if (currentBar >= 0 && loadedSong) {
+  const expected = loadedSong?.chordSequence[currentBarChordIdx] ?? "";
+  // A bar whose chord we can't parse has nothing to grade against: the detector
+  // held no target, so missing/extra are empty and the bar would score a
+  // flawless HIT on silence. Skip it entirely rather than feed a fiction to the
+  // trail, the hit rate and the coach.
+  const gradeable = !!expected && chordPitchClasses(expected).length > 0;
+  if (currentBar >= 0 && loadedSong && gradeable) {
     sealed = seal(barAccum, {
       bar: currentBar + 1, // 1-based for anything a human or the LLM reads
       chordIdx: currentBarChordIdx,
-      expected: loadedSong.chordSequence[currentBarChordIdx] ?? "",
+      expected,
       section: sectionOfIdx[currentBarChordIdx] ?? "",
       // Wait-mode holds the playhead until the chord is found, so the gap
       // between downbeat and strum is the mode working as intended, not the
@@ -3248,9 +3280,13 @@ function renderChords() {
     return;
   }
   const now = performance.now();
-  if (chordListening && now - lastChordAt > 300) {
-    chord = { active: false, detected: "", cleanliness: 0, chroma: new Array(12).fill(0), spectrum: new Array(FFT_BINS).fill(0), missing: [], extra: [], rms: 0, onset: false, flux: 0 };
-    if (now - lastChordAt > 1500) setConn(false);
+  // Drop a reading the mic has stopped refreshing. NOT gated on chordListening:
+  // when the stream stops, the last reading used to sit on screen indefinitely,
+  // so the hero chord kept asserting a verdict about audio from minutes ago —
+  // visible as a lit-up "Locked in" on a freshly loaded song with the mic idle.
+  if (chord && now - lastChordAt > 300) {
+    chord = null;
+    if (chordListening && now - lastChordAt > 1500) setConn(false);
   }
 
   const c = chord;
@@ -3273,9 +3309,15 @@ function renderChords() {
     const hero = targetChord || c.detected || "—";
     chordNameEl.textContent = hero;
     chordNameEl.className = "chord-name " + (matched ? "clean" : "dirty");
-    chordSubEl.textContent = targetChord
-      ? matched ? "Locked in" : `heard ${c.detected || "—"}`
-      : "Playing";
+    // A target we can't parse gets no verdict at all — say so plainly instead of
+    // reporting on a comparison that never happened.
+    chordSubEl.textContent = !targetChord
+      ? "Playing"
+      : !targetGradeable
+        ? `can't grade ${targetChord} — heard ${c.detected || "—"}`
+        : matched
+          ? "Locked in"
+          : `heard ${c.detected || "—"}`;
     smoothClean += (c.cleanliness - smoothClean) * 0.2;
     cleanValEl.innerHTML = `${pct}<span class="pct">%</span>`;
     cleanStatusEl.textContent = clean ? "clean" : pct >= 70 ? "almost" : "off";
@@ -3285,6 +3327,9 @@ function renderChords() {
     if (!targetChord) {
       coachEl.className = "coach good";
       coachEl.innerHTML = `<span class="ok">free play</span> · heard <b>${c.detected || "—"}</b>`;
+    } else if (!targetGradeable) {
+      coachEl.className = "coach";
+      coachEl.innerHTML = `<span class="miss">can't grade <b>${targetChord}</b></span> — not a chord we know, so this bar isn't scored`;
     } else if (isCleanHit(c)) {
       coachEl.className = "coach good";
       coachEl.innerHTML = `<span class="ok">nice — that's a clean ${targetChord} ✓</span>`;
@@ -3442,8 +3487,14 @@ function chordPitchClasses(rawName: string): number[] {
     "7sus4": [0, 5, 7, 10],
     "5": [0, 7],
   };
-  const iv = intervals[q] ?? [0, 4, 7];
-  return iv.map((x) => (root + x) % 12);
+  // An unrecognized quality returns [] rather than guessing a major triad.
+  // Guessing meant "Gx" (a typo, or a tab's "x4" repeat marker glued to a
+  // chord) silently became G — the chromagram highlighted G's notes, the
+  // fretboard drew a G, and none of it was in the chart. Keep this in step with
+  // TARGET_QUALITIES in chords.rs; both are the gradeable vocabulary.
+  const iv = intervals[q];
+  if (!iv) return [];
+  return [...new Set(iv.map((x) => (root + x) % 12))];
 }
 
 // Open-string pitch classes come from the active tuning (see TUNINGS).

@@ -183,10 +183,26 @@ fn set_mode(mode: String, state: State<AudioState>) {
 }
 
 /// Set the target chord by name (e.g. "Am"). Pass null/empty to clear.
+///
+/// Returns false when the name could not be parsed, so the caller can tell
+/// "nothing to grade against" from "grading is off". Both leave `target` as
+/// None, but they must not look the same on screen: with no target the diff is
+/// empty, and an empty diff is indistinguishable from a perfect chord. A junk
+/// chord name used to therefore read as a permanent clean hit.
 #[tauri::command]
-fn set_target(chord: Option<String>, state: State<AudioState>) {
-    let pcs = chord.and_then(|c| chords::pitch_classes_for(&c));
-    state.set_target(pcs);
+fn set_target(chord: Option<String>, state: State<AudioState>) -> bool {
+    match chord.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        None => {
+            state.set_target(None);
+            true // deliberately cleared
+        }
+        Some(name) => {
+            let pcs = chords::pitch_classes_for(name);
+            let ok = pcs.is_some();
+            state.set_target(pcs);
+            ok
+        }
+    }
 }
 
 #[tauri::command]

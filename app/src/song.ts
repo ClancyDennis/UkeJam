@@ -28,8 +28,13 @@ export interface Song {
   timeSig: [number, number]; // [numerator, denominator], default [4,4]
 }
 
-// A token that looks like a chord: root + optional accidental + quality.
-const CHORD_TOKEN = /^[A-G][#b]?(maj|min|m|sus|dim|aug|add)?\d*(sus|add|dim|aug)?\d*(\/[A-G][#b]?)?$/;
+// A token that looks like a chord: root + optional accidental + quality, with an
+// optional slash bass. The quality alternatives are ordered longest-first so
+// "m7b5" isn't consumed as bare "m" with "7b5" left dangling — the old pattern
+// rejected Am7b5, Cmaj7 and C6 outright, which sent them down the
+// unknown-chord path.
+const CHORD_TOKEN =
+  /^[A-G][#b]?(maj7|m7b5|7sus4|dim7|add9|sus2|sus4|maj|min|m7|m6|dim|aug|m|7|6|5)?(\/[A-G][#b]?)?$/;
 const CHORD_INLINE = /\[([^\]]+)\]/g;
 const DIRECTIVE = /^\{(\w+)\s*:\s*(.*)\}\s*$/;
 
@@ -90,16 +95,29 @@ function parseInline(line: string): SongLine {
   const chordPos: number[] = [];
   let lyric = "";
   let last = 0;
+  // A `|` seen before a token we then drop still opens a bar; carry it to the
+  // next chord we keep, or the bar line is lost and every following bar in the
+  // line shifts by one.
+  let pendingBar = false;
   CHORD_INLINE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = CHORD_INLINE.exec(line)) !== null) {
     const between = line.slice(last, m.index);
-    const bar = between.includes("|");
+    if (between.includes("|")) pendingBar = true;
     lyric += between.replace(/\|/g, "");
-    chordPos.push(lyric.length); // chord sits before the next lyric char
-    chords.push(m[1]);
-    barStart.push(bar);
     last = m.index + m[0].length;
+    // Brackets are not proof of a chord. Tabs put all sorts in them — repeat
+    // counts, "[Riff]", "[N.C.]", typos like "[Gx]" — and taking every one as a
+    // chord put un-gradeable tokens into chordSequence. The app then showed them
+    // as targets, and because neither side can parse them the detector held no
+    // target at all, so the bar scored a flawless hit on silence.
+    if (!isChordToken(m[1].trim())) {
+      continue;
+    }
+    chordPos.push(lyric.length); // chord sits before the next lyric char
+    chords.push(m[1].trim());
+    barStart.push(pendingBar);
+    pendingBar = false;
   }
   lyric += line.slice(last).replace(/\|/g, "");
   return { chords, barStart, chordPos, lyric: lyric.trimEnd() };
