@@ -27,6 +27,7 @@ Stdlib + numpy + sounddevice, like server.py, whose SSE pattern this follows.
 
 import json
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -88,11 +89,29 @@ ONSET_MIN_PEAK = 0.05
 LEVEL_GOOD_PEAK = 0.30
 
 # The drill: speed is the variable that matters most, since it decides whether the
-# stagger clears the leakage floor. Shapes cover both decision paths — C/G settle
-# on the first attack, Am/F only on the second (their first attack is a unison).
+# stagger clears the leakage floor.
 DRILL_BPMS = [60, 90, 120, 160]
-DRILL_SHAPES = ["C", "Am", "G", "F"]
 DRILL_STRUMS = 8  # per (shape, direction, bpm) cell
+
+# Shapes are per tuning, and the choice is not cosmetic — it decides how much
+# evidence each strum can carry.
+#
+# Standard is the awkward one: it is RE-ENTRANT (string 4 sounds above string 3),
+# so first-position shapes put string 4 and string 1 on the same pitch. That unison
+# is unusable for ordering, leaving only 2 of 4 strings trackable on C, Am and F.
+#
+# Baritone is not re-entrant, so G/D/A/Dm/Bm give all FOUR strings trackable —
+# three ordered pairs instead of one, which is materially stronger evidence. C, Em
+# and Am on a baritone still only give 2 (adjacent thirds fall inside each other's
+# spectral skirt), and E gives just 1, so it can't be classified at all.
+DRILL_SHAPES = {
+    # 4-trackable shapes first: those are the ones worth trusting.
+    "baritone": ["G", "D", "A", "C"],
+    "standard": ["C", "G", "Am", "F"],
+}
+# Below this many trackable strings there are no orderable pairs at all, so the
+# shape is excluded rather than offered as a drill that can only report unknown.
+MIN_TRACKABLE = 2
 
 CLIP_DIR = "clips"
 
@@ -146,6 +165,15 @@ def shape_info(chord, tuning):
 def _string_labels(tuning):
     """Open-string note names in physical order (string 4 first)."""
     return [midi_to_name(m)[:-1] for m in TUNINGS[tuning]["open_midi"]]
+
+
+def _usable(chord, tuning):
+    """Can this shape carry a direction reading on this tuning at all?"""
+    frets = load_voicings(tuning).get(chord)
+    if frets is None:
+        return False
+    return len(trackable_strings(frets, tuning, bin_hz=SR / BLOCK,
+                                 min_bins=MIN_SEP_BINS)) >= MIN_TRACKABLE
 
 
 # --------------------------------------------------------------------------
@@ -402,7 +430,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "application/json", json.dumps({
                 "target": target,
                 "shape": shape_info(target["chord"], target["tuning"]),
-                "shapes": DRILL_SHAPES,
+                "shapes": DRILL_SHAPES[target["tuning"]],
+                "tunings": {t: {"spelling": TUNINGS[t]["spelling"],
+                                "shapes": DRILL_SHAPES[t]}
+                            for t in sorted(DRILL_SHAPES)},
                 "bpms": DRILL_BPMS,
                 "strumsPerCell": DRILL_STRUMS,
                 "mic": {"name": _mic["name"], "sr": _mic["sr"]},
@@ -428,6 +459,12 @@ class Handler(BaseHTTPRequestHandler):
                 for k in ("chord", "direction", "bpm", "tuning"):
                     if k in data:
                         _target[k] = data[k]
+                # A chord name valid on one tuning may be absent from the other's
+                # table, or usable there but with too few trackable strings. Fall
+                # back to that tuning's first drill shape rather than leaving the
+                # target pointing at something unmeasurable.
+                if not _usable(_target["chord"], _target["tuning"]):
+                    _target["chord"] = DRILL_SHAPES[_target["tuning"]][0]
                 target = dict(_target)
             self._send(200, "application/json", json.dumps({
                 "target": target,
@@ -477,10 +514,21 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def main():
+def main(tuning="standard"):
+    with _lock:
+        _target["tuning"] = tuning
+        _target["chord"] = DRILL_SHAPES[tuning][0]
     threading.Thread(target=audio_loop, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"strum lab: http://localhost:{PORT}")
+    # The tuning is printed first and loudly. Defaulting to standard silently is
+    # exactly how a baritone session came to be measured against standard-tuning
+    # frequencies: two of the four probes landed on HARMONICS of the wrong strings,
+    # which reversed the apparent order and made every downstroke read as an
+    # upstroke. Wrong tuning does not produce silence — it produces confident
+    # nonsense, so it has to be impossible to overlook.
+    print(f"  TUNING: {tuning} ({TUNINGS[tuning]['spelling']})"
+          f"   <- must match your instrument, or readings are meaningless")
     print(f"  mic: {sd.query_devices(kind='input')['name']} "
           f"(analysing at {SR}Hz to match the offline study)")
     print(f"  needs ~{MIN_SEPARATION_MS}ms of string stagger to call a direction; "
@@ -497,7 +545,7 @@ def main():
 # --------------------------------------------------------------------------
 # self-test
 # --------------------------------------------------------------------------
-def self_test():
+def self_test(tuning="standard"):
     """Drive the Listener with synthetic strums — no mic, no browser.
 
     Checks the two things that are easy to get wrong and invisible once you're
@@ -512,27 +560,28 @@ def self_test():
     """
     from analyse_strums import synth_strum
 
-    print("SELF-TEST — synthetic strums through the live Listener")
+    print(f"SELF-TEST — synthetic strums through the live Listener "
+          f"({tuning}, {TUNINGS[tuning]['spelling']})")
     print(f"  chunk {CHUNK} ({1000*CHUNK/SR:.1f}ms), analyse {ANALYSE_MS}ms, "
           f"lead {LEAD_MS}ms, refractory {ONSET_REFRACTORY_MS}ms\n")
-    voicings = load_voicings("standard")
+    voicings = load_voicings(tuning)
     n = 6
     bad = []
     for bpm in DRILL_BPMS:
-        for chord in DRILL_SHAPES:
+        for chord in DRILL_SHAPES[tuning]:
             if chord not in voicings:
                 continue
             for direction in ("down", "up"):
                 spacing = 60.0 / bpm
                 with _lock:
                     _target.update({"chord": chord, "direction": direction,
-                                    "bpm": bpm, "tuning": "standard"})
+                                    "bpm": bpm, "tuning": tuning})
                     _events.clear()
                     _seq["n"] = 0
                 listener = Listener(SR)
                 buf = np.zeros(int((0.4 + spacing * n + 0.5) * SR))
                 for i in range(n):
-                    x, _lead = synth_strum(voicings[chord], "standard", direction,
+                    x, _lead = synth_strum(voicings[chord], tuning, direction,
                                            12.0, dur=min(0.6, spacing * 0.95), seed=i)
                     s = int((0.4 + i * spacing) * SR)
                     m = min(len(x), len(buf) - s)
@@ -566,7 +615,17 @@ def self_test():
 
 
 if __name__ == "__main__":
-    import sys
-    if "--self-test" in sys.argv:
-        sys.exit(0 if self_test() else 1)
-    main()
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--tuning", choices=sorted(DRILL_SHAPES), default="standard",
+                    help="YOUR instrument's tuning. Getting this wrong does not "
+                         "fail loudly — it measures harmonics of the wrong "
+                         "strings and reverses the apparent direction.")
+    ap.add_argument("--self-test", action="store_true",
+                    help="synthetic strums through the capture path; no mic needed")
+    args = ap.parse_args()
+
+    if args.self_test:
+        sys.exit(0 if self_test(args.tuning) else 1)
+    main(args.tuning)

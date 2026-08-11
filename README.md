@@ -278,9 +278,21 @@ The interactive way to run the study — play into the mic and watch each strum 
 measured:
 
 ```bash
-.venv/bin/python strum_lab.py --self-test   # verify the rig before trusting it
-.venv/bin/python strum_lab.py               # then open http://localhost:8766
+.venv/bin/python strum_lab.py --tuning baritone --self-test   # verify the rig
+.venv/bin/python strum_lab.py --tuning baritone               # localhost:8766
 ```
+
+**Set the tuning to your actual instrument.** Getting it wrong does not fail
+loudly — it is the one mistake that manufactures confident nonsense. A baritone C
+sounds E3 G3 C4 E4, but the standard-tuning probes look for G4 392 Hz and C5 523 Hz,
+which are the *second harmonics* of G3 and C4. So the probe meant to fire last
+watches a string struck third, the order comes out reversed, and **every downstroke
+reads as an upstroke** with a healthy confidence margin. The selector is in the page
+header and the startup banner prints the tuning first for that reason.
+
+Baritone is the better instrument for this study, incidentally: it isn't re-entrant,
+so `G`, `D` and `A` give all four strings trackable — three ordered pairs of evidence
+instead of the single pair most standard-tuning first-position shapes can offer.
 
 The page shows **the exact fingering to play**, which is the point rather than a
 convenience: the analyser picks which frequencies to track *from the voicing table*,
