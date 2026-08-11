@@ -298,6 +298,29 @@ strum so takes are comparable.
 Watch the **wrong** count above all. Unknown is fine — no arrow gets drawn. Wrong
 would teach a learner the opposite of what they played.
 
+**Get set up first, then record.** The level meter is live before you start, so you
+can fix your distance and gain up front. `● record` captures the session's **raw
+audio**, not just the measurements, which is what makes the recording worth taking:
+
+```bash
+.venv/bin/python analyse_strums.py clips/lab_C_down_60_*.npy
+```
+
+That re-runs the same performance through the current code. Every threshold in this
+study is a guess until it meets a real ukulele, and without the samples each new
+guess costs another take. Each session writes three files to `clips/`: `.npy` (audio),
+`.meta.json` (shape, direction, tempo, tuning) and `.strums.jsonl` (the measurements
+as they were made). Every strum is also printed to the terminal as it happens, so a
+run always leaves a record you can point at.
+
+**Watch the level.** Strums below peak 0.30 are flagged `QUIET` and their timing is
+not trustworthy — a weak attack has a mushier envelope edge, which inflates the very
+stagger the study is measuring. The first real session came in at median peak 0.15
+and reported a 2.3 ms median stagger, close enough to the 2.8 ms leakage floor that
+there was no way to separate the player from the gain. If more than a third of a run
+is quiet, the tally says so instead of letting a gain problem read as a physics
+result.
+
 `--self-test` drives the whole capture path with synthetic strums at every tempo,
 checking that each strum produces exactly one onset and that the analysis slice has
 enough lead-in silence for the attack to be locatable. Both of those broke during

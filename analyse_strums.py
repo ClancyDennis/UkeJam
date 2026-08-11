@@ -208,7 +208,17 @@ def attack_time(times, mags, frac=ATTACK_FRAC):
         return None
     i = int(above[0])
     if i == 0:
-        return float(times[0])
+        # Already above the threshold in the very first envelope sample, so the
+        # rising edge happened at or before the window opened and cannot be
+        # located — return None rather than times[0].
+        #
+        # Reporting times[0] was actively harmful: every such string got the SAME
+        # timestamp (BLOCK/2 = 23.2ms), so several unlocatable strings looked
+        # perfectly simultaneous, or one locatable string paired against a fake
+        # 23.2ms produced a large fabricated gap. In a smoke run against room
+        # noise this manufactured confident WRONG directions with margins up to
+        # 0.83 — the failure mode most likely to be mistaken for a real result.
+        return None
     # Interpolate between the straddling hops for sub-hop resolution.
     m0, m1 = rise[i - 1], rise[i]
     if m1 == m0:
@@ -531,18 +541,32 @@ def self_test(tuning="standard", verbose=False):
 # ---------------------------------------------------------------------------
 
 def load_take(path):
+    """Load a take's audio plus whatever metadata sits beside it.
+
+    Two producers, two sidecar formats — accepting both means a strum_lab session
+    can be re-analysed by exactly the same code as a record_strums take:
+      - record_strums.py writes `<name>_meta.npy` (pickled dict)
+      - strum_lab.py writes `<name>.meta.json`
+    """
     x = np.load(path)
-    meta_path = path.replace(".npy", "_meta.npy")
     meta = {}
-    if os.path.exists(meta_path):
-        meta = np.load(meta_path, allow_pickle=True).item()
+    json_meta = path[:-len(".npy")] + ".meta.json" if path.endswith(".npy") else ""
+    npy_meta = path.replace(".npy", "_meta.npy")
+    if json_meta and os.path.exists(json_meta):
+        import json as _json
+        with open(json_meta) as fh:
+            meta = _json.load(fh)
+    elif os.path.exists(npy_meta):
+        meta = np.load(npy_meta, allow_pickle=True).item()
     else:
         # Fall back to the filename: strums_<chord>_<dir>.npy
-        base = os.path.basename(path)[len("strums_"):-len(".npy")]
-        parts = base.rsplit("_", 1)
-        if len(parts) == 2:
-            meta = {"chord": parts[0], "direction": parts[1],
-                    "tuning": "standard", "sr": SR}
+        base = os.path.basename(path)
+        if base.startswith("strums_"):
+            base = base[len("strums_"):-len(".npy")]
+            parts = base.rsplit("_", 1)
+            if len(parts) == 2:
+                meta = {"chord": parts[0], "direction": parts[1],
+                        "tuning": "standard", "sr": SR}
     return np.ascontiguousarray(x, dtype=np.float64), meta
 
 
@@ -716,7 +740,11 @@ def verdict(results):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("paths", nargs="*", help="clips/strums_*.npy")
+    # Takes from record_strums.py and sessions from strum_lab.py are both just
+    # .npy plus a sidecar, so one positional argument covers both — no separate
+    # --session flag, which would only be a second name for the same code path.
+    ap.add_argument("paths", nargs="*",
+                    help="clips/strums_*.npy or clips/lab_*.npy")
     ap.add_argument("--synthetic", action="store_true",
                     help="self-test on synthetic strums with known stagger")
     ap.add_argument("--self-check", action="store_true",
