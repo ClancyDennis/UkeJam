@@ -98,9 +98,9 @@ pub enum Mode {
     Fuse,
 }
 
-/// The provider settings the frontend keeps (Setup view, localStorage) and
-/// sends along with every AI invoke.
-#[derive(Debug, Clone, Deserialize)]
+/// The provider settings chosen in Setup, persisted natively (settings.rs) and
+/// sent along with every AI invoke.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
     /// `apple` (on-device), `openrouter`, or `openai` (any compatible endpoint).
@@ -118,8 +118,36 @@ impl AiConfig {
         self.provider == "apple"
     }
 
+    /// The endpoint and key to actually call, with the legacy
+    /// `UKEJAM_PROXY_URL`/`UKEJAM_PROXY_KEY` env vars taking precedence for
+    /// the OpenAI-compatible provider. Those env vars predate the provider
+    /// picker (they configured the localhost dev proxy), so honouring them
+    /// keeps existing dev machines working without touching Setup. They are
+    /// deliberately ignored for OpenRouter, whose endpoint is fixed and whose
+    /// key comes from the sign-in.
+    fn endpoint(&self) -> (String, String) {
+        let env = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if self.provider != "openai" {
+            return (self.base_url.trim().to_string(), self.api_key.trim().to_string());
+        }
+        (
+            // The env var names a full chat-completions URL (that is what the
+            // old proxy config was), so strip the suffix chat_url re-appends.
+            env("UKEJAM_PROXY_URL")
+                .map(|url| url.trim_end_matches("/chat/completions").to_string())
+                .unwrap_or_else(|| self.base_url.trim().to_string()),
+            env("UKEJAM_PROXY_KEY").unwrap_or_else(|| self.api_key.trim().to_string()),
+        )
+    }
+
     fn chat_url(&self) -> Result<String, String> {
-        let base = self.base_url.trim().trim_end_matches('/');
+        let base = self.endpoint().0;
+        let base = base.trim_end_matches('/');
         if base.is_empty() {
             return Err("no endpoint configured — set up AI enhance in ⚙ Setup".into());
         }
@@ -202,12 +230,16 @@ fn remote_chat(config: &AiConfig, system: &str, user: &str) -> Result<String, St
         body["temperature"] = json!(0);
     }
 
+    let url = config.chat_url()?;
     let resp = http_client()?
-        .post(config.chat_url()?)
+        .post(&url)
         .headers(auth_headers(config))
         .json(&body)
         .send()
-        .map_err(|e| format!("request failed: {e}"))?;
+        // Naming the URL matters most for the custom-endpoint provider, where
+        // an unreachable host is the likeliest failure and the player is the
+        // one who typed the address.
+        .map_err(|e| format!("request to {url} failed (endpoint reachable? configurable in ⚙ Setup): {e}"))?;
 
     let status = resp.status();
     let data: serde_json::Value = resp
@@ -244,7 +276,7 @@ fn auth_headers(config: &AiConfig) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     // Keyless local endpoints (LM Studio, Ollama's compatible API) are fine —
     // only send Authorization when there is something to send.
-    let key = config.api_key.trim();
+    let key = config.endpoint().1;
     if !key.is_empty() {
         if let Ok(value) = format!("Bearer {key}").parse() {
             headers.insert(reqwest::header::AUTHORIZATION, value);
@@ -297,7 +329,10 @@ pub fn enhance_tab(
 /// Setup view's model picker. Works unauthenticated where the endpoint allows
 /// it (OpenRouter's catalog does).
 pub fn list_models(config: &AiConfig) -> Result<Vec<String>, String> {
-    let base = config.base_url.trim().trim_end_matches('/');
+    // endpoint() so an env-var override is scanned rather than the stale
+    // saved URL — the catalog must match what a request would actually hit.
+    let base = config.endpoint().0;
+    let base = base.trim_end_matches('/');
     if base.is_empty() {
         return Err("enter a base URL first".into());
     }

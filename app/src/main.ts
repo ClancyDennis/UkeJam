@@ -1,11 +1,12 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { addSong, listSongs, deleteSong, getSong, renameSong, LibraryFullError, type SongRecord } from "./library";
+import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
 import {
   AI_PROVIDERS,
   aiConfigProblem,
   appleAvailabilityHint,
+  hydrateAiConfig,
   invokeAiConfig,
   loadAiConfig,
   saveAiConfig,
@@ -770,6 +771,10 @@ addSongBtn.addEventListener("click", async () => {
   // mode: fuse a lyric tab onto a MIDI chart, simplify a MIDI chart, or convert
   // a messy pasted tab. (fuse needs both a staged MIDI and pasted lyrics.)
   const mode = pendingMidi && lyricTab ? "fuse" : pendingMidi ? "midi" : "messy";
+  // The saved provider config is read from the native store asynchronously at
+  // boot; a song added before that lands would otherwise be enhanced with the
+  // seeded default rather than what the player configured.
+  if (aiEnhanceToggle.checked) await aiConfigReady;
   // A provider that can't run (no key, Apple Intelligence unavailable) skips
   // the AI step with a pointer to Setup instead of failing a doomed request.
   const aiProblem = aiEnhanceToggle.checked ? aiEnhanceProblem() : null;
@@ -1011,6 +1016,12 @@ function renderSongList() {
     songListEl.appendChild(row);
   }
 }
+
+// The list renders from the in-memory library, which starts on the
+// localStorage seed; refresh it once the durable native store has loaded.
+void libraryReady.then(() => {
+  if (mode === "library") renderSongList();
+});
 
 function escapeHtml(s: string): string {
   const d = document.createElement("div");
@@ -1839,6 +1850,18 @@ sfOpenFolderBtn.addEventListener("click", () => {
   nativeInvoke("open_data_dir").catch((e) => console.warn("open_data_dir failed", e));
 });
 
+// Mobile platforms have no user-facing file manager to open into the app's
+// sandbox; hide desktop-only affordances and give CSS a hook (body.mobile)
+// for touch-sized layout tweaks beyond what width queries catch.
+void nativeInvoke<string>("platform")
+  .then((os) => {
+    if (os === "ios" || os === "android") {
+      document.body.classList.add("mobile");
+      sfOpenFolderBtn.hidden = true;
+    }
+  })
+  .catch(() => {});
+
 nativeListen<{ received: number; total: number }>("soundfont_progress", (event) => {
   const { received, total } = event.payload;
   const mb = (n: number) => (n / 1e6).toFixed(1);
@@ -1909,9 +1932,15 @@ calibrateBtn.addEventListener("click", async () => {
 });
 
 // --- AI enhance provider settings (Setup screen) ---
-// The config lives in localStorage (see ai.ts) and travels with every
-// enhance/test invoke; the Rust side never persists it.
+// Seeded synchronously from localStorage, then replaced by the durable native
+// store (see ai.ts); the live object travels with every enhance/test invoke.
 const aiConfig = loadAiConfig();
+// Resolves once the durable store has been read. Anything that sends the
+// config awaits this first, so an enhance fired seconds after launch can't go
+// out with a stale seed (or, on a fresh install, an empty one).
+const aiConfigReady: Promise<void> = hydrateAiConfig(aiConfig).then((loaded) => {
+  if (loaded) renderAiPanel();
+});
 // On-device availability, probed async at boot. Anything but "available"
 // greys out the Apple option with the reason.
 let appleStatus = "unsupportedHost";

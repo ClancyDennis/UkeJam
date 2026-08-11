@@ -1,8 +1,18 @@
-// AI-enhance provider configuration. The choice (Apple Intelligence on-device,
-// OpenRouter, or any OpenAI-compatible endpoint) lives in localStorage and is
-// sent to Rust with every enhance/test invoke — the frontend owns persistence,
-// the Rust side owns the network (no webview CORS against arbitrary hosts).
-// Same provider approach as Wormdrop Battleground's AI connection setup.
+// AI-enhance provider configuration: Apple Intelligence on-device, OpenRouter,
+// or any OpenAI-compatible endpoint. The config is sent to Rust with every
+// enhance/test invoke — the Rust side owns the network (no webview CORS
+// against arbitrary hosts). Same provider approach as Wormdrop Battleground's
+// AI connection setup.
+//
+// The durable store is app-data `settings.json`, written through the Rust
+// `get_settings`/`set_settings` commands, for the same reason the song library
+// moved off localStorage: the webview store is evictable under disk pressure
+// on iOS, and losing a saved OpenRouter key silently signs the player out.
+// localStorage survives as (a) the one-time migration source for configs saved
+// before this moved native and (b) the store when running without the Tauri
+// runtime (`pnpm dev` in a plain browser tab).
+
+import { invoke } from "@tauri-apps/api/core";
 
 export type AiProviderId = "apple" | "openrouter" | "openai";
 
@@ -42,32 +52,80 @@ export const AI_PROVIDERS: Record<
 };
 
 const STORAGE_KEY = "ukejam.ai.v1";
+const native = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 function isProviderId(value: unknown): value is AiProviderId {
   return value === "apple" || value === "openrouter" || value === "openai";
 }
 
-export function loadAiConfig(): AiConfig {
-  let saved: Partial<AiConfig> = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
-  } catch {
-    // Corrupt storage falls back to defaults.
-  }
-  const provider = isProviderId(saved.provider) ? saved.provider : "openrouter";
+function normalize(saved: Partial<AiConfig> | null | undefined): AiConfig {
+  const provider = isProviderId(saved?.provider) ? saved.provider : "openrouter";
   return {
     provider,
-    baseUrl: typeof saved.baseUrl === "string" ? saved.baseUrl : "",
-    apiKey: typeof saved.apiKey === "string" ? saved.apiKey : "",
-    model: typeof saved.model === "string" && saved.model ? saved.model : AI_PROVIDERS[provider].defaultModel,
+    baseUrl: typeof saved?.baseUrl === "string" ? saved.baseUrl : "",
+    apiKey: typeof saved?.apiKey === "string" ? saved.apiKey : "",
+    model:
+      typeof saved?.model === "string" && saved.model ? saved.model : AI_PROVIDERS[provider].defaultModel,
   };
 }
 
-export function saveAiConfig(config: AiConfig) {
+function loadLocal(): AiConfig {
+  try {
+    return normalize(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}"));
+  } catch {
+    // Corrupt storage falls back to defaults.
+    return normalize(null);
+  }
+}
+
+/** The synchronous seed, replaced by the native store once `aiConfigReady`. */
+export function loadAiConfig(): AiConfig {
+  return loadLocal();
+}
+
+/** The settings.json shape (Rust `settings::Settings`). */
+interface NativeSettings {
+  ai?: AiConfig | null;
+}
+
+/**
+ * Read the durable store into `config` (mutated in place so callers can hold
+ * one live object), migrating a localStorage-era config up on first run.
+ * Resolves to true when something was loaded, so the UI can re-render.
+ */
+export async function hydrateAiConfig(config: AiConfig): Promise<boolean> {
+  if (!native) return false;
+  try {
+    const stored = await invoke<NativeSettings>("get_settings");
+    if (stored?.ai) {
+      Object.assign(config, normalize(stored.ai));
+      return true;
+    }
+    // First run after the localStorage era: promote the old config. The
+    // localStorage copy is left in place as a safety net.
+    if (localStorage.getItem(STORAGE_KEY)) {
+      await saveAiConfig(config);
+      return true;
+    }
+  } catch {
+    // No settings yet, or the native call failed — keep the seeded config.
+  }
+  return false;
+}
+
+export async function saveAiConfig(config: AiConfig): Promise<void> {
+  // Always mirror to localStorage: it is the store in a plain browser, and a
+  // harmless duplicate (plus migration safety net) in the packaged app.
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   } catch {
-    // Quota/denied storage: settings just won't survive a restart.
+    // Quota/denied storage: fall through to the native write.
+  }
+  if (!native) return;
+  try {
+    await invoke("set_settings", { settings: { ai: config } });
+  } catch {
+    // A failed native write leaves the localStorage copy as the fallback.
   }
 }
 

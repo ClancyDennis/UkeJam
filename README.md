@@ -89,6 +89,53 @@ cargo check --manifest-path app/src-tauri/Cargo.toml --examples
 The Rust app currently has no meaningful unit-test coverage, so `cargo test`
 mainly proves the crate compiles.
 
+### iOS
+
+The app targets iOS through Tauri 2's mobile support. The iOS-specific pieces
+are already in the tree:
+
+- `app/src-tauri/src/ios_audio.rs` configures `AVAudioSession`
+  (playAndRecord + speaker/bluetooth routing) before every cpal stream start —
+  without this an iOS build records nothing and plays through the earpiece.
+- `app/src-tauri/Info.plist` carries the required `NSMicrophoneUsageDescription`
+  and is merged into the generated Xcode project.
+- The song library persists to a JSON file in the app's data dir (not webview
+  localStorage, which iOS can evict under disk pressure).
+- ✨ AI enhance has no localhost proxy on a phone; pick a provider on the Setup
+  screen instead — Apple Intelligence runs on-device, and the cloud options
+  reach any server (persisted in `settings.json` in the app data dir, for the
+  same eviction reason as the library).
+- OpenRouter sign-in uses the iOS system browser sheet, so it gets Safari's
+  session, Keychain autofill and passkeys rather than a chrome-less webview.
+- The UI collapses to a single scrolling column below 860 px and respects
+  notch/home-indicator safe areas.
+
+Building requires a Mac with Xcode (plus an Apple Developer account for
+devices/TestFlight):
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+cd app
+pnpm install
+pnpm tauri ios init   # generates the Xcode project under src-tauri/gen/apple
+pnpm tauri ios dev    # run on simulator or a plugged-in device
+pnpm tauri ios build  # archive/IPA
+```
+
+Xcode does the final link against the Rust static lib, so the audio system
+frameworks cpal needs (CoreAudio, AudioToolbox, plus AVFoundation for the
+session glue) are declared in `tauri.conf.json > bundle > iOS > frameworks` —
+cargo-side link flags don't survive into a `.a`. If that list changes after
+the project was generated, delete `src-tauri/gen/apple` and re-run
+`pnpm tauri ios init` (undefined `_AudioComponent*` / `_AudioUnit*` symbols at
+link time mean the generated project predates the list).
+
+Note the simulator has no useful mic input — test the tuner/detector on a real
+device. Known follow-up: AVAudioSession interruption events (phone calls,
+Siri) currently rely on the user restarting listening/playback, which
+re-activates the session; a native interruption observer would resume
+automatically.
+
 ## Python Prototype
 
 Setup:
@@ -123,7 +170,8 @@ Current observed results in this workspace:
 | `app/src/main.ts` | Main frontend state/UI: views, library, import, practice flow |
 | `app/src/song.ts` | TypeScript ChordPro/tab parser |
 | `app/src/midi.ts` | Dependency-free SMF parser + timed chord chart generation |
-| `app/src/library.ts` | Browser-local song library |
+| `app/src/library.ts` | Song library (persists via Rust to app-data `library.json`) |
+| `app/src-tauri/src/ios_audio.rs` | iOS `AVAudioSession` setup (no-op elsewhere) |
 | `app/src-tauri/src/audio.rs` | Mic capture, tuner, chroma chord detector |
 | `app/src-tauri/src/chords.rs` | Chord templates, pitch classes, missing/extra diff |
 | `app/src-tauri/src/backing.rs` | MIDI backing playback through `rustysynth` |
@@ -166,10 +214,18 @@ through a provider chosen in the **⚙ Setup** screen:
   protocol (OpenAI itself, LiteLLM, LM Studio, Ollama, a local proxy). The
   API key is optional for keyless local servers.
 
-The settings persist in the frontend's `localStorage` and travel with each
-invoke; the remote calls themselves run in Rust so browser CORS against
-arbitrary endpoints is avoided. If the provider is unconfigured or the call
-fails, the UI falls back to saving the raw chart.
+The settings persist natively in `settings.json` in the app data dir — not
+webview `localStorage`, which iOS can evict under disk pressure, taking a
+saved OpenRouter key with it — and travel with each invoke; the remote calls
+themselves run in Rust so browser CORS against arbitrary endpoints is avoided.
+A config saved before the provider picker landed (a bare `proxy_url`/
+`proxy_key`) is migrated up into the OpenAI-compatible provider on first load.
+If the provider is unconfigured or the call fails, the UI falls back to saving
+the raw chart.
+
+For the OpenAI-compatible provider only, the `UKEJAM_PROXY_URL` /
+`UKEJAM_PROXY_KEY` env vars still win over the saved endpoint and key, so an
+existing dev machine keeps working without touching Setup.
 
 ## Experiments
 

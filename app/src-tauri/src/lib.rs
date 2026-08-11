@@ -2,6 +2,9 @@ mod audio;
 mod backing;
 mod chords;
 mod enhance;
+mod ios_audio;
+mod library;
+mod settings;
 mod soundfont;
 
 use std::sync::Mutex;
@@ -239,6 +242,13 @@ async fn openrouter_exchange(code: String, verifier: String) -> Result<String, S
         .map_err(|e| format!("task join: {e}"))?
 }
 
+/// The OS the native side was compiled for ("ios", "android", "macos",
+/// "linux", "windows") — lets the frontend hide desktop-only affordances.
+#[tauri::command]
+fn platform() -> &'static str {
+    std::env::consts::OS
+}
+
 // ---- backing-track playback (rustysynth) ----
 
 /// Load MIDI as the backing track. `midi` is base64 (decoded here, rather than
@@ -334,6 +344,11 @@ pub fn run() {
             stop_backing,
             set_backing_loop,
             backing_status,
+            platform,
+            library::library_load,
+            library::library_save,
+            settings::get_settings,
+            settings::set_settings,
             soundfont::soundfont_status,
             soundfont::download_soundfont,
             soundfont::open_data_dir
