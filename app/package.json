@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "verify:voicings": "node src/verify-voicings.mjs",
     "verify:verdicts": "node src/verify-verdicts.mjs",
+    "verify:strumcam": "node src/verify-strumcam.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "verify:songparse": "node src/verify-songparse.mjs"

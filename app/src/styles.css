@@ -3284,3 +3284,195 @@ body {
 body.mobile .grain {
   display: none;
 }
+
+/* ---------- StrumCam view (camera strum-direction lab) ---------- */
+.strumcam-view {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 360px 1fr 300px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.sc-preview-wrap {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--bg-panel-2);
+}
+#sc-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+/* the last call, big enough to read from an arm's length away */
+.sc-glyph {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+  font-size: 46px;
+  line-height: 1;
+  color: var(--text-faint);
+  text-shadow: 0 0 14px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.sc-glyph.down {
+  color: var(--teal);
+  text-shadow: 0 0 16px rgba(25, 227, 196, 0.6);
+}
+.sc-glyph.up {
+  color: var(--gold);
+  text-shadow: 0 0 16px rgba(245, 196, 81, 0.6);
+}
+.sc-glyph.unsure {
+  color: var(--verdict-miss);
+}
+.sc-glyph.pop {
+  animation: sc-pop 0.3s ease-out;
+}
+@keyframes sc-pop {
+  from {
+    transform: scale(1.55);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-glyph.pop {
+    animation: none;
+  }
+}
+
+.sc-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.sc-controls .listen-btn {
+  margin: 0;
+}
+.sc-cam-panel .setup-copy {
+  margin-top: 12px;
+}
+.sc-cam-panel .setup-status {
+  margin-top: 10px;
+}
+
+.sc-trace-panel {
+  display: flex;
+  flex-direction: column;
+}
+.sc-strip-wrap {
+  flex: 1;
+  min-height: 160px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel-2);
+  overflow: hidden;
+}
+.sc-strip {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sc-tally {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.sc-stat {
+  flex: 1;
+  min-width: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+}
+.sc-k {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.sc-v {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.sc-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sc-calls-empty {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.sc-call {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+}
+.sc-call-arrow {
+  font-weight: 700;
+  font-size: 14px;
+}
+.sc-call.down .sc-call-arrow {
+  color: var(--teal);
+}
+.sc-call.up .sc-call-arrow {
+  color: var(--gold);
+}
+.sc-call.unsure .sc-call-arrow {
+  color: var(--verdict-miss);
+}
+.sc-call-label {
+  color: var(--text);
+}
+.sc-call.unsure .sc-call-label {
+  color: var(--text-dim);
+}
+.sc-call-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .strumcam-view {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .strumcam-view > .panel {
+    flex: 0 0 auto;
+    overflow-y: visible;
+  }
+  .sc-strip-wrap {
+    flex: 0 0 auto;
+    height: 180px;
+  }
+}

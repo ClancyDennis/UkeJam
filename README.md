@@ -25,6 +25,7 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Live chord detection | Working native Rust port: FFT → chroma → template match |
 | Missing / extra note feedback | Working for target chords |
 | Onset (strum) detection | Working: spectral flux, rising-edge gated; validated on real audio |
+| StrumCam (camera direction lab) | Working: in-app view; frame-difference motion fused with mic onsets |
 | Per-bar scoring | Working: HIT / WRONG / MISS per bar, with strum timing |
 | Rhythm scoring | Working: strums per bar and how many landed on the beat grid |
 | Live practice coaching | Working: graded bars → AI advice across bars (needs a provider) |
@@ -367,6 +368,44 @@ originally assumed — and real playing clears it. **A shorter analysis hop woul
 have helped**: the limit is spectral overlap between the strings, not time
 resolution.
 
+### StrumCam (in-app camera lab)
+
+The audio method above tops out at ~80% commit and must be gated on chord
+shape — worst exactly on the standard-tuning beginner shapes. The camera is the
+complementary sensor: a strumming hand moves visibly for 100+ ms per stroke, so
+even 30 fps reads direction on essentially every strum — but it can't time
+string contact. The split in the app is therefore strict: the **mic** says
+*when* (the proven onset detector), the **camera** only answers *which way the
+hand was moving at that instant*.
+
+The first cut is deliberately ML-free: `app/src/strumcam.ts` tracks the
+vertical velocity of the frame-difference motion centroid on a 64×48 luma grid
+— the strumming hand is the dominant mover in a sensibly framed shot. No model
+download, no WASM, no webview integration risk; if the simple signal proves
+insufficient on real hands, a landmark tracker (e.g. MediaPipe Hands) can
+replace `MotionField` behind the same `MotionSample` stream without touching
+the fusion or the UI.
+
+The **StrumCam** view (util bar → ◉ StrumCam) is the in-app feasibility rig,
+same philosophy as the Python strum lab below: camera preview with the motion
+centroid drawn on it, the velocity trace with every mic onset marked, a
+per-strum call list carrying its evidence (speed, sign agreement, frame count),
+and a running tally. As with the audio study, watch the **wrong** calls, not
+the unsure ones — unknown draws no arrow. It also counts **ghost strokes** —
+the hand swept but no string sounded — which a microphone cannot see by
+definition, and which is exactly how strumming rhythm is taught ("keep the hand
+moving, miss the strings on the silent beats"). A `⇅ flip` toggle covers
+rotated mounts, where every call would otherwise come out backwards.
+
+`pnpm --dir app verify:strumcam` drives the analysis core with synthetic frames
+of known motion: down/up sweeps at known speed, stillness, hover jitter (must
+read "unsure", never a coin flip), and direction-at-the-onset beating
+biggest-motion-in-history.
+
+Camera + mic run together only on this screen for now; nothing camera-derived
+feeds practice scoring yet — that graduation depends on the numbers this view
+produces on a real player.
+
 ### Strum lab (live, browser)
 
 The interactive way to run the study — play into the mic and watch each strum get
@@ -483,6 +522,8 @@ re-run as the algorithm changes without playing everything again.
 | `app/tauri-plugin-web-auth/` | Tauri plugin running OAuth sign-in in the system browser sheet (iOS) |
 | `app/src/ai.ts` | AI provider config: persistence + provider registry |
 | `app/src/verdict.ts` | Per-bar scoring: HIT/WRONG/MISS, strum timing, coach digest |
+| `app/src/strumcam.ts` | Camera strum direction: motion field, per-onset calls, ghost strokes |
+| `app/src/verify-strumcam.mjs` | Synthetic-motion checks for the StrumCam analysis core |
 | `strum_model.py` | Voicings read from `main.ts`; down/up templates, unison filter |
 | `strum_lab.py` | Live strum-direction lab (SSE server, shares the analyser) |
 | `strum_lab.html` | Lab page: shape to play, attack timeline, per-tempo tally |
@@ -580,11 +621,18 @@ Demucs weights are large and should stay out of git.
   remain the default practice path.
 - Extended chord naming and simplified playable chord naming can diverge,
   especially from MIDI extraction.
-- Strum direction is **validated but not implemented**. A real baritone staggers the
-  strings ~10 ms, comfortably above the ~4 ms the method needs, at 100% accuracy
-  when it commits. The detector in `audio.rs` is the remaining work, and it should
-  gate on trackable-string count: four-string shapes carry three ordered pairs,
-  two-string shapes carry one and can be flipped by a single bad reading.
+- Strum direction is **validated but not implemented** on the audio side. A real
+  baritone staggers the strings ~10 ms, comfortably above the ~4 ms the method
+  needs, at 100% accuracy when it commits. The detector in `audio.rs` is the
+  remaining work, and it should gate on trackable-string count: four-string
+  shapes carry three ordered pairs, two-string shapes carry one and can be
+  flipped by a single bad reading.
+- The StrumCam motion tracker has **never seen a real hand** — every threshold
+  (energy floor, min speed, consistency, window) is a guess until the view's
+  tally is run against a player calling their own strokes. The camera path is
+  also untested inside the iOS webview (`getUserMedia` needs the
+  `NSCameraUsageDescription` now in `Info.plist`; the simulator has no camera
+  worth testing with).
 
 ## Direction
 

@@ -4,5 +4,7 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>ukejam listens to your ukulele to tune it and detect the chords you play.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>ukejam watches your strumming hand to tell downstrokes from upstrokes. Video is analysed on the device and never stored or sent anywhere.</string>
 </dict>
 </plist>
