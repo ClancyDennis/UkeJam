@@ -300,7 +300,29 @@
         <div class="panel lib-add-panel">
           <div class="panel-title">
             <button class="back-btn" data-mode="play">← Play</button>
-            Add a song <span class="tag">paste a tab or chords</span>
+            Add a song <span class="tag">search, or paste a tab</span>
+          </div>
+          <!-- in-app tab search: find a chord sheet online without leaving
+               the app; a result fills the paste box below -->
+          <div class="tab-search">
+            <div class="tab-search-row">
+              <input
+                id="tab-search-input"
+                class="lib-input"
+                type="text"
+                placeholder="Find a tab online — song and artist…"
+              />
+              <button class="listen-btn ghost" id="tab-search-btn" title="Search Ultimate Guitar in-app">⌕ Search</button>
+              <label
+                class="ai-toggle"
+                title="Describe the song loosely — 'that whistling uke song about a mixtape' — and AI works out what to search for"
+              >
+                <input type="checkbox" id="smart-search" />
+                <span>✨ smart</span>
+              </label>
+            </div>
+            <div class="tab-search-status" id="tab-search-status" hidden></div>
+            <div class="tab-results" id="tab-results" hidden></div>
           </div>
           <div class="lib-fields">
             <input id="song-title" class="lib-input" type="text" placeholder="Song title" />

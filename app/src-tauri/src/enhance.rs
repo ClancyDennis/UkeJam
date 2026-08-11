@@ -115,6 +115,12 @@ pub fn enhance_tab(raw: &str, mode: Mode, lyrics: Option<&str>) -> Result<String
         ),
         Mode::Messy => (SYSTEM, format!("Convert this tab to ChordPro:\n\n{raw}")),
     };
+    chat(system, &user)
+}
+
+/// One chat-completion round-trip against the configured proxy. Shared by tab
+/// enhancement and the tab-search query interpreter (tabsearch.rs).
+pub fn chat(system: &str, user: &str) -> Result<String, String> {
     let body = json!({
         "model": MODEL,
         "temperature": 0,

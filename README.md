@@ -25,6 +25,7 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 | Missing / extra note feedback | Working for target chords |
 | Song library | Working in frontend `localStorage`; Python prototype uses SQLite |
 | Pasted tab / ChordPro import | Working, with local LLM proxy enhancement |
+| In-app tab search | Working: searches Ultimate Guitar from the library screen, in-app WebKit preview window, one-click import; optional ✨ smart mode turns a fuzzy description into searches via the LLM proxy |
 | MIDI import | Working: parses SMF, derives timed chord chart, selects chord-source channels |
 | MIDI backing playback | Working via `rustysynth` + a user-installed SoundFont |
 | Timed chord highway | Working for MIDI/timed songs |
@@ -34,6 +35,22 @@ audio file → Demucs stems → basic-pitch MIDI/chords.
 
 The previous “Rust port + Tauri UI not started” README status is stale. The
 app is now the main product surface.
+
+## Finding tabs in-app
+
+The library screen has a search box that finds chord sheets on Ultimate
+Guitar without leaving the app: the Rust side fetches and parses the pages
+(the same embedded-JSON approach other open-source tab tools use), results
+list in-app, and picking one drops the tab text straight into the paste box —
+title and artist prefilled — where the normal ✨ AI-enhance → Add flow takes
+over. A "view ↗" button opens the actual tab page in a second Tauri webview
+(the system WebKit / WebView2) for eyeballing before importing; that window
+gets no IPC access, it's just a sandboxed preview.
+
+The ✨ smart toggle routes the query through the LLM proxy first, so a loose
+description ("that whistling uke song about a mixtape") becomes one to three
+concrete artist-title searches. If the proxy isn't running, smart mode
+silently degrades to a plain search.
 
 ## SoundFont (backing playback)
 
