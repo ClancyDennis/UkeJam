@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ukejam · strum lab</title>
+<style>
+  :root {
+    --bg: #060a0c; --panel: #0a0f12; --panel2: #0c1316; --line: #16242a;
+    --teal: #19e3c4; --teal-dim: #0f8a78; --gold: #f5c451;
+    --text: #cfe8e6; --dim: #5d7b78;
+    --right: #4cde80; --wrong: #ff5d6c; --unknown: #788492;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh; padding: 18px;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+  }
+  h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: var(--teal); }
+  .sub { font-size: 12px; color: var(--dim); margin-top: 3px; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  .top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .dot.live { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
+
+  .grid { display: grid; grid-template-columns: 300px 1fr 320px; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: linear-gradient(180deg, rgba(12,20,23,.85), rgba(8,13,15,.85));
+    border: 1px solid var(--line); border-radius: 10px; padding: 13px;
+  }
+  .panel-title {
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 10px; display: flex; justify-content: space-between;
+  }
+
+  /* --- the shape to play --- */
+  .shape-head { display: flex; align-items: baseline; gap: 10px; }
+  .chord { font-size: 40px; font-weight: 700; color: var(--gold); line-height: 1; }
+  .arrow { font-size: 34px; line-height: 1; }
+  .arrow.down { color: var(--teal); }
+  .arrow.up { color: var(--gold); }
+  .dirword { font-size: 13px; color: var(--dim); }
+  svg.fb { display: block; margin: 10px auto 4px; }
+  .listening {
+    font-size: 11px; color: var(--dim); line-height: 1.6; border-top: 1px solid var(--line);
+    padding-top: 9px; margin-top: 8px;
+  }
+  .listening b { color: var(--teal); font-weight: 600; }
+  .warn { color: var(--gold); }
+
+  /* --- live verdict --- */
+  .verdict { text-align: center; padding: 8px 0 12px; }
+  .vbig { font-size: 62px; line-height: 1; font-weight: 700; color: var(--unknown); }
+  .vbig.right { color: var(--right); }
+  .vbig.wrong { color: var(--wrong); }
+  .vword { font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-top: 4px; }
+  .vmeta { font-size: 12px; color: var(--dim); margin-top: 8px; }
+
+  /* attack timeline: where each string's attack landed */
+  .tl { position: relative; height: 74px; margin: 12px 0 4px; border-radius: 7px;
+        background: var(--panel2); border: 1px solid var(--line); overflow: hidden; }
+  .tl-mark { position: absolute; top: 0; bottom: 18px; width: 2px; background: var(--teal); }
+  .tl-lab { position: absolute; bottom: 2px; font-size: 10px; color: var(--text);
+            transform: translateX(-50%); white-space: nowrap; }
+  .tl-axis { position: absolute; left: 0; right: 0; bottom: 16px; height: 1px; background: var(--line); }
+  .tl-empty { position: absolute; inset: 0; display: grid; place-items: center;
+              font-size: 11px; color: var(--dim); }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 5px; }
+  .bar > i { display: block; height: 100%; background: var(--teal); }
+
+  /* --- drill --- */
+  .cells { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; font-size: 11px; }
+  .cells .h { color: var(--dim); font-size: 10px; text-align: center; padding-bottom: 2px; }
+  .cell { border: 1px solid var(--line); border-radius: 5px; padding: 4px 2px; text-align: center;
+          cursor: pointer; background: var(--panel2); }
+  .cell:hover { border-color: var(--teal-dim); }
+  .cell.active { border-color: var(--gold); box-shadow: 0 0 8px rgba(245,196,81,.3); }
+  .cell .n { font-size: 10px; color: var(--dim); }
+  .cell.done-good { border-color: rgba(76,222,128,.55); background: rgba(76,222,128,.08); }
+  .cell.done-bad { border-color: rgba(255,93,108,.5); background: rgba(255,93,108,.08); }
+  .cell.done-meh { border-color: rgba(120,132,146,.5); }
+
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 9px; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 6px 11px; border-radius: 6px; cursor: pointer;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  }
+  button:hover { border-color: var(--teal-dim); color: var(--teal); }
+  button.on { border-color: var(--gold); color: var(--gold); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 10px; text-transform: uppercase; }
+  td.r { color: var(--right); } td.w { color: var(--wrong); } td.u { color: var(--unknown); }
+  .tally { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.7; }
+  .tally b { color: var(--text); }
+  .note { font-size: 11px; color: var(--dim); line-height: 1.6; margin-top: 9px;
+          border-top: 1px solid var(--line); padding-top: 9px; }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>ukejam · strum lab</h1>
+  <span class="sub"><span class="dot" id="dot"></span> <span id="micname">connecting…</span></span>
+  <span class="sub mono" id="thresh"></span>
+</div>
+
+<div class="grid">
+
+  <!-- ---------- WHAT TO PLAY ---------- -->
+  <div class="panel">
+    <div class="panel-title">Play this <span id="decides"></span></div>
+    <div class="shape-head">
+      <span class="chord" id="chord">–</span>
+      <span class="arrow" id="arrow">↓</span>
+      <span class="dirword" id="dirword">downstroke</span>
+    </div>
+    <svg class="fb" id="fb" width="170" height="200" viewBox="0 0 170 200"></svg>
+    <div class="listening" id="listening"></div>
+  </div>
+
+  <!-- ---------- LIVE RESULT ---------- -->
+  <div class="panel">
+    <div class="panel-title">Last strum <span id="seq" class="mono"></span></div>
+    <div class="verdict">
+      <div class="vbig" id="vbig">–</div>
+      <div class="vword" id="vword">play a strum</div>
+      <div class="vmeta mono" id="vmeta"></div>
+    </div>
+    <div class="tl" id="tl"><div class="tl-empty">string attack times appear here</div></div>
+    <div class="panel-title" style="margin-top:12px">Recent</div>
+    <table>
+      <thead><tr><th>#</th><th>chord</th><th>played</th><th>heard</th><th>gap</th><th>margin</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <!-- ---------- DRILL ---------- -->
+  <div class="panel">
+    <div class="panel-title">Drill <span id="cellcount" class="mono"></span></div>
+    <div class="row">
+      <button id="metro">▶ metronome</button>
+      <button id="dirtog">↓ down</button>
+      <button id="reset">reset tally</button>
+    </div>
+    <div class="cells" id="cells"></div>
+    <div class="tally" id="tally"></div>
+    <div class="note" id="explain"></div>
+  </div>
+
+</div>
+
+<script>
+// The lab exists to answer one question: does a real strum stagger the strings
+// enough to tell down from up, and at what playing speed does that break?
+//
+// The fretboard diagram is not decoration. The analyser picks WHICH FREQUENCIES to
+// track from the voicing table, so if you play a different shape than the one drawn
+// it measures the wrong strings and the numbers are meaningless. Drawing the exact
+// shape is what keeps player and analyser looking at the same thing.
+
+let CFG = null;
+let target = { chord: "C", direction: "down", bpm: 60 };
+// tally[chord|direction|bpm] = {right, wrong, unknown, gaps: []}
+const tally = {};
+const rows = [];
+
+const $ = (id) => document.getElementById(id);
+
+function cellKey(c, d, b) { return `${c}|${d}|${b}`; }
+
+async function boot() {
+  CFG = await (await fetch("/config")).json();
+  target = { ...CFG.target };
+  $("micname").textContent = `${CFG.mic.name} · analysing at ${CFG.mic.sr}Hz`;
+  const t = CFG.thresholds;
+  $("thresh").textContent =
+    `needs >${t.minSeparationMs}ms stagger · floor ~${t.leakageFloorMs}ms · margin >${t.minMargin}`;
+  $("explain").innerHTML =
+    `Direction is read from the ORDER the strings sound in: a downstroke sweeps ` +
+    `string 4→1, an upstroke 1→4. The method needs about ` +
+    `<b>${t.minSeparationMs}ms</b> between string attacks to commit — below that, ` +
+    `spectral leakage between the strings swamps the real order, so it reports ` +
+    `<i>unknown</i> rather than guessing. ` +
+    `<b>Unknown is fine. Wrong is not</b> — a wrong arrow would teach a learner ` +
+    `the opposite of what they did, so watch the wrong count above all.`;
+  buildCells();
+  renderShape(CFG.shape);
+  renderTally();
+  connect();
+}
+
+function buildCells() {
+  const el = $("cells");
+  el.innerHTML = `<div class="h"></div>` +
+    CFG.bpms.map((b) => `<div class="h">${b}</div>`).join("");
+  for (const chord of CFG.shapes) {
+    el.innerHTML += `<div class="h" style="text-align:left;padding-top:5px">${chord}</div>` +
+      CFG.bpms.map((b) => `<div class="cell" data-c="${chord}" data-b="${b}">
+          <div>${chord}</div><div class="n" id="n-${chord}-${b}">0</div></div>`).join("");
+  }
+  el.querySelectorAll(".cell").forEach((c) => {
+    c.addEventListener("click", () => setTarget({ chord: c.dataset.c, bpm: +c.dataset.b }));
+  });
+  markActive();
+}
+
+function markActive() {
+  document.querySelectorAll(".cell").forEach((c) => {
+    c.classList.toggle("active",
+      c.dataset.c === target.chord && +c.dataset.b === target.bpm);
+    // Cell colour reflects the WORST outcome seen there: any wrong answer is the
+    // headline, since that's the failure that would mislead a player.
+    const st = tally[cellKey(c.dataset.c, target.direction, +c.dataset.b)];
+    c.classList.remove("done-good", "done-bad", "done-meh");
+    if (st && st.right + st.wrong + st.unknown > 0) {
+      if (st.wrong > 0) c.classList.add("done-bad");
+      else if (st.right >= CFG.strumsPerCell / 2) c.classList.add("done-good");
+      else c.classList.add("done-meh");
+    }
+    const n = $(`n-${c.dataset.c}-${c.dataset.b}`);
+    if (n) {
+      const s = tally[cellKey(c.dataset.c, target.direction, +c.dataset.b)];
+      n.textContent = s ? `${s.right}/${s.right + s.wrong + s.unknown}` : "0";
+    }
+  });
+  $("cellcount").textContent = `${target.chord} · ${target.bpm}bpm · ${target.direction}`;
+}
+
+async function setTarget(patch) {
+  target = { ...target, ...patch };
+  const r = await fetch("/target", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(target),
+  });
+  const data = await r.json();
+  renderShape(data.shape);
+  markActive();
+  if (metroOn) restartMetro();
+}
+
+// ---------- fretboard ----------
+// Same idea as the app's diagram: 4 strings left→right in PHYSICAL order (string 4
+// first, the one a downstroke hits first), frets top→bottom.
+function renderShape(shape) {
+  $("chord").textContent = shape.chord;
+  $("arrow").textContent = target.direction === "down" ? "↓" : "↑";
+  $("arrow").className = "arrow " + target.direction;
+  $("dirword").textContent = target.direction === "down" ? "downstroke" : "upstroke";
+  $("decides").textContent = shape.decidesAt === 2
+    ? "decides on 2nd attack" : "decides on 1st attack";
+
+  const W = 170, H = 200, x0 = 30, y0 = 34, w = 110, h = 130;
+  const nS = 4, nF = 4, dx = w / (nS - 1), dy = h / nF;
+  let s = "";
+  // nut
+  s += `<rect x="${x0 - 1}" y="${y0 - 4}" width="${w + 2}" height="4" fill="#2b4148"/>`;
+  for (let f = 0; f <= nF; f++)
+    s += `<line x1="${x0}" y1="${y0 + f * dy}" x2="${x0 + w}" y2="${y0 + f * dy}" stroke="#1d3138" stroke-width="1"/>`;
+  for (let i = 0; i < nS; i++) {
+    const x = x0 + i * dx;
+    s += `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y0 + h}" stroke="#243b42" stroke-width="1.2"/>`;
+    s += `<text x="${x}" y="${y0 + h + 15}" fill="#5d7b78" font-size="10" text-anchor="middle">${shape.stringLabels[i]}</text>`;
+  }
+  // Strings the measurement can actually use get a teal ring; a unison string is
+  // greyed, because it contributes nothing to the direction reading and the player
+  // should see that the answer rests on two strings, not four.
+  const trackedSet = new Set(shape.tracked.map((t) => t.string));
+  shape.frets.forEach((fret, i) => {
+    const x = x0 + i * dx;
+    const usable = trackedSet.has(i);
+    const col = usable ? "#19e3c4" : "#4a5f66";
+    if (fret === null) {
+      s += `<text x="${x}" y="${y0 - 9}" fill="#ff5d6c" font-size="12" text-anchor="middle">✕</text>`;
+    } else if (fret === 0) {
+      s += `<circle cx="${x}" cy="${y0 - 12}" r="4.5" fill="none" stroke="${col}" stroke-width="1.6"/>`;
+    } else {
+      s += `<circle cx="${x}" cy="${y0 + (fret - 0.5) * dy}" r="8" fill="${col}"/>`;
+      s += `<text x="${x}" y="${y0 + (fret - 0.5) * dy + 4}" fill="#061014" font-size="10" font-weight="700" text-anchor="middle">${fret}</text>`;
+    }
+  });
+  // Sweep direction across the strings.
+  const yA = y0 + h + 27;
+  const [ax, bx] = target.direction === "down" ? [x0, x0 + w] : [x0 + w, x0];
+  s += `<line x1="${ax}" y1="${yA}" x2="${bx}" y2="${yA}" stroke="${target.direction === "down" ? "#19e3c4" : "#f5c451"}" stroke-width="1.5"/>`;
+  s += `<polygon points="${bx},${yA} ${bx + (bx > ax ? -6 : 6)},${yA - 4} ${bx + (bx > ax ? -6 : 6)},${yA + 4}" fill="${target.direction === "down" ? "#19e3c4" : "#f5c451"}"/>`;
+  $("fb").innerHTML = s;
+
+  const skipped = shape.frets.filter((f) => f !== null).length - shape.tracked.length;
+  $("listening").innerHTML =
+    `Listening on <b>${shape.tracked.map((t) => t.note).join(", ") || "nothing"}</b>` +
+    ` (${shape.tracked.length} of ${shape.frets.filter((f) => f !== null).length} strings)` +
+    (skipped > 0
+      ? `<br><span class="warn">${skipped} string${skipped > 1 ? "s" : ""} skipped</span> — ` +
+        `same pitch as another (a unison), so it can't say which string sounded first.`
+      : "") +
+    `<br>Expected order: ${shape[target.direction].join(" → ")}` +
+    `<br><span style="color:#5d7b78">Play the shape as drawn — the analyser tracks ` +
+    `these exact frequencies.</span>`;
+}
+
+// ---------- live results ----------
+function onStrum(e) {
+  if (e.chord !== target.chord || e.expected !== target.direction) return;
+
+  $("seq").textContent = `#${e.seq}`;
+  const cls = e.outcome === "right" ? "right" : e.outcome === "wrong" ? "wrong" : "";
+  $("vbig").className = "vbig " + cls;
+  $("vbig").textContent = e.direction === "down" ? "↓" : e.direction === "up" ? "↑" : "?";
+  $("vword").textContent =
+    e.outcome === "right" ? `correct — heard ${e.direction}`
+    : e.outcome === "wrong" ? `WRONG — you played ${e.expected}, it heard ${e.direction}`
+    : "unknown — strings too close together to order";
+  $("vmeta").textContent =
+    `gap ${e.gapMs === null ? "–" : e.gapMs + "ms"} · margin ${e.margin} · ` +
+    `${e.tracked} strings tracked${e.peak > 0.98 ? " · CLIPPED" : ""}`;
+
+  drawTimeline(e);
+
+  rows.unshift(e);
+  rows.length = Math.min(rows.length, 12);
+  $("rows").innerHTML = rows.map((r) => {
+    const c = r.outcome === "right" ? "r" : r.outcome === "wrong" ? "w" : "u";
+    return `<tr><td>${r.seq}</td><td>${r.chord}</td><td>${r.expected}</td>
+      <td class="${c}">${r.direction ?? "unknown"}</td>
+      <td>${r.gapMs === null ? "–" : r.gapMs}</td><td>${r.margin}</td></tr>`;
+  }).join("");
+
+  const k = cellKey(e.chord, e.expected, e.bpm);
+  const st = tally[k] || (tally[k] = { right: 0, wrong: 0, unknown: 0, gaps: [] });
+  st[e.outcome]++;
+  if (e.gapMs !== null) st.gaps.push(e.gapMs);
+  markActive();
+  renderTally();
+}
+
+// Attack times on a shared axis — the actual evidence for the direction call.
+function drawTimeline(e) {
+  const tl = $("tl");
+  if (!e.attacks.length) { tl.innerHTML = `<div class="tl-empty">no attacks measured</div>`; return; }
+  const ts = e.attacks.map((a) => a.ms);
+  const lo = Math.min(...ts), hi = Math.max(...ts);
+  const pad = Math.max(4, (hi - lo) * 0.25);
+  const a = lo - pad, b = hi + pad;
+  let s = `<div class="tl-axis"></div>`;
+  for (const at of e.attacks) {
+    const pct = ((at.ms - a) / (b - a)) * 100;
+    s += `<div class="tl-mark" style="left:${pct}%"></div>`;
+    s += `<div class="tl-lab" style="left:${pct}%">${at.note} ${at.ms.toFixed(1)}</div>`;
+  }
+  s += `<div class="tl-lab mono" style="left:6px;transform:none;color:#5d7b78">span ${(hi - lo).toFixed(1)}ms</div>`;
+  tl.innerHTML = s;
+}
+
+function renderTally() {
+  let right = 0, wrong = 0, unknown = 0, gaps = [];
+  const perBpm = {};
+  for (const [k, st] of Object.entries(tally)) {
+    const bpm = +k.split("|")[2];
+    right += st.right; wrong += st.wrong; unknown += st.unknown;
+    gaps = gaps.concat(st.gaps);
+    const p = perBpm[bpm] || (perBpm[bpm] = { right: 0, wrong: 0, unknown: 0, gaps: [] });
+    p.right += st.right; p.wrong += st.wrong; p.unknown += st.unknown;
+    p.gaps = p.gaps.concat(st.gaps);
+  }
+  const total = right + wrong + unknown;
+  const med = (xs) => xs.length ? xs.slice().sort((x, y) => x - y)[xs.length >> 1] : null;
+  let html = total
+    ? `<b>${right}</b> right · <b style="color:${wrong ? "var(--wrong)" : "inherit"}">${wrong}</b> wrong · ` +
+      `<b>${unknown}</b> unknown of ${total}` +
+      (med(gaps) !== null ? ` · median gap <b>${med(gaps).toFixed(1)}ms</b>` : "")
+    : "no strums yet";
+  // Speed is the variable that decides viability, so break the tally out by tempo.
+  const bpms = Object.keys(perBpm).map(Number).sort((a, b) => a - b);
+  if (bpms.length) {
+    html += `<br><span style="font-size:11px">`;
+    for (const b of bpms) {
+      const p = perBpm[b];
+      const n = p.right + p.wrong + p.unknown;
+      const g = med(p.gaps);
+      html += `${b}bpm: ${p.right}/${n}${p.wrong ? ` (${p.wrong} wrong)` : ""}` +
+              `${g !== null ? ` · ${g.toFixed(1)}ms` : ""}<br>`;
+    }
+    html += `</span>`;
+  }
+  $("tally").innerHTML = html;
+}
+
+// ---------- metronome ----------
+// One click per beat, one strum per click, so takes are comparable and the tempo
+// sweep means something.
+let metroOn = false, metroTimer = null, actx = null;
+function click() {
+  actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = 1100; o.connect(g); g.connect(actx.destination);
+  g.gain.setValueAtTime(0.16, actx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.05);
+  o.start(); o.stop(actx.currentTime + 0.06);
+}
+function restartMetro() {
+  clearInterval(metroTimer);
+  if (metroOn) metroTimer = setInterval(click, 60000 / target.bpm);
+}
+$("metro").addEventListener("click", () => {
+  metroOn = !metroOn;
+  $("metro").classList.toggle("on", metroOn);
+  $("metro").textContent = metroOn ? "❚❚ metronome" : "▶ metronome";
+  restartMetro();
+});
+$("dirtog").addEventListener("click", () => {
+  const d = target.direction === "down" ? "up" : "down";
+  $("dirtog").textContent = d === "down" ? "↓ down" : "↑ up";
+  setTarget({ direction: d });
+});
+$("reset").addEventListener("click", () => {
+  for (const k of Object.keys(tally)) delete tally[k];
+  rows.length = 0; $("rows").innerHTML = "";
+  markActive(); renderTally();
+});
+
+// ---------- stream ----------
+function connect() {
+  const es = new EventSource("/stream");
+  es.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.type === "strum") onStrum(d);
+    else if (d.type === "level") $("dot").classList.add("live");
+  };
+  es.onerror = () => $("dot").classList.remove("live");
+}
+
+boot();
+</script>
+</body>
+</html>

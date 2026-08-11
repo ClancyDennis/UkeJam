@@ -300,7 +300,41 @@ originally assumed, and it is what real takes have to beat. **A shorter analysis
 will not help** — the limit is spectral overlap between the strings, not time
 resolution.
 
-To run the study with a real ukulele:
+### Strum lab (live, browser)
+
+The interactive way to run the study — play into the mic and watch each strum get
+measured:
+
+```bash
+.venv/bin/python strum_lab.py --self-test   # verify the rig before trusting it
+.venv/bin/python strum_lab.py               # then open http://localhost:8766
+```
+
+The page shows **the exact fingering to play**, which is the point rather than a
+convenience: the analyser picks which frequencies to track *from the voicing table*,
+so playing a different `C` shape than the one drawn measures the wrong strings and
+produces numbers that look like a physics result and are actually a mismatch. The
+diagram greys out any string it must skip (a unison contributes no ordering
+information) so you can see the reading rests on two strings, not four.
+
+Per strum it shows the per-string attack times on a shared axis, the direction it
+heard, and the confidence margin — plus a running tally **broken out by tempo**,
+since speed is what decides whether the stagger clears the leakage floor. Click any
+cell in the drill grid to switch shape/tempo; the metronome gives one click per
+strum so takes are comparable.
+
+Watch the **wrong** count above all. Unknown is fine — no arrow gets drawn. Wrong
+would teach a learner the opposite of what they played.
+
+`--self-test` drives the whole capture path with synthetic strums at every tempo,
+checking that each strum produces exactly one onset and that the analysis slice has
+enough lead-in silence for the attack to be locatable. Both of those broke during
+development and neither is visible from the UI — you would just see bad numbers and
+blame the ukulele.
+
+### Offline takes
+
+For a fixed set of takes you can re-analyse as the algorithm changes:
 
 ```bash
 .venv/bin/python record_strums.py --plan          # what to record and why
@@ -348,6 +382,8 @@ re-run as the algorithm changes without playing everything again.
 | `app/src/ai.ts` | AI provider config: persistence + provider registry |
 | `app/src/verdict.ts` | Per-bar scoring: HIT/WRONG/MISS, strum timing, coach digest |
 | `strum_model.py` | Voicings read from `main.ts`; down/up templates, unison filter |
+| `strum_lab.py` | Live strum-direction lab (SSE server, shares the analyser) |
+| `strum_lab.html` | Lab page: shape to play, attack timeline, per-tempo tally |
 | `record_strums.py` | Records labelled strums for the direction study |
 | `analyse_strums.py` | Measures strum stagger; decides whether direction is viable |
 | `chords.py` | Python detector reference |
