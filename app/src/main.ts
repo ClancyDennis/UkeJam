@@ -1,5 +1,11 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen as tauriListen } from "@tauri-apps/api/event";
+import {
+  nativeInvoke,
+  nativeListen,
+  nativeRuntime,
+  type BackingStatus,
+  type ChordReading,
+  type TunerReading,
+} from "./native";
 import { addSong, listSongs, deleteSong, getSong, renameSong, libraryReady, LibraryFullError, type SongRecord } from "./library";
 import type { Song, SongLine } from "./song";
 import {
@@ -47,50 +53,6 @@ import {
   type BarVerdict,
 } from "./verdict";
 import { StrumCam, type MotionSample, type Stroke, type StrumCall } from "./strumcam";
-
-const nativeRuntime =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-function nativeInvoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!nativeRuntime) return Promise.reject("native runtime unavailable");
-  return tauriInvoke<T>(command, args);
-}
-
-function nativeListen<T>(
-  event: string,
-  handler: (event: { payload: T }) => void
-): Promise<() => void> {
-  if (!nativeRuntime) return Promise.resolve(() => {});
-  return tauriListen<T>(event, handler as any).catch((e) => {
-    console.warn(`native event '${event}' unavailable`, e);
-    return () => {};
-  });
-}
-
-interface TunerReading {
-  active: boolean;
-  freq: number;
-  nearest: string;
-  cents: number;
-  rms: number;
-}
-
-interface ChordReading {
-  active: boolean;
-  detected: string;
-  cleanliness: number;
-  chroma: number[];
-  spectrum: number[];
-  missing: string[];
-  extra: string[];
-  rms: number;
-  // An attack (strum/pluck) began since the last reading. Latched on the Rust
-  // side across coalesced emits, so it is safe to treat every `true` as one
-  // strum — see ChordReading::onset in audio.rs.
-  onset: boolean;
-  // Spectral flux as a multiple of its slow baseline (1.0 = steady state).
-  flux: number;
-}
 
 const PITCH_CLASSES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 type AppMode = "tuner" | "play" | "arrangement" | "cal-mic" | "library" | "strumcam";
@@ -2547,12 +2509,6 @@ nativeListen<ChordReading>("chord", (event) => {
 });
 
 // backing-track playback position from Rust drives the highway playhead
-interface BackingStatus {
-  playing: boolean;
-  pos: number;
-  length: number;
-  loaded: boolean;
-}
 nativeListen<BackingStatus>("backing", (event) => {
   if (event.payload.playing) syncBackingPos(event.payload.pos);
 });
