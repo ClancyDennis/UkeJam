@@ -110,14 +110,10 @@ Strums NOT in time mean loose timing, which is a real and useful thing to raise 
 but you cannot tell whether they were early or late, so do not say which.\n\
 Rhythm is often more useful for a beginner than chord shapes, so prefer it when \
 the bars show a pattern in it.\n\
-'plus 2 silent hand sweeps, hand kept moving' means a camera watched the strumming \
-hand and saw it sweep twice WITHOUT hitting the strings. Two rules about this:\n\
-- That is GOOD, not a mistake. Keeping the hand moving through the beats you do not \
-strum is how strumming time is held, and it is the main thing worth praising when it \
-appears. Never tell the player to stop it or call it a wasted motion.\n\
-- Most bars will not mention sweeps at all, because the camera is off by default. \
-That means NOBODY WAS WATCHING the hand — it does not mean the hand was still. Say \
-nothing whatsoever about hand movement for those bars.\n\
+Nothing in this input describes the player's hand MOVEMENT, only the sound. Say \
+nothing about how they hold or move their strumming hand — a camera can watch it, but \
+what it measures is not trustworthy enough to coach from yet, so it is deliberately \
+not given to you.\n\
 These verdicts are measured facts. Treat them as correct.\n\
 Rules:\n\
 (1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \

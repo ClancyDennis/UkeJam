@@ -300,10 +300,17 @@ export function rhythmLabel(r: BarRhythm | null): string {
       : r.onBeat === 0
         ? "off the beat"
         : `${r.onBeat}/${r.strums} in time`;
-  // Ghosts append only when there ARE some. Zero ghosts is correct playing for
-  // anyone strumming every beat, and null means the camera was off, so neither may
-  // produce text — silence is the only honest rendering of both.
-  return r.ghosts ? `${timing}, hand kept moving` : timing;
+  // Ghosts are NOT reported. They are measured (see BarRhythm.ghosts) but not yet
+  // trustworthy enough to tell a player about: a live session counted 25 ghosts
+  // against 54 strokes, and the flux numbers showed most were quiet strums the onset
+  // detector missed rather than deliberate silent sweeps. Praising a player for
+  // "keeping the hand moving" when they were actually strumming and not being heard
+  // is worse than saying nothing.
+  //
+  // The onset gate has since been relaxed (ONSET_RATIO 2.2 -> 1.8 in audio.rs), which
+  // should shrink the false ghosts; whether enough is a question for the next
+  // measurement, not an assumption to ship.
+  return timing;
 }
 
 /// The strokes a bar was played with, in strumming notation: "↓↑↓↑".
@@ -404,14 +411,10 @@ export class VerdictBuffer {
     // Only tightness, for the reasons in rhythmLabel: neither the strum count nor
     // the direction of a timing error is knowable without the song's strumming
     // pattern, and reporting either would mean scolding correct playing or guessing.
-    let out = ` · ${onBeat}/${strums} in time`;
-    // Ghosts only when the camera actually saw some. Bars with the camera off carry
-    // null and are skipped entirely, so a session that ran half with the camera and
-    // half without reports the ghosts it genuinely observed rather than diluting
-    // them with bars nobody was watching.
-    const ghosts = w.reduce((sum, v) => sum + (v.rhythm!.ghosts ?? 0), 0);
-    if (ghosts) out += ` · ${ghosts} ghost ${ghosts === 1 ? "stroke" : "strokes"}`;
-    return out;
+    // Ghosts deliberately absent — see rhythmLabel. They are still recorded on every
+    // BarRhythm and shown raw in the StrumCam lab, so the measurement continues; they
+    // just don't reach a player until a session shows they mean what they claim.
+    return ` · ${onBeat}/${strums} in time`;
   }
 
   /// Serialize a window for the LLM. One line per bar, facts only.
@@ -462,17 +465,13 @@ function describe(v: BarVerdict): string {
   if (v.rhythm && v.rhythm.beats) {
     const r = v.rhythm;
     parts.push(`${r.strums} strums in ${r.beats} beats, ${r.onBeat} in time`);
-    // Ghosts only when the camera was watching. `null` (camera off) must produce no
-    // clause at all rather than "0 ghosts": the model would read a zero as "the hand
-    // stopped" and coach against it, which is a claim about audio nobody recorded.
-    // Stated as "hand kept moving" so the model cannot read a bare number as a
-    // defect — rule (7) in SYSTEM_COACH says the same thing in words.
-    // Phrased as EXTRA strokes, not a subset of the strums above: a ghost sounded no
-    // string, so it was never counted as a strum. "N of those" would tell the model
-    // the player strummed fewer times than they did.
-    if (r.ghosts !== null && r.ghosts > 0) {
-      parts.push(`plus ${r.ghosts} silent hand ${r.ghosts === 1 ? "sweep" : "sweeps"}, hand kept moving`);
-    }
+    // Silent hand sweeps are NOT sent to the model. They are measured on every bar
+    // and shown raw in the StrumCam lab, but a live session counted 25 of them
+    // against 54 strokes, and the flux figures showed most were quiet strums the
+    // onset detector missed rather than deliberate sweeps. Feeding that to a coach
+    // would have it praising a player for keeping the hand moving when what actually
+    // happened is the app failed to hear them play — the exact inversion a practice
+    // tool cannot afford. Restore this clause when a session shows the count is real.
   }
   return `${parts.join(", ")} -> ${v.status}`;
 }

@@ -3470,8 +3470,21 @@ body.mobile .grain {
 /* Stroke measurement rows, distinct from the direction calls they sit among: these
    are camera events with the audio around them, logged so the silent-sweep vs
    quiet-strum threshold can be read off real numbers rather than guessed. */
+/* Wraps onto two lines rather than squeezing: the meta column is `flex: none`
+   (its numbers are the point), and a stroke row's meta is long enough that it
+   starved the label to zero width — hiding the heard/silent verdict, which is the
+   one thing these rows exist to report. */
 .sc-call.stroke {
   border-style: dashed;
+  flex-wrap: wrap;
+}
+.sc-call.stroke .sc-call-label {
+  min-width: 96px;
+}
+.sc-call.stroke .sc-call-meta {
+  flex-basis: 100%;
+  margin-left: 0;
+  padding-left: 22px;
 }
 
 .sc-call.unsure .sc-call-arrow {

@@ -502,9 +502,13 @@ const ctx = () => ({ bar: 1, chordIdx: 0, expected: "C", section: "" });
   eq("strokes record direction in order", v.rhythm.strokes, ["down", "up", "down"]);
   eq("ghosts count only the silent sweeps", v.rhythm.ghosts, 1);
   eq("the pattern renders in strumming notation", strokePattern(v.rhythm), "↓↑↓");
+  // Ghosts are measured but NOT told to the player: a live session counted 25 against
+  // 54 strokes, and their flux showed most were quiet strums the onset detector missed.
+  // Praising someone for keeping the hand moving when the app just failed to hear them
+  // play is the one inversion a practice tool cannot afford.
   check(
-    "a ghost is reported as the hand keeping time, not as an error",
-    rhythmLabel(v.rhythm).includes("hand kept moving"),
+    "a ghost is recorded but never surfaces in the label",
+    !rhythmLabel(v.rhythm).includes("hand"),
     rhythmLabel(v.rhythm)
   );
 }
@@ -552,8 +556,8 @@ const ctx = () => ({ bar: 1, chordIdx: 0, expected: "C", section: "" });
   on.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
   on.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
   const onOut = on.digest(8, { tempo: 120, timeSig: [4, 4] });
-  check("a ghost appears in the digest", onOut.includes("1 silent hand sweep"), onOut);
-  check("...framed as the hand keeping moving", onOut.includes("hand kept moving"), onOut);
+  check("a ghost never reaches the coach digest", !onOut.includes("sweep"), onOut);
+  check("...and no hand claim is made either way", !onOut.includes("hand"), onOut);
   check("no markdown survives the new clause", !/[*#`|]/.test(onOut), onOut);
   check("still never claims dragging or rushing", !/dragging|rushing/.test(onOut), onOut);
 
@@ -573,7 +577,7 @@ const ctx = () => ({ bar: 1, chordIdx: 0, expected: "C", section: "" });
   buf.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
   buf.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4) })); // camera off
   const s = buf.rhythmSummary(16);
-  check("the subtitle reports observed ghosts", s.includes("1 ghost stroke"), s);
+  check("the subtitle does not report ghosts yet", !s.includes("ghost"), s);
 
   const none = new VerdictBuffer();
   none.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4) }));
