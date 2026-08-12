@@ -17,6 +17,7 @@ import {
   StrokeTracker,
   classifyStrum,
   palmY,
+  pickStrummingHand,
   spotlightFor,
 } from "./strumcam.ts";
 
@@ -301,6 +302,91 @@ function handIn(x0, y0, x1, y1) {
   const big = spotlightFor(handIn(0.05, 0.05, 0.95, 0.95), 640, 480, false);
   const small = spotlightFor(handIn(0.45, 0.45, 0.55, 0.55), 640, 480, false);
   check("the spotlight scales with the hand", big.r > small.r, JSON.stringify({ big, small }));
+}
+
+// --- picking the strumming hand ---------------------------------------------
+//
+// The tracker used to run with numHands: 1 and take whatever it found. When the
+// strumming hand left frame it locked onto the FRETTING hand and kept reporting at
+// full confidence — worse than losing the track, because the fretting hand slides
+// along the neck and so produces real vertical velocity. Every direction call
+// stayed confident while describing the wrong hand.
+//
+// The pick is behavioural, not label-based: handedness labels are mirrored, players
+// strum with either hand, and a rotated mount flips the sense again, so any fixed
+// left/right rule would track the wrong hand for someone.
+
+console.log("pickStrummingHand");
+
+/// A hand candidate centred on row `y`.
+function candidate(y, score = 0.9) {
+  return { points: handIn(0.4, y - 0.05, 0.6, y + 0.05), label: "", score };
+}
+
+{
+  check("no hands -> no pick", pickStrummingHand([], null) === null);
+  check(
+    "a hand with too few landmarks is not usable",
+    pickStrummingHand([{ points: [{ x: 0.5, y: 0.5 }], label: "", score: 1 }], null) === null
+  );
+}
+{
+  const only = candidate(0.5);
+  check("a single hand is taken regardless of history", pickStrummingHand([only], null) === only);
+}
+{
+  // The case that caused the bug: two hands, and an established track. The pick must
+  // follow the hand it was already on, NOT whichever is more prominent.
+  const tracked = candidate(0.62);
+  const fretting = candidate(0.30, 0.99); // higher score, deliberately
+  const picked = pickStrummingHand([fretting, tracked], 0.6);
+  check("an established track wins over a more confident stranger", picked === tracked, JSON.stringify(palmY(picked.points)));
+}
+{
+  // Continuity holds through a normal strum step. At 30fps a fast strum moves ~0.1
+  // frame-heights per frame.
+  let prev = 0.40;
+  const rows = [0.50, 0.60, 0.68, 0.58, 0.46];
+  const fretting = candidate(0.20, 0.99);
+  let followed = true;
+  for (const y of rows) {
+    const strumming = candidate(y);
+    const picked = pickStrummingHand([fretting, strumming], prev);
+    if (picked !== strumming) followed = false;
+    prev = palmY(picked.points);
+  }
+  check("the track follows a strumming hand across a full sweep", followed, `ended at ${prev}`);
+}
+{
+  // With no history, prefer the more confident detection — there is nothing better
+  // to go on, and it must be deterministic rather than "whichever came first".
+  const weak = candidate(0.7, 0.55);
+  const strong = candidate(0.3, 0.95);
+  check("no history -> the more confident hand", pickStrummingHand([weak, strong], null) === strong);
+  check("...and the order of the input doesn't change it", pickStrummingHand([strong, weak], null) === strong);
+}
+{
+  // Equal scores with no history must still be stable frame to frame, or the pick
+  // oscillates and every switch resets the velocity chain.
+  const a = candidate(0.3, 0.9);
+  const b = candidate(0.7, 0.9);
+  check("an exact tie resolves the same way both orders", pickStrummingHand([a, b], null) === pickStrummingHand([b, a], null));
+}
+{
+  // A near-tie in distance must NOT be resolved by distance: crossing hands would
+  // flip the pick mid-strum. Falls through to the score rule instead.
+  const left = candidate(0.48, 0.6);
+  const right = candidate(0.52, 0.95);
+  const picked = pickStrummingHand([left, right], 0.5);
+  check("hands equally close to the last position fall back to confidence", picked === right);
+}
+{
+  // A hand that teleports (out of frame and back elsewhere) must not be claimed as
+  // the same track — that is what produced fake giant sweeps before.
+  const far = candidate(0.95);
+  const other = candidate(0.10, 0.99);
+  const picked = pickStrummingHand([far, other], 0.5);
+  check("no candidate within one frame's travel -> fall back to confidence", picked === other);
 }
 
 if (failures) {

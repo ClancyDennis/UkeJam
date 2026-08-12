@@ -174,6 +174,69 @@ export class MotionField {
 /// 10–40 on the 0..255 |diff| scale for a real strumming hand).
 const HAND_WEIGHT = 30;
 
+/// One hand as the tracker reports it, with the label MediaPipe assigns.
+export interface HandCandidate {
+  points: readonly HandPoint[];
+  /// "Left" / "Right" as MediaPipe names it, in MIRRORED (selfie) terms — see
+  /// pickStrummingHand for why the label alone can't be trusted.
+  label: string;
+  /// Handedness confidence, 0..1.
+  score: number;
+}
+
+/// Which hand is doing the strumming.
+///
+/// With numHands: 1 the tracker returned whatever hand it happened to find, so the
+/// moment the strumming hand left frame it locked onto the FRETTING hand and kept
+/// reporting at full confidence. That is worse than losing tracking: the fretting
+/// hand slides along the neck, producing real vertical velocity, so every direction
+/// call stayed confident while describing the wrong hand.
+///
+/// Handedness labels alone don't settle it. MediaPipe labels in mirrored selfie
+/// terms, players strum with either hand, and a rotated or rear-facing mount flips
+/// the sense again — a left-handed player would be tracked on the wrong hand by any
+/// fixed rule. So the choice is made from BEHAVIOUR, which is the same for every
+/// player: the strumming hand moves vertically and the fretting hand does not.
+///
+/// `prevY` is the last accepted palm row, so an established track is preferred over
+/// a hand that merely happens to be nearer the middle of the frame this instant.
+/// Without that the pick oscillates between hands mid-strum, chopping the velocity
+/// chain into fragments too short to call.
+export function pickStrummingHand(
+  hands: readonly HandCandidate[],
+  prevY: number | null,
+  /// How far, in frame heights, the tracked hand could plausibly have moved since
+  /// the last frame. A strum peaks around 3 frame-heights/sec, so at 30fps that is
+  /// ~0.1 — doubled for headroom on a slow frame.
+  maxJump = 0.2
+): HandCandidate | null {
+  const usable = hands.filter((h) => h.points.length >= 21);
+  if (!usable.length) return null;
+  if (usable.length === 1) return usable[0];
+
+  // Continuity first: whichever hand is closest to where the tracked hand just was
+  // is almost certainly the same hand. Only accept it if it's clearly closer than
+  // the alternative, so a genuine hand-swap can still win.
+  if (prevY !== null) {
+    const byDistance = usable
+      .map((h) => ({ h, d: Math.abs(palmY(h.points) - prevY) }))
+      .sort((a, b) => a.d - b.d);
+    const [nearest, next] = byDistance;
+    // Inside one frame's plausible travel AND clearly closer than the runner-up.
+    // The margin matters: on a near-tie, picking by distance alone flip-flops between
+    // hands frame to frame, and every switch resets the velocity chain — leaving
+    // fragments too short for classifyStrum to call anything.
+    if (nearest.d < maxJump && nearest.d * 2 < next.d) return nearest.h;
+  }
+
+  // No usable history (first sighting, or the hands are equally plausible): prefer
+  // the more confident detection, and break an exact tie deterministically by frame
+  // position so the choice can't chatter between frames.
+  return usable
+    .slice()
+    .sort((a, b) => b.score - a.score || palmY(a.points) - palmY(b.points))[0];
+}
+
 export interface HandMotionOptions extends VelocityChainOptions {
   /// Detections scoring below this are treated as "no hand".
   minScore?: number;
@@ -504,8 +567,16 @@ export class StrumCam {
   /// Which tracking backend is live. "hand" once the model loads; "motion"
   /// until then and whenever the model can't be used.
   backend: StrumCamBackend = "motion";
-  /// Latest skeleton in video coordinates (un-mirrored), null when no hand.
+  /// Latest skeleton of the TRACKED (strumming) hand, in video coordinates
+  /// (un-mirrored). Null when no hand is seen.
   lastHand: readonly HandPoint[] | null = null;
+  /// Every other hand in frame — drawn faintly so the player can see that the app
+  /// knows the fretting hand is there and has deliberately not locked onto it.
+  /// Empty when only one hand is visible.
+  otherHands: ReadonlyArray<readonly HandPoint[]> = [];
+  /// Palm row of the hand currently being tracked, for the continuity test in
+  /// pickStrummingHand. Null breaks the track.
+  private trackedY: number | null = null;
   fps = 0;
 
   private readonly events: StrumCamEvents;
@@ -571,6 +642,8 @@ export class StrumCam {
     this.samples = [];
     this.onsets = [];
     this.lastHand = null;
+    this.otherHands = [];
+    this.trackedY = null;
     this.frames = 0;
     this.fpsAt = performance.now();
     this.running = true;
@@ -588,6 +661,8 @@ export class StrumCam {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.lastHand = null;
+    this.otherHands = [];
+    this.trackedY = null;
     if (this.video) {
       this.video.srcObject = null;
       this.video = null;
@@ -629,7 +704,11 @@ export class StrumCam {
           this.landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: HAND_MODEL_PATH, delegate },
             runningMode: "VIDEO",
-            numHands: 1,
+            // Both hands, so the strumming one can be CHOSEN. With numHands: 1 the
+            // tracker returned whichever hand it found, and the moment the strumming
+            // hand left frame it locked onto the fretting hand and kept reporting at
+            // full confidence — see pickStrummingHand.
+            numHands: 2,
           });
           break;
         } catch (e) {
@@ -677,15 +756,28 @@ export class StrumCam {
     this.drawPreview(sample);
   }
 
-  /// Hand backend: palm centroid of the best-scoring hand.
+  /// Hand backend: palm centroid of the STRUMMING hand, chosen from every hand in
+  /// frame (see pickStrummingHand). Both hands are drawn; only one is tracked.
   private handFrame(video: HTMLVideoElement, t: number): MotionSample | null {
     let hand: readonly HandPoint[] | null = null;
     let score = 1;
     try {
       const res = this.landmarker!.detectForVideo(video, t);
-      if (res.landmarks && res.landmarks.length > 0) {
-        hand = res.landmarks[0];
-        score = res.handedness?.[0]?.[0]?.score ?? 1;
+      const found: HandCandidate[] = (res.landmarks ?? []).map((points, i) => ({
+        points,
+        label: res.handedness?.[i]?.[0]?.categoryName ?? "",
+        score: res.handedness?.[i]?.[0]?.score ?? 1,
+      }));
+      this.otherHands = found.length > 1 ? found.map((h) => h.points) : [];
+      const picked = pickStrummingHand(found, this.trackedY);
+      if (picked) {
+        hand = picked.points;
+        score = picked.score;
+        this.trackedY = palmY(picked.points);
+      } else {
+        // Nothing usable: forget where we were, so a hand reappearing elsewhere
+        // starts a fresh track instead of reading as one huge sweep.
+        this.trackedY = null;
       }
     } catch (e) {
       // A broken inference session won't heal; fall back for the rest of the run.
@@ -765,6 +857,20 @@ export class StrumCam {
       ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
+    }
+
+    // Untracked hands (the fretting hand) in outline only, under the spotlit one.
+    // Drawn at all so the player can see the app KNOWS the other hand is there and
+    // has deliberately not locked onto it — when direction calls look wrong, "it's
+    // watching the wrong hand" is the first thing worth ruling out, and an unmarked
+    // hand makes that invisible.
+    for (const other of this.otherHands) {
+      if (other === this.lastHand) continue;
+      drawHand(ctx, other, width, height, {
+        color: "rgba(120, 132, 146, 0.30)",
+        jointColor: "rgba(120, 132, 146, 0.22)",
+        lineWidth: 1.5,
+      });
     }
 
     // Overlays are drawn in video pixel space (un-flip a flipped sample).
