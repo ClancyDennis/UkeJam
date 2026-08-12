@@ -329,6 +329,12 @@ fn open_tab_page(app: AppHandle, url: String) -> Result<(), String> {
         let js_url = serde_json::to_string(&url).map_err(|e| e.to_string())?;
         w.eval(&format!("window.location.replace({js_url})"))
             .map_err(|e| format!("navigate preview: {e}"))?;
+        // unminimize() only exists in tauri's #[cfg(desktop)] impl block — a
+        // phone has no minimized-window state — so calling it unconditionally
+        // broke the iOS build (E0599). set_focus() is available on all targets
+        // and is what actually raises the reused window, so only the
+        // unminimize needs gating.
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.set_focus();
     } else {
