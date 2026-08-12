@@ -1,9 +1,9 @@
 # Refactoring plan: breaking up `src/main.ts`
 
-> **Status.** Phases 0–4 are done; Phase 5 is partly done. `main.ts` is
-> 4,380 → 1,797 lines. Every commit passes `tsc --noEmit`, all six verify
-> scripts and `pnpm build`. See **Progress** at the end for exactly what is
-> left and the three places the sequencing below was changed on contact.
+> **Status: complete.** All six phases are done. `main.ts` is 4,380 → 383
+> lines. Every commit passes `tsc --noEmit`, all six verify scripts and
+> `pnpm build`. See **Outcome** at the end for what shipped, where the
+> sequencing changed on contact, and what is still unverified.
 
 `src/main.ts` is 4,380 lines — about 40% of the frontend — and contains every
 screen of the app in one script, separated only by banner comments. The rest of
@@ -297,65 +297,90 @@ last time. Target: main.ts ≤ 200 lines.
 
 ---
 
-## Progress
+## Outcome
 
-`main.ts`: **4,380 → 1,797 lines** (59% smaller). Twelve commits, each one
-green on `tsc --noEmit`, all six verify scripts, and `pnpm build`.
+`main.ts`: **4,380 → 383 lines** (91% smaller). Twenty-two commits, each green
+on `tsc --noEmit`, all six verify scripts, and `pnpm build`.
 
-### Done
+| | before | after |
+|---|---|---|
+| `main.ts` lines | 4,380 | 383 |
+| `getElementById` / `querySelector` in `main.ts` | 143 | 12 |
+| top-level `let` in `main.ts` | 68 | 3 |
+| verify scripts | 4 | 6 |
 
-| Phase | Outcome |
-|---|---|
-| 0 | Baseline recorded green: tsc, four verify scripts, `pnpm build`. |
-| 1 | `native.ts` (+ the one-subscription-per-event bus), `tunings.ts`, `theory/chords.ts`, `theory/voicings.ts`, `time.ts`. `verify-voicings.mjs` converted from text-scraping to a real import. **New:** `verify-theory.mjs` (2,866 generated shapes checked to sound exactly their chord tones) and `verify-timing.mjs` (chord placement, bar boundaries, the shared-bar split). |
-| 2 | `views/setup/soundfont.ts`, `views/setup/aiSettings.ts`, `views/setup/openrouterAuth.ts`, `views/tabSearch.ts`, `views/midiImport.ts`, `views/strumcamView.ts`, plus `dom.ts` for `escapeHtml`. |
-| 3 | `state/appMode.ts` and the active-tuning store; `views/tuner.ts`; `views/setup/tuningSetup.ts`. |
-| 4 | `session.ts` — the whole song + transport + scoring cluster, DOM-free, read through getters, eleven named callbacks out. `iosAudio.ts`. |
-| 5 (partial) | `views/play/gauge.ts`, `views/play/fft.ts`, `views/play/coach.ts`. |
+The 12 remaining DOM refs are the six view containers, the corner label, the
+mode buttons and the connection indicator — the router's own chrome. The three
+remaining `let`s are the keep-awake flag and the held detector reading, which
+three consumers share.
 
-### Still to do
+### What each phase delivered
 
-All of it inside `main.ts`, all of it Phase 5/6 work:
+- **1** — `native.ts` (with the one-subscription-per-event bus), `tunings.ts`,
+  `theory/chords.ts`, `theory/voicings.ts`, `time.ts`. `verify-voicings.mjs`
+  converted from text-scraping `main.ts` to a real import. **New:**
+  `verify-theory.mjs` and `verify-timing.mjs`.
+- **2** — `views/setup/{soundfont,aiSettings,openrouterAuth,tuningSetup}.ts`,
+  `views/{tabSearch,midiImport,strumcamView}.ts`, `dom.ts`.
+- **3** — `state/appMode.ts`, the active-tuning store, `views/tuner.ts`.
+- **4** — `session.ts` (song + transport + scoring, DOM-free, read through
+  getters, eleven callbacks out), `iosAudio.ts`.
+- **5** — `views/play/{index,highway,fretboard,strip,lyrics,gauge,fft,chroma,breakdown,transport,coach}.ts`,
+  `views/arrangement.ts`, `views/libraryView.ts`.
+- **6** — `main.ts` reduced to wiring. All six Rust events now have exactly one
+  subscriber *by construction*, not by inspection.
 
-- `views/play/highway.ts` — `drawHighway`, `drawTrailToken`, `roundRect`
-- `views/play/fretboard.ts` — `drawFretboard`, the two shape panels, the
-  transition coach (the largest remaining block, ~350 lines)
-- `views/play/strip.ts`, `views/play/lyrics.ts` — the build/update pairs
-- `views/play/chroma.ts`, `views/play/breakdown.ts`, `views/play/diagnostics.ts`
-- `views/arrangement.ts`, `views/libraryView.ts`
-- `views/play/index.ts` — `renderChords` as the orchestrating rAF loop
-- **Phase 6**: reduce `main.ts` to the bootstrap (target ≤ 200 lines)
+Two things stayed in `main.ts` deliberately: `loadSongIntoPlay`, which rebuilds
+every practice view and switches screen, and `cycleChordShape`, which spans the
+Play rail and the arrangement cards. Both are orchestration across modules that
+should not know about each other.
 
 ### Where the plan changed on contact
 
 1. **`tunings.ts` landed in Phase 1, not Phase 3.** Parameterising the voicing
-   generator on a tuning (Phase 1, item 3) needs `TuningSpec` to exist. The
-   type and table moved early; the mutable store still landed in Phase 3.
+   generator on a tuning needs `TuningSpec` to exist. The type and table moved
+   early; the mutable store still landed in Phase 3.
 2. **`tuningSetup` and mic calibration moved from Phase 2 to Phase 3, and
    `iosAudio.ts` from Phase 2 to Phase 4.** Both orchestrate state the later
-   phases were about to formalise. Extracted at the listed point, `iosAudio`
-   would have needed ten callbacks; after `session.ts` and `views/tuner.ts`
-   existed it needed seven, and three of those became direct imports.
-3. **`session.ts` moved in one commit, not three.** The plan split it to
-   reduce risk, but the three sub-steps share one state cluster — splitting
-   would have left half the cluster in `main.ts` behind temporary accessors
-   for two commits. Moving the cluster whole was the smaller change.
+   phases were about to formalise. Extracted where the plan listed it,
+   `iosAudio` would have needed ten callbacks; after `session.ts` and
+   `views/tuner.ts` existed it needed seven, three of which became direct
+   imports.
+3. **`session.ts` moved in one commit, not three.** The three sub-steps share
+   one state cluster; splitting would have left half of it in `main.ts` behind
+   temporary accessors for two commits.
+4. **The ≤200-line target for `main.ts` was not reachable, and 383 is the
+   honest floor** without dissolving things that belong together. The import
+   block alone is ~95 lines, the mode router ~65, and the plan explicitly keeps
+   the router here. Everything else is init calls and the event fan-out.
 
-The diagnostics drawer is not a separate module: it is ten lines, and its
-`renderBreakdown` belongs with the render loop, so it folds into Phase 5.
+The diagnostics drawer never became its own module: it is ten lines and lives
+with the render loop that its instrumentation feeds.
 
-### Two bugs this refactor introduced and fixed
+### Bugs this refactor introduced and fixed
 
-Both from bulk identifier rewrites hitting prose rather than code, and both
-caught by reading the diff against the original rather than by the type
-checker — neither would have failed a build:
+All three came from bulk identifier rewrites hitting prose rather than code,
+and all were caught by diffing against the original — **none would have failed
+a typecheck**:
 
-- `"saved — tuning to …"` briefly became `"saved — activeTuning() to …"` in
-  the tuning-save confirmation.
+- `"saved — tuning to …"` became `"saved — activeTuning() to …"` in the
+  tuning-save confirmation.
 - The practice status line's `waiting`/`playing` words became
   `isWaiting()`/`isPlaying()`.
+- Ten comments were mangled during the `session.ts` move.
 
-Ten comments took the same damage during the `session.ts` move and were
-restored from the pre-refactor file. Worth knowing for the remaining phases:
-a rename sweep over a file this size needs a diff review of every string and
-comment it touched, not just a green typecheck.
+A fourth was caught by the compiler: a guard meant to skip assignments and
+object keys also skipped two reads inside ternaries, which would have silently
+left `main.ts` reading stale locals had the originals still existed.
+
+**Lesson for future sweeps of this kind:** a rename pass over a large file needs
+a diff review of every string and comment it touched, not just a green build.
+
+### Still unverified
+
+The automated gate is green throughout, but the app was never driven. The
+behaviour-preserving case for the `session.ts` extraction, the iOS interruption
+path and wait-mode rests on diff review alone. Before trusting this on a device,
+run `pnpm tauri dev` against the smoke checklist above — especially wait-mode,
+auto-advance on an untimed song, and backing playback, which branch on flags
+that moved.
