@@ -8,7 +8,7 @@
 
 import { chordPitchClasses } from "../../theory/chords.ts";
 import { currentMode, isPracticeMode } from "../../state/appMode.ts";
-import type { ChordReading } from "../../native.ts";
+import { nativeInvoke, type ChordReading } from "../../native.ts";
 import {
   currentChordIdx,
   currentRecord,
@@ -20,7 +20,10 @@ import {
   isTargetGradeable,
   isTimed,
   isWaiting,
+  jumpToChord,
   nextDistinctChord,
+  startTransport,
+  stopTransport,
   tickTransport,
   verdictBuffer,
 } from "../../session.ts";
@@ -32,11 +35,11 @@ import { renderBreakdown } from "./breakdown.ts";
 import { paintFretboards, updateFretboardPanelState } from "./fretboard.ts";
 
 export interface PlayViewDeps {
+  /// Listening or playing changed; re-evaluate the iOS keep-awake lock.
+  syncKeepAwake: () => void;
   /// The latest detector reading, and when it arrived.
   currentReading: () => ChordReading | null;
   lastReadingAt: () => number;
-  /// Is the chord detector running?
-  isChordListening: () => boolean;
   /// Paint the shared "is the mic feeding us" indicator.
   setConn: (live: boolean) => void;
   /// Drop the held reading. With no frames for a while the last one is stale,
@@ -47,6 +50,38 @@ export interface PlayViewDeps {
 }
 
 let deps: PlayViewDeps;
+
+// The chord detector's own listening state. The tuner owns its stream the same
+// way; anything that needs to know asks rather than sharing a flag.
+let chordListening = false;
+
+export function isChordListening(): boolean {
+  return chordListening;
+}
+
+/// Bring the detector up and re-arm the current target. Throws if the mic
+/// won't open — the interruption handler reports that to the player.
+export async function startChordListening(): Promise<void> {
+  await nativeInvoke("start_chords");
+  await nativeInvoke("set_target", { chord: currentTarget() || null });
+  chordListening = true;
+  listenBtn2.textContent = "Stop listening";
+  listenBtn2.classList.add("on");
+}
+
+/// Drop detector state and reset the button WITHOUT touching the native side.
+/// Callers that also need the stream stopped invoke stop_audio themselves.
+export function stopChordListening(): void {
+  chordListening = false;
+  listenBtn2.textContent = "Start listening";
+  listenBtn2.classList.remove("on");
+}
+
+/// StrumCam runs the mic itself; it reports that here so the keep-awake lock
+/// and the practice header stay honest.
+export function setChordListening(on: boolean): void {
+  chordListening = on;
+}
 
 // eased cleanliness, so the gauge doesn't jitter frame to frame
 let smoothClean = 0;
@@ -60,6 +95,7 @@ export function noteOnset(at: number): void {
 }
 
 let playView: HTMLElement;
+let listenBtn2: HTMLButtonElement;
 let chordNameEl: HTMLElement;
 let chordSubEl: HTMLElement;
 let cleanTargetEl: HTMLElement;
@@ -104,7 +140,7 @@ export function updatePracticeUi() {
     modeTagEl.textContent = "● Free play";
     songTagEl.textContent = "free detection";
     practiceTitleEl.textContent = "Free play";
-    practiceSubEl.textContent = deps.isChordListening() ? "mic live" : "mic idle";
+    practiceSubEl.textContent = chordListening ? "mic live" : "mic idle";
     practicePosEl.textContent = "--";
     practiceNextEl.textContent = "choose song";
     return;
@@ -118,7 +154,7 @@ export function updatePracticeUi() {
   const modeText = isTimed()
     ? `${Math.round(song.tempo)} bpm · ${isWaiting() ? "waiting" : isPlaying() ? "playing" : "paused"}`
     : "play-to-advance";
-  const micText = deps.isChordListening() ? "mic live" : "mic idle";
+  const micText = chordListening ? "mic live" : "mic idle";
   const backingText = hasBackingAudio() ? "backing" : "no backing";
   // Rolling score over the last 16 bars: enough history to mean something,
   // short enough that fixing a rough patch shows up while you're still on it.
@@ -153,13 +189,13 @@ function renderChords() {
     return;
   }
   const now = performance.now();
-  // Drop a reading the mic has stopped refreshing. NOT gated on deps.isChordListening():
+  // Drop a reading the mic has stopped refreshing. NOT gated on chordListening:
   // when the stream stops, the last reading used to sit on screen indefinitely,
   // so the hero chord kept asserting a verdict about audio from minutes ago —
   // visible as a lit-up "Locked in" on a freshly loaded song with the mic idle.
   if (deps.currentReading() && now - deps.lastReadingAt() > 300) {
     deps.clearReading();
-    if (deps.isChordListening() && now - deps.lastReadingAt() > 1500) deps.setConn(false);
+    if (chordListening && now - deps.lastReadingAt() > 1500) deps.setConn(false);
   }
 
   const c = deps.currentReading();
@@ -239,10 +275,10 @@ function renderChords() {
     chordNameEl.className = "chord-name";
     chordSubEl.textContent = currentTarget() ? "Play this" : "Playing";
     smoothClean += (0 - smoothClean) * 0.15;
-    setGaugeReadout(`0<span class="pct">%</span>`, deps.isChordListening() ? "listening…" : "idle");
+    setGaugeReadout(`0<span class="pct">%</span>`, chordListening ? "listening…" : "idle");
     cleanTargetEl.textContent = currentTarget() ? `target · ${currentTarget()}` : "free play";
     coachEl.className = "coach good";
-    coachEl.textContent = deps.isChordListening() ? "play a chord" : "press start to listen";
+    coachEl.textContent = chordListening ? "play a chord" : "press start to listen";
     renderBreakdown(null);
     mMatchEl.textContent = "—";
     mfMatchEl.style.width = "0%";
@@ -265,6 +301,7 @@ function renderChords() {
 export function initPlayView(d: PlayViewDeps): void {
   deps = d;
   playView = document.getElementById("play-view")!;
+  listenBtn2 = document.getElementById("listen-btn-2") as HTMLButtonElement;
   chordNameEl = document.getElementById("chord-name")!;
   chordSubEl = document.getElementById("chord-sub")!;
   cleanTargetEl = document.getElementById("clean-target")!;
@@ -285,6 +322,45 @@ export function initPlayView(d: PlayViewDeps): void {
 
   diagBtn.addEventListener("click", () => toggleDiagnostics());
   diagCloseBtn.addEventListener("click", () => toggleDiagnostics(false));
+
+  listenBtn2.addEventListener("click", async () => {
+    if (!chordListening) {
+      try {
+        await startChordListening();
+        deps.setConn(false);
+        deps.syncKeepAwake();
+      } catch (e) {
+        setCoachMessage(`mic error: ${e}`);
+      }
+    } else {
+      await nativeInvoke("stop_audio");
+      stopChordListening();
+      deps.setConn(false);
+      deps.syncKeepAwake();
+    }
+    updatePracticeUi(); // mic live/idle text is no longer refreshed every frame
+  });
+
+  // Hands-free practice controls (the instrument is in your hands): space
+  // toggles play/pause, left/right step the current chord, d toggles the
+  // diagnostics drawer. Only on the Play screen, never while typing in a field.
+  addEventListener("keydown", (e) => {
+    if (currentMode() !== "play") return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (isTimed()) (isPlaying() ? stopTransport() : startTransport());
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      jumpToChord(currentChordIdx() + 1);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      jumpToChord(currentChordIdx() - 1);
+    } else if (e.key === "d" || e.key === "D") {
+      toggleDiagnostics();
+    }
+  });
 
   requestAnimationFrame(renderChords);
 }

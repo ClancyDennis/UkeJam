@@ -1,9 +1,16 @@
-import {
-  nativeInvoke,
-  nativeListen,
-  type BackingStatus,
-  type ChordReading,
-} from "./native";
+// UkeJam bootstrap.
+//
+// Everything here is wiring: bind the modules in dependency order, route the
+// mode buttons, and fan the Rust event stream out to whoever needs it. The
+// screens live under views/, the practice state machine in session.ts, and the
+// pure logic in theory/ and time.ts — none of which import this file.
+//
+// Two things stay here on purpose. loadSongIntoPlay rebuilds every practice
+// view and switches screen, and cycleChordShape spans the Play rail and the
+// arrangement cards; both are orchestration across modules that should not
+// know about each other.
+
+import { nativeInvoke, onNative, type BackingStatus, type ChordReading } from "./native";
 import { getSong, type SongRecord } from "./library";
 import { activeTuning } from "./tunings";
 import {
@@ -20,9 +27,12 @@ import { initHighway } from "./views/play/highway";
 import { initChroma } from "./views/play/chroma";
 import {
   initPlayView,
+  isChordListening,
   noteOnset,
+  setChordListening,
   setCoachMessage,
-  toggleDiagnostics,
+  startChordListening,
+  stopChordListening,
   updatePracticeUi,
 } from "./views/play/index";
 import { initBreakdown, } from "./views/play/breakdown";
@@ -62,14 +72,11 @@ import {
 import {
   accumulateReading,
   buildSectionMap,
-  currentChordIdx,
   currentSong,
-  currentTarget,
   hasBackingAudio,
   initSession,
   isPlaying,
   isTimed,
-  jumpToChord,
   loadBackingIntoEngine,
   maybeAdvance,
   resetScoring,
@@ -77,7 +84,6 @@ import {
   setTarget,
   setupBacking,
   setupTiming,
-  startTransport,
   stopTransport,
   syncBackingPos,
 } from "./session";
@@ -115,7 +121,7 @@ function setConn(live: boolean) {
 // when the combined state flips (setIdleTimerDisabled is a main-thread hop).
 let keepAwake = false;
 function syncKeepAwake() {
-  const want = isTunerListening() || chordListening || isPlaying();
+  const want = isTunerListening() || isChordListening() || isPlaying();
   if (want === keepAwake) return;
   keepAwake = want;
   nativeInvoke("set_keep_awake", { awake: want }).catch(() => {});
@@ -128,7 +134,7 @@ initCoach();
 initStrip();
 initLyrics();
 initHighway();
-initFretboard({ cycleChordShape, isChordListening: () => chordListening });
+initFretboard({ cycleChordShape, isChordListening });
 initArrangement({ cycleChordShape });
 initLibraryView({ loadSongIntoPlay });
 initTransport({ onPracticeStateChanged: updatePracticeUi });
@@ -137,17 +143,16 @@ initBreakdown();
 initPlayView({
   currentReading: () => chord,
   lastReadingAt: () => lastChordAt,
-  isChordListening: () => chordListening,
   setConn,
+  syncKeepAwake,
   clearReading: () => {
     chord = null;
   },
 });
 
 
-// =====================================================================
-// Play mode — live chord detection
-// =====================================================================
+// --- view navigation (Play is home; Tune, Setup, Library, StrumCam are the
+// screens you visit) ---
 const tunerView = document.getElementById("tuner-view")!;
 const playView = document.getElementById("play-view")!;
 const arrangementView = document.getElementById("arrangement-view")!;
@@ -158,17 +163,11 @@ const cornerLabel = document.getElementById("corner-label")!;
 // any element with data-mode navigates (util buttons + back buttons)
 const modeBtns = document.querySelectorAll<HTMLButtonElement>("[data-mode]");
 
-const listenBtn2 = document.getElementById("listen-btn-2") as HTMLButtonElement;
-// analyzer panel (right column)
-
-
-
-let chordListening = false;
+// The latest detector reading, held here because three consumers need it: the
+// session (wait-mode and auto-advance), the Play render loop, and StrumCam.
 let chord: ChordReading | null = null;
 let lastChordAt = 0;
 
-// build chromagram bars (vertical bars; `.fill` height is driven from chroma values)
-// view navigation (Play is home; Tune + Setup are utility screens)
 modeBtns.forEach((btn) => {
   btn.addEventListener("click", async () => {
     const m = btn.dataset.mode as AppMode | undefined;
@@ -181,9 +180,7 @@ modeBtns.forEach((btn) => {
     if (!(fromPractice && toPractice)) {
       await nativeInvoke("stop_audio").catch(() => {});
       stopTunerListening();
-      chordListening = false;
-      listenBtn2.textContent = "Start listening";
-      listenBtn2.classList.remove("on");
+      stopChordListening();
       setConn(false);
       syncKeepAwake();
     }
@@ -214,57 +211,6 @@ modeBtns.forEach((btn) => {
       : "ukejam / Chords · native";
   });
 });
-
-listenBtn2.addEventListener("click", async () => {
-  if (!chordListening) {
-    try {
-      await nativeInvoke("start_chords");
-      await nativeInvoke("set_target", { chord: currentTarget() || null });
-      chordListening = true;
-      listenBtn2.textContent = "Stop listening";
-      listenBtn2.classList.add("on");
-      setConn(false);
-      syncKeepAwake();
-    } catch (e) {
-      setCoachMessage(`mic error: ${e}`);
-    }
-  } else {
-    await nativeInvoke("stop_audio");
-    chordListening = false;
-    listenBtn2.textContent = "Start listening";
-    listenBtn2.classList.remove("on");
-    setConn(false);
-    syncKeepAwake();
-  }
-  updatePracticeUi(); // mic live/idle text is no longer refreshed every frame
-});
-
-// Hands-free practice controls (the instrument is in your hands): space toggles
-// play/pause, ←/→ step the current chord, d toggles the diagnostics drawer.
-// Only active on the Play screen and never when typing in a field.
-addEventListener("keydown", (e) => {
-  if (currentMode() !== "play") return;
-  const t = e.target as HTMLElement | null;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-  if (e.code === "Space") {
-    e.preventDefault();
-    if (isTimed()) (isPlaying() ? stopTransport() : startTransport());
-  } else if (e.key === "ArrowRight") {
-    e.preventDefault();
-    jumpToChord(currentChordIdx() + 1);
-  } else if (e.key === "ArrowLeft") {
-    e.preventDefault();
-    jumpToChord(currentChordIdx() - 1);
-  } else if (e.key === "d" || e.key === "D") {
-    toggleDiagnostics();
-  }
-});
-
-
-
-
-
-
 
 function loadSongIntoPlay(rec: SongRecord) {
   const song = getSong(rec.id);
@@ -327,11 +273,11 @@ initSession({
 // from global chord index -> token element drives the gold highlight.
 
 
-nativeListen<ChordReading>("chord", (event) => {
-  chord = event.payload;
+onNative<ChordReading>("chord", (reading) => {
+  chord = reading;
   lastChordAt = performance.now();
   setConn(true);
-  noteTunerRms(event.payload.rms);
+  noteTunerRms(reading.rms);
   // Fold this window into the bar being scored. Gated on the transport being
   // engaged so noodling with the song paused isn't graded — but NOT on `waiting`:
   // wait-for-me parks the playhead mid-bar precisely so the player can find the
@@ -341,34 +287,24 @@ nativeListen<ChordReading>("chord", (event) => {
   // grade bars or advance the song, so noodling in the lab can't touch a score.
   const practicing = isPracticeMode(currentMode());
   if (practicing && currentSong() && (!isTimed() || isPlaying())) {
-    accumulateReading(event.payload, lastChordAt);
+    accumulateReading(reading, lastChordAt);
   }
-  if (event.payload.onset) {
+  if (reading.onset) {
     noteOnset(lastChordAt);
     strumcamOnset(lastChordAt);
   }
-  if (practicing) maybeAdvance(event.payload);
+  if (practicing) maybeAdvance(reading);
 });
 
 // backing-track playback position from Rust drives the highway playhead
-nativeListen<BackingStatus>("backing", (event) => {
-  if (event.payload.playing) syncBackingPos(event.payload.pos);
+onNative<BackingStatus>("backing", (status) => {
+  if (status.playing) syncBackingPos(status.pos);
 });
 
 initIosAudio({
-  isChordListening: () => chordListening,
-  stopChordListening: () => {
-    chordListening = false;
-    listenBtn2.textContent = "Start listening";
-    listenBtn2.classList.remove("on");
-  },
-  startChordListening: async () => {
-    await nativeInvoke("start_chords");
-    await nativeInvoke("set_target", { chord: currentTarget() || null });
-    chordListening = true;
-    listenBtn2.textContent = "Stop listening";
-    listenBtn2.classList.add("on");
-  },
+  isChordListening,
+  stopChordListening,
+  startChordListening,
   setCoachMessage: (text) => setCoachMessage(text),
   markDisconnected: () => setConn(false),
   syncKeepAwake,
@@ -441,7 +377,7 @@ function cycleChordShape(name: string, delta: number) {
 initStrumCam({
   isActiveView: () => currentMode() === "strumcam",
   setMicActive: (on) => {
-    chordListening = on;
+    setChordListening(on);
     syncKeepAwake();
   },
 });
