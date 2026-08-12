@@ -250,10 +250,15 @@ mod tests {
     /// frontend shows a target Rust is not grading, which reads as a clean hit.
     #[test]
     fn target_qualities_match_the_frontends_list() {
-        let main_ts = include_str!("../../src/main.ts");
+        // Points at theory/chords.ts, where the resolver lives. include_str! is a
+        // compile-time path, so moving the table breaks the BUILD rather than
+        // letting the check quietly pass — which is what we want from a
+        // cross-language guard. (It moved once already, from main.ts, when main.ts
+        // was broken up into modules.)
+        let main_ts = include_str!("../../src/theory/chords.ts");
         let start = main_ts
             .find("const intervals: Record<string, number[]> = {")
-            .expect("frontend interval table not found in main.ts");
+            .expect("frontend interval table not found in theory/chords.ts");
         let open = main_ts[start..].find('{').unwrap() + start;
         let mut depth = 0;
         let end = main_ts[open..]
@@ -280,7 +285,7 @@ mod tests {
             let suffix = key.trim().trim_matches('"');
             assert!(
                 TARGET_QUALITIES.iter().any(|&(s, _)| s == suffix),
-                "main.ts grades quality {suffix:?} but chords.rs does not — \
+                "theory/chords.ts grades quality {suffix:?} but chords.rs does not — \
                  the frontend would show a target Rust never checks"
             );
         }
