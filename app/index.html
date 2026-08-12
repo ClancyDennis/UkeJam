@@ -108,6 +108,10 @@
             <span id="practice-next">choose song</span>
           </div>
           <span class="mode-spacer"></span>
+          <!-- Beside the listen button, NOT in .transport below: that bar is hidden
+               for untimed (play-to-advance) songs, and watching the strumming hand is
+               useful on any song. Off by default, so practice needs no camera. -->
+          <button class="tp-chip cam-chip" id="tp-cam" title="Watch my strumming hand — shows stroke direction and counts hand sweeps that miss the strings">◉ hand</button>
           <button class="listen-btn slim" id="listen-btn-2">Start listening</button>
           <div class="transport" id="transport" hidden>
             <button class="tp-btn" id="tp-restart" title="Restart">⟲</button>
@@ -120,10 +124,6 @@
               <button class="tp-chip" id="tp-wait" title="Wait for me to play each chord before advancing">⏸ wait</button>
               <div class="track-picker" id="track-picker" hidden></div>
             </div>
-            <!-- Outside .backing-controls on purpose: that block is hidden unless the
-                 song has a backing track, and watching the strumming hand is useful
-                 for any song. Off by default, so practice needs no camera. -->
-            <button class="tp-chip" id="tp-cam" title="Watch my strumming hand — adds stroke direction and counts hand sweeps that miss the strings">◉ hand</button>
           </div>
         </div>
 

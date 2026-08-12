@@ -32,7 +32,7 @@ import { drawHighway } from "./highway.ts";
 import { drawGauge, setGaugeReadout } from "./gauge.ts";
 import { decaySpectrum, drawFFT, easeSpectrum, setFftGoldPitchClasses } from "./fft.ts";
 import { drawChroma } from "./chroma.ts";
-import { renderBreakdown } from "./breakdown.ts";
+import { EXTRA_ITEMISE_LIMIT, renderBreakdown } from "./breakdown.ts";
 import { paintFretboards, updateFretboardPanelState } from "./fretboard.ts";
 
 export interface PlayViewDeps {
@@ -263,6 +263,15 @@ function renderChords() {
     } else if (isCleanHit(c)) {
       coachEl.className = "coach good";
       coachEl.innerHTML = `<span class="ok">nice — that's a clean ${currentTarget()} ✓</span>`;
+    } else if (c.extra.length > EXTRA_ITEMISE_LIMIT) {
+      // Most of the octave is sounding, which fingers cannot do on four strings —
+      // it's a whistle, a voice, a speaker or a fan. Telling the player to mute
+      // eight notes would be nonsense advice about notes they never played, so name
+      // the actual cause instead.
+      coachEl.className = "coach";
+      coachEl.innerHTML =
+        `<span class="miss">too much other sound</span> — the mic is hearing more than the uke, ` +
+        `so the chord can't be read`;
     } else {
       coachEl.className = "coach";
       const parts: string[] = [];
