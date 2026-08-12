@@ -17,7 +17,7 @@ use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
     // Manager brings `app.state()`, used in setup() to apply the saved tuning
     // before the first audio stream opens.
-    AppHandle, Manager, Runtime, State, Url, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, Runtime, State, Url, WebviewUrl, WebviewWindowBuilder,
 };
 
 // ---- OpenRouter OAuth return hook (ported from Wormdrop Battleground) ----
@@ -317,11 +317,18 @@ async fn fetch_tab(url: String) -> Result<tabsearch::TabContent, String> {
         .map_err(|e| format!("task join: {e}"))?
 }
 
+/// Toolbar injected into the tab-preview window: a "⇣ use this tab" and a
+/// close button. The preview has no IPC (see open_tab_page), so the buttons
+/// signal back by navigating to ukejam:// URLs, which the window's
+/// on_navigation hook turns into commands.
+const TAB_PREVIEW_TOOLBAR_JS: &str = include_str!("tab_preview_toolbar.js");
+
 /// Open a tab page in an in-app preview window (a second Tauri webview — the
 /// system WebKit/WebView2), so the user can eyeball a tab without leaving the
 /// app. One shared window, reused/navigated on subsequent opens. The remote
 /// page gets no IPC: capabilities only cover the "main" window, so this is a
-/// plain sandboxed browser view.
+/// plain sandboxed browser view — plus an injected toolbar whose buttons
+/// signal via ukejam:// navigations intercepted below.
 #[tauri::command]
 fn open_tab_page(app: AppHandle, url: String) -> Result<(), String> {
     tabsearch::validate_tab_url(&url)?;
@@ -335,13 +342,61 @@ fn open_tab_page(app: AppHandle, url: String) -> Result<(), String> {
         let external = url
             .parse()
             .map_err(|e| format!("bad url: {e}"))?;
+        let handle = app.clone();
         WebviewWindowBuilder::new(&app, "tab-preview", WebviewUrl::External(external))
             .title("ukejam — tab preview")
             .inner_size(1080.0, 840.0)
+            .initialization_script(TAB_PREVIEW_TOOLBAR_JS)
+            .on_navigation(move |url| {
+                if url.scheme() != "ukejam" {
+                    return true;
+                }
+                let action = url.host_str().unwrap_or("").to_string();
+                let page = url
+                    .query_pairs()
+                    .find(|(k, _)| k == "url")
+                    .map(|(_, v)| v.into_owned());
+                let handle = handle.clone();
+                // Deferred: touching windows from inside the navigation policy
+                // handler would re-enter the webview while it awaits this
+                // verdict (same pattern as the OAuth hook above).
+                tauri::async_runtime::spawn(async move {
+                    match action.as_str() {
+                        "close" => {
+                            if let Some(w) = handle.get_webview_window("tab-preview") {
+                                let _ = w.close();
+                            }
+                        }
+                        "extract" => {
+                            // Hand the page URL to the main window, which
+                            // fetches the text (fetch_tab re-validates the URL)
+                            // and closes the preview once it actually arrived.
+                            if let Some(page) = page {
+                                let _ = handle.emit_to("main", "tab_preview_extract", page);
+                                if let Some(main) = handle.get_webview_window("main") {
+                                    let _ = main.unminimize();
+                                    let _ = main.set_focus();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+                false
+            })
             .build()
             .map_err(|e| format!("open preview window: {e}"))?;
     }
     Ok(())
+}
+
+/// Close the tab-preview window. The ⇣ use-this-tab flow calls this only after
+/// the tab text actually arrived, so a failed fetch leaves the page up.
+#[tauri::command]
+fn close_tab_preview(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("tab-preview") {
+        let _ = w.close();
+    }
 }
 
 /// Trade an OpenRouter PKCE auth code for an API key (see openrouter.ts).
@@ -473,6 +528,7 @@ pub fn run() {
             search_tabs,
             fetch_tab,
             open_tab_page,
+            close_tab_preview,
             load_backing,
             set_backing_channels,
             play_backing,

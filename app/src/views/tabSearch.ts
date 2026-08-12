@@ -5,7 +5,7 @@
 // =====================================================================
 
 import { invokeAiConfig } from "../ai.ts";
-import { nativeInvoke } from "../native.ts";
+import { nativeInvoke, onNative } from "../native.ts";
 import { aiConfig, aiConfigReady } from "./setup/aiSettings.ts";
 
 interface TabHit {
@@ -118,20 +118,32 @@ function renderTabResults(rawQuery: string, out: TabSearchOutcome) {
   tabResultsEl.hidden = false;
 }
 
-// Pull a chosen tab's text into the add-a-song form.
-async function useTabHit(hit: TabHit) {
-  setTabSearchStatus(`⇣ fetching ${hit.song}…`);
+// Pull a tab's text into the add-a-song form. Returns whether the fetch
+// succeeded, so callers can react (the preview flow only closes its window on
+// success).
+async function loadTabFromUrl(
+  url: string,
+  fallback?: { song: string; artist: string }
+): Promise<boolean> {
+  setTabSearchStatus(`⇣ fetching ${fallback?.song ?? "tab"}…`);
   try {
-    const tab = await nativeInvoke<TabContent>("fetch_tab", { url: hit.url });
+    const tab = await nativeInvoke<TabContent>("fetch_tab", { url });
     deps.onTabLoaded({
-      title: tab.title || hit.song,
-      artist: tab.artist || hit.artist,
+      title: tab.title || fallback?.song || "",
+      artist: tab.artist || fallback?.artist || "",
       text: tab.text,
     });
-    setTabSearchStatus(`loaded "${tab.title || hit.song}" — review below, then Add to library`, true);
+    const shown = tab.title || fallback?.song || "tab";
+    setTabSearchStatus(`loaded "${shown}" — review below, then Add to library`, true);
+    return true;
   } catch (e) {
     setTabSearchStatus(`couldn't fetch that tab: ${e}`);
+    return false;
   }
+}
+
+function useTabHit(hit: TabHit) {
+  void loadTabFromUrl(hit.url, hit);
 }
 
 export function initTabSearch(d: TabSearchDeps): void {
@@ -145,5 +157,14 @@ export function initTabSearch(d: TabSearchDeps): void {
   tabSearchBtn.addEventListener("click", runTabSearch);
   tabSearchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") runTabSearch();
+  });
+
+  // "⇣ use this tab" clicked inside the preview window (open_tab_page /
+  // tab_preview_toolbar.js on the Rust side): fetch that page's tab into the
+  // form, and only dismiss the preview once the text actually arrived.
+  onNative<string>("tab_preview_extract", (url) => {
+    void loadTabFromUrl(url).then((ok) => {
+      if (ok) nativeInvoke("close_tab_preview").catch(() => {});
+    });
   });
 }
