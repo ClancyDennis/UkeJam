@@ -32,6 +32,8 @@ import { clearMidiStaging, initMidiImport, stagedMidi } from "./views/midiImport
 import { escapeHtml } from "./dom";
 import { initIosAudio } from "./iosAudio";
 import { drawGauge, initGauge, setGaugeReadout } from "./views/play/gauge";
+import { buildSongStrip, initStrip, updateStrip } from "./views/play/strip";
+import { buildLyrics, initLyrics, updateLyrics } from "./views/play/lyrics";
 import {
   initCoach,
   onBarSealed,
@@ -134,6 +136,8 @@ initTuner({ setConn, syncKeepAwake });
 initGauge();
 initFft();
 initCoach();
+initStrip();
+initLyrics();
 
 
 // =====================================================================
@@ -297,12 +301,9 @@ listenBtn2.addEventListener("click", async () => {
   updatePracticeUi(); // mic live/idle text is no longer refreshed every frame
 });
 
-// --- view state that follows the session's chord index ---
-// Element lists the play and arrangement screens rebuild when a song loads, so
-// currentChordIdx() -> {chip, lyric token, arrangement chord} stays O(1).
-let stripChordEls: HTMLElement[] = [];
-let lyricTokenEls: (HTMLElement | null)[] = [];
-let lyricLineOfIdx: HTMLElement[] = [];
+// --- arrangement view state ---
+// Element lists the arrangement screen rebuilds when a song loads, so
+// currentChordIdx() -> {chord, line, card} stays O(1).
 let arrangementChordEls: HTMLElement[] = [];
 let arrangementLineOfIdx: HTMLElement[] = [];
 let arrangementChordCards = new Map<string, HTMLElement>();
@@ -358,9 +359,6 @@ const aiEnhanceToggle = document.getElementById("ai-enhance") as HTMLInputElemen
 const libAddStatus = document.getElementById("lib-add-status")!;
 const songListEl = document.getElementById("song-list")!;
 const libCountEl = document.getElementById("lib-count")!;
-const songBarEmpty = document.getElementById("song-bar-empty")!;
-const songStrip = document.getElementById("song-strip")!;
-const lyricsView = document.getElementById("lyrics-view")!;
 const songTagEl = document.getElementById("song-tag")!;
 const modeTagEl = document.getElementById("mode-tag")!;
 const practiceTitleEl = document.getElementById("practice-title")!;
@@ -656,7 +654,12 @@ initSession({
     tpBpmEl.textContent = `${Math.round(tempo)} bpm`;
     arrBpmEl.textContent = `${Math.round(tempo)} bpm`;
   },
-  onChordIndexChanged: updateStrip,
+  onChordIndexChanged: () => {
+    updateStrip();
+    updateLyrics();
+    updateArrangementState();
+    updatePracticeUi();
+  },
   onBackingChanged: (has) => {
     if (has) buildTrackPicker();
     backingControlsEl.hidden = !has;
@@ -708,50 +711,6 @@ function buildTrackPicker() {
   }
 }
 
-function buildSongStrip() {
-  const song = currentSong();
-  songStrip.innerHTML = "";
-  stripChordEls = [];
-  if (!song) return;
-  songBarEmpty.hidden = true;
-  songStrip.hidden = false;
-  const hasBars = song.barStart.some(Boolean);
-  song.chordSequence.forEach((ch, i) => {
-    // bar separator before any chord (except the first) that starts a measure
-    if (hasBars && i > 0 && song!.barStart[i]) {
-      const sep = document.createElement("span");
-      sep.className = "bar-sep";
-      songStrip.appendChild(sep);
-    }
-    const el = document.createElement("span");
-    el.className = "strip-chord";
-    el.textContent = ch;
-    el.addEventListener("click", () => {
-      jumpToChord(stripChordEls.indexOf(el));
-    });
-    songStrip.appendChild(el);
-    stripChordEls.push(el);
-  });
-  updateStrip();
-}
-
-function updateStrip() {
-  stripChordEls.forEach((el, i) => {
-    el.classList.toggle("done", i < currentChordIdx());
-    el.classList.toggle("current", i === currentChordIdx());
-    // Verdict tint persists for the whole run, so the strip doubles as a map of
-    // where the song went wrong — the highway trail only shows the last few bars.
-    const v = verdictBuffer().forChordIdx(i);
-    el.classList.toggle("hit", v?.status === "HIT");
-    el.classList.toggle("wrong", v?.status === "WRONG");
-    el.classList.toggle("miss", v?.status === "MISS");
-  });
-  // keep the current chord in view
-  stripChordEls[currentChordIdx()]?.scrollIntoView({ block: "nearest", inline: "center" });
-  updateLyrics();
-  updateArrangementState();
-  updatePracticeUi();
-}
 
 type ArrangementChord = {
   name: string;
@@ -1119,113 +1078,6 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 // Build the lyric DOM: one row per non-empty SongLine, with chord cues
 // positioned above the syllable they fall on (using chordPos). A flat map
 // from global chord index -> token element drives the gold highlight.
-function buildLyrics() {
-  const song = currentSong();
-  lyricsView.innerHTML = "";
-  lyricTokenEls = [];
-  lyricLineOfIdx = [];
-  if (!song) {
-    lyricsView.hidden = true;
-    return;
-  }
-  lyricsView.hidden = false;
-
-  let globalIdx = 0; // running index into chordSequence
-  for (const line of song.lines) {
-    if (line.section) {
-      const sec = document.createElement("div");
-      sec.className = "lyric-section";
-      sec.textContent = line.section;
-      lyricsView.appendChild(sec);
-      continue;
-    }
-    if (!line.chords.length && !line.lyric.trim()) continue;
-
-    const row = document.createElement("div");
-    row.className = "lyric-line";
-
-    if (!line.lyric.trim()) {
-      // chord-only (intro/instrumental) line: render chords as bare cues
-      row.classList.add("instrumental");
-      line.chords.forEach((ch) => {
-        const tok = document.createElement("span");
-        tok.className = "lyric-tok bare";
-        tok.innerHTML = `<span class="chord-cue">${escapeHtml(ch)}</span>`;
-        const gi = globalIdx;
-        tok.addEventListener("click", () => jumpToChord(gi));
-        row.appendChild(tok);
-        lyricTokenEls[gi] = tok;
-        lyricLineOfIdx[gi] = row;
-        globalIdx++;
-      });
-      lyricsView.appendChild(row);
-      continue;
-    }
-
-    // lyric line: split into segments at each chord position, wrapping the
-    // word starting at that position in a token that carries the cue above it.
-    const lyric = line.lyric;
-    // boundaries where a chord sits, sorted with their chord index
-    const cuts = line.chords
-      .map((ch, i) => ({ ch, i, pos: Math.min(line.chordPos[i] ?? 0, lyric.length) }))
-      .sort((a, b) => a.pos - b.pos);
-
-    let cursor = 0;
-    for (let k = 0; k < cuts.length; k++) {
-      const { ch, pos } = cuts[k];
-      // plain text before this chord position
-      if (pos > cursor) {
-        row.appendChild(document.createTextNode(lyric.slice(cursor, pos)));
-        cursor = pos;
-      }
-      // the word/run this chord cue sits over: up to the next chord cut, but
-      // at least to the end of the current word (don't split mid-word visually)
-      const nextPos = k + 1 < cuts.length ? cuts[k + 1].pos : lyric.length;
-      let end = nextPos;
-      // extend to the end of the current word so the underline glow hugs it
-      const wordEnd = (() => {
-        let e = pos;
-        while (e < lyric.length && !/\s/.test(lyric[e])) e++;
-        return e;
-      })();
-      if (wordEnd > end && wordEnd <= lyric.length) end = wordEnd;
-      if (end <= cursor) end = Math.min(cursor + 1, lyric.length);
-
-      const tok = document.createElement("span");
-      tok.className = "lyric-tok";
-      const wordText = lyric.slice(cursor, end) || "·";
-      tok.innerHTML =
-        `<span class="chord-cue">${escapeHtml(ch)}</span>` +
-        `<span class="syll">${escapeHtml(wordText)}</span>`;
-      const gi = globalIdx;
-      tok.addEventListener("click", () => jumpToChord(gi));
-      row.appendChild(tok);
-      lyricTokenEls[gi] = tok;
-      lyricLineOfIdx[gi] = row;
-      globalIdx++;
-      cursor = end;
-    }
-    // trailing text after the last chord
-    if (cursor < lyric.length) {
-      row.appendChild(document.createTextNode(lyric.slice(cursor)));
-    }
-    lyricsView.appendChild(row);
-  }
-  updateLyrics();
-}
-
-// Move highlight to the token at the current chord, brighten its line, autoscroll.
-function updateLyrics() {
-  if (!currentSong()) return;
-  const curLine = lyricLineOfIdx[currentChordIdx()];
-  lyricTokenEls.forEach((tok, i) => {
-    if (tok) tok.classList.toggle("lit", i === currentChordIdx());
-  });
-  lyricsView.querySelectorAll(".lyric-line").forEach((l) => {
-    l.classList.toggle("now", l === curLine);
-  });
-  lyricTokenEls[currentChordIdx()]?.scrollIntoView({ block: "nearest" });
-}
 
 
 nativeListen<ChordReading>("chord", (event) => {
