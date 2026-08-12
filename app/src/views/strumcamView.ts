@@ -1,4 +1,5 @@
-import { StrumCam, type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
+import { type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
+import { setCameraActive, strumcam, subscribeStrumCam } from "../strumcamShared.ts";
 import { nativeInvoke } from "../native.ts";
 
 export interface StrumCamDeps {
@@ -47,28 +48,38 @@ let scMicOn = false;
 let scRafId = 0;
 let scStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-const strumcam = new StrumCam({
+// This view is one subscriber to the shared camera (strumcamShared.ts), not its
+// owner: practice scoring reads the same stream, and two StrumCam instances would
+// mean two getUserMedia calls fighting over one device. Every handler below is
+// gated on this being the visible view, so a session started from the Play screen
+// leaves the lab's tally and strip chart untouched.
+subscribeStrumCam({
   onSample: (s: MotionSample) => {
+    if (!deps.isActiveView()) return;
     scSamples.push(s);
     const cutoff = s.t - 6000;
     while (scSamples.length && scSamples[0].t < cutoff) scSamples.shift();
   },
-  onCall: (call: StrumCall, onsetT: number) => scRecordCall(call, onsetT),
+  onCall: (call: StrumCall, onsetT: number) => {
+    if (!deps.isActiveView()) return;
+    scRecordCall(call, onsetT);
+  },
   onStroke: (stroke: Stroke, ghost: boolean) => {
-    if (!ghost) return;
+    if (!ghost || !deps.isActiveView()) return;
     scTally.ghosts++;
     scRenderTally();
     scFlashStatus(`ghost ${stroke.dir === "down" ? "▼" : "▲"} stroke — hand swept, no strum heard`);
   },
   onStatus: (msg: string) => {
-    scStatusEl.textContent = msg;
+    // The status element only exists once initStrumCam has run.
+    if (scStatusEl) scStatusEl.textContent = msg;
   },
 });
+
 export function strumcamOnset(t: number): void {
   if (!deps.isActiveView() || !strumcam.active) return;
   scMarks.push({ t, call: null });
   if (scMarks.length > 64) scMarks.shift();
-  strumcam.noteOnset(t);
 }
 
 function scRenderTally(): void {
@@ -139,10 +150,10 @@ function scResetSession(): void {
 }
 
 async function startStrumcamSession(): Promise<void> {
-  try {
-    await strumcam.start();
-  } catch (e) {
-    scStatusEl.textContent = `camera error: ${e}`;
+  // Through the shared setter so the Play screen's camera chip and this button
+  // reflect one device rather than each tracking its own idea of it.
+  if (!(await setCameraActive(true))) {
+    scStatusEl.textContent = "camera unavailable — check the permission and try again";
     return;
   }
   strumcam.flip = scFlipEl.checked;
@@ -161,7 +172,7 @@ async function startStrumcamSession(): Promise<void> {
 }
 
 export function stopStrumcamSession(): void {
-  if (strumcam.active) strumcam.stop();
+  void setCameraActive(false);
   cancelAnimationFrame(scRafId);
   if (scMicOn) {
     scMicOn = false;

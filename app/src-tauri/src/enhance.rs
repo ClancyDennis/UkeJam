@@ -110,6 +110,14 @@ Strums NOT in time mean loose timing, which is a real and useful thing to raise 
 but you cannot tell whether they were early or late, so do not say which.\n\
 Rhythm is often more useful for a beginner than chord shapes, so prefer it when \
 the bars show a pattern in it.\n\
+'plus 2 silent hand sweeps, hand kept moving' means a camera watched the strumming \
+hand and saw it sweep twice WITHOUT hitting the strings. Two rules about this:\n\
+- That is GOOD, not a mistake. Keeping the hand moving through the beats you do not \
+strum is how strumming time is held, and it is the main thing worth praising when it \
+appears. Never tell the player to stop it or call it a wasted motion.\n\
+- Most bars will not mention sweeps at all, because the camera is off by default. \
+That means NOBODY WAS WATCHING the hand — it does not mean the hand was still. Say \
+nothing whatsoever about hand movement for those bars.\n\
 These verdicts are measured facts. Treat them as correct.\n\
 Rules:\n\
 (1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \
@@ -125,7 +133,10 @@ No emoji, no markdown, no bullet characters, no headings, no code fences.\n\
 (5) Only mention timing if the lines actually carry early/late figures. If the \
 input says it is untimed, say nothing about timing or rhythm at all.\n\
 (6) If the bars show no clear pattern, say only what is working. Never invent a \
-problem to have something to report.";
+problem to have something to report.\n\
+(7) Never say which way the hand was strumming, and never coach up-versus-down. The \
+app shows the player the strokes it saw, but their accuracy has not been established \
+yet, so any claim you make about direction could be exactly backwards.";
 
 /// What kind of tab enhancement to run. Coaching is deliberately not a variant
 /// here: it has its own model and timeout, so it gets its own entry point

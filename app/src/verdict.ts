@@ -50,6 +50,54 @@ export interface BarRhythm {
   /// Strums that landed within TIMING_TOLERANCE_MS of a grid position. Named for
   /// what a player would call it; the grid includes off-beats.
   onBeat: number;
+  /// Hand strokes the CAMERA saw in this bar, in time order — including ones that
+  /// sounded no string. `null` means the camera was off for this bar.
+  ///
+  /// The null matters more than it looks. An empty array says "your hand never
+  /// moved", which is a judgement; null says "we weren't looking". Collapsing
+  /// those is the same mistake as reading an empty note-diff as a perfect chord,
+  /// which once scored silent bars as HIT.
+  strokes: Array<"down" | "up"> | null;
+  /// Strokes with no strum under them — the hand swept and missed the strings.
+  /// `null` when the camera was off.
+  ///
+  /// Not a fault. "Keep the hand moving through the silent beats" is how strumming
+  /// is taught, and it is the one thing a microphone cannot see at all. Zero ghosts
+  /// is also perfectly fine (a player strumming every beat has none), so this is
+  /// only ever reported as a positive.
+  ghosts: number | null;
+}
+
+/// A camera stroke as the scorer needs it: when it happened, which way the hand
+/// went, and whether any string sounded under it.
+export interface CameraStroke {
+  /// Midpoint of the stroke, performance.now() domain. The stroke has a duration
+  /// (t0..t1 in strumcam.ts) but a bar needs one instant to be assigned to, and the
+  /// midpoint is the least arbitrary choice for a sweep that may straddle a
+  /// boundary.
+  t: number;
+  dir: "down" | "up";
+  /// No mic onset near this stroke: the hand swept and missed the strings.
+  ghost: boolean;
+}
+
+export type CameraStrokes = readonly CameraStroke[];
+
+/// The strokes belonging to one bar: `[barStartAt, barEndAt)`, in time order.
+///
+/// Half-open on purpose. A stroke exactly on a downbeat belongs to the bar that is
+/// starting, not the one that just ended, and a closed interval on both sides would
+/// count it twice — inflating the ghost count of every bar in a session by however
+/// many strokes happen to land on boundaries.
+export function strokesInBar(
+  all: CameraStrokes,
+  barStartAt: number,
+  barEndAt: number
+): CameraStroke[] {
+  return all
+    .filter((s) => s.t >= barStartAt && s.t < barEndAt)
+    .slice()
+    .sort((a, b) => a.t - b.t);
 }
 
 /// The best moment of a bar, accumulated frame by frame. "Best" = highest
@@ -133,6 +181,16 @@ export function seal(
     // no grid — the bar still gets a chord verdict, just no rhythm.
     beats?: number;
     secPerBeat?: number;
+    /// Camera strokes for THIS bar, already windowed by the caller, or null when
+    /// the camera was off for it. Omitting it also means null.
+    ///
+    /// Passed in rather than accumulated per reading because a ghost is only
+    /// knowable ~340ms after the stroke ends — it is defined by an onset failing
+    /// to arrive — so the fact lands well after the bar has sealed. The caller
+    /// therefore keeps a timestamped buffer and hands over the slice that falls in
+    /// this bar's window; anything driven by arrival order would drop the strokes
+    /// at the ends of bars and look like it mostly worked.
+    camera?: CameraStrokes | null;
   }
 ): BarVerdict {
   // Nothing sounded at all: silence or a muted hand. That is a different
@@ -148,7 +206,7 @@ export function seal(
   // that correctly suppresses rhythm scoring too.
   const rhythm =
     ctx.barStartAt !== null && ctx.beats && ctx.secPerBeat
-      ? scoreRhythm(acc.onsets, ctx.barStartAt, ctx.beats, ctx.secPerBeat)
+      ? scoreRhythm(acc.onsets, ctx.barStartAt, ctx.beats, ctx.secPerBeat, ctx.camera ?? null)
       : null;
   return {
     bar: ctx.bar,
@@ -188,7 +246,8 @@ export function scoreRhythm(
   onsets: number[],
   barStartAt: number,
   beats: number,
-  secPerBeat: number
+  secPerBeat: number,
+  camera: CameraStrokes | null = null
 ): BarRhythm {
   const stepMs = (secPerBeat * 1000) / 2; // half-beat grid
   const steps = beats * 2;
@@ -209,6 +268,10 @@ export function scoreRhythm(
     beats,
     offsets,
     onBeat: offsets.filter((o) => Math.abs(o) < TIMING_TOLERANCE_MS).length,
+    // Camera-derived, and null-preserving: no camera means no claim about the
+    // hand, not a claim that it was still.
+    strokes: camera ? camera.map((s) => s.dir) : null,
+    ghosts: camera ? camera.filter((s) => s.ghost).length : null,
   };
 }
 
@@ -230,10 +293,32 @@ export function scoreRhythm(
 /// subdivisions of the beat.
 export function rhythmLabel(r: BarRhythm | null): string {
   if (!r || !r.beats) return "";
-  if (!r.strums) return "no strum";
-  if (r.onBeat === r.strums) return "in time";
-  if (r.onBeat === 0) return "off the beat";
-  return `${r.onBeat}/${r.strums} in time`;
+  const timing = !r.strums
+    ? "no strum"
+    : r.onBeat === r.strums
+      ? "in time"
+      : r.onBeat === 0
+        ? "off the beat"
+        : `${r.onBeat}/${r.strums} in time`;
+  // Ghosts append only when there ARE some. Zero ghosts is correct playing for
+  // anyone strumming every beat, and null means the camera was off, so neither may
+  // produce text — silence is the only honest rendering of both.
+  return r.ghosts ? `${timing}, hand kept moving` : timing;
+}
+
+/// The strokes a bar was played with, in strumming notation: "↓↑↓↑".
+///
+/// Ghosts are included but not marked, because `strokes` carries direction only —
+/// the count is in `ghosts`. That is deliberate: the pattern answers "what shape did
+/// my hand make", which is the thing worth seeing, and threading a per-stroke ghost
+/// flag through would make the notation harder to read for a distinction the ghost
+/// count already states.
+///
+/// "" when the camera was off or saw nothing — never a placeholder, so an empty
+/// readout can't be mistaken for "your hand didn't move".
+export function strokePattern(r: BarRhythm | null): string {
+  if (!r || !r.strokes || !r.strokes.length) return "";
+  return r.strokes.map((d) => (d === "down" ? "↓" : "↑")).join("");
 }
 
 export function timingLabel(offsetMs: number | null): "early" | "late" | null {
@@ -319,7 +404,14 @@ export class VerdictBuffer {
     // Only tightness, for the reasons in rhythmLabel: neither the strum count nor
     // the direction of a timing error is knowable without the song's strumming
     // pattern, and reporting either would mean scolding correct playing or guessing.
-    return ` · ${onBeat}/${strums} in time`;
+    let out = ` · ${onBeat}/${strums} in time`;
+    // Ghosts only when the camera actually saw some. Bars with the camera off carry
+    // null and are skipped entirely, so a session that ran half with the camera and
+    // half without reports the ghosts it genuinely observed rather than diluting
+    // them with bars nobody was watching.
+    const ghosts = w.reduce((sum, v) => sum + (v.rhythm!.ghosts ?? 0), 0);
+    if (ghosts) out += ` · ${ghosts} ghost ${ghosts === 1 ? "stroke" : "strokes"}`;
+    return out;
   }
 
   /// Serialize a window for the LLM. One line per bar, facts only.
@@ -370,6 +462,17 @@ function describe(v: BarVerdict): string {
   if (v.rhythm && v.rhythm.beats) {
     const r = v.rhythm;
     parts.push(`${r.strums} strums in ${r.beats} beats, ${r.onBeat} in time`);
+    // Ghosts only when the camera was watching. `null` (camera off) must produce no
+    // clause at all rather than "0 ghosts": the model would read a zero as "the hand
+    // stopped" and coach against it, which is a claim about audio nobody recorded.
+    // Stated as "hand kept moving" so the model cannot read a bare number as a
+    // defect — rule (7) in SYSTEM_COACH says the same thing in words.
+    // Phrased as EXTRA strokes, not a subset of the strums above: a ghost sounded no
+    // string, so it was never counted as a strum. "N of those" would tell the model
+    // the player strummed fewer times than they did.
+    if (r.ghosts !== null && r.ghosts > 0) {
+      parts.push(`plus ${r.ghosts} silent hand ${r.ghosts === 1 ? "sweep" : "sweeps"}, hand kept moving`);
+    }
   }
   return `${parts.join(", ")} -> ${v.status}`;
 }

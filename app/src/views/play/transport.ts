@@ -6,6 +6,7 @@
 // pushes to through the callbacks initSession is given.
 
 import { escapeHtml } from "../../dom.ts";
+import { cameraActive, setCameraActive } from "../../strumcamShared.ts";
 import { fmtTime } from "../../time.ts";
 import {
   backingTrackList,
@@ -21,6 +22,8 @@ import {
 export interface TransportDeps {
   /// Wait-mode or playback changed something the practice header shows.
   onPracticeStateChanged: () => void;
+  /// The player asked to watch their hand and the camera wouldn't open.
+  onCameraUnavailable: () => void;
 }
 
 let deps: TransportDeps;
@@ -31,6 +34,7 @@ let tpTimeEl: HTMLElement;
 let tpBpmEl: HTMLElement;
 let tpTracksBtn: HTMLButtonElement;
 let tpWaitBtn: HTMLButtonElement;
+let tpCamBtn: HTMLButtonElement;
 let trackPickerEl: HTMLElement;
 let backingControlsEl: HTMLElement;
 let arrTransportEl: HTMLElement;
@@ -102,6 +106,7 @@ export function initTransport(d: TransportDeps): void {
   tpBpmEl = document.getElementById("tp-bpm")!;
   tpTracksBtn = document.getElementById("tp-tracks") as HTMLButtonElement;
   tpWaitBtn = document.getElementById("tp-wait") as HTMLButtonElement;
+  tpCamBtn = document.getElementById("tp-cam") as HTMLButtonElement;
   trackPickerEl = document.getElementById("track-picker")!;
   backingControlsEl = document.getElementById("backing-controls")!;
   arrTransportEl = document.getElementById("arr-transport")!;
@@ -122,6 +127,21 @@ export function initTransport(d: TransportDeps): void {
 
   tpTracksBtn.addEventListener("click", () => {
     trackPickerEl.hidden = !trackPickerEl.hidden;
+  });
+
+  // Reflect what the camera ENDED UP doing, not what we asked of it: a denied
+  // permission prompt must leave the chip unlit rather than claiming to be watching.
+  tpCamBtn.addEventListener("click", () => {
+    const want = !cameraActive();
+    tpCamBtn.disabled = true;
+    void setCameraActive(want)
+      .then((on) => {
+        tpCamBtn.classList.toggle("on", on);
+        // Asked for it and didn't get it — almost always a refused permission. Say so
+        // where the player is looking, or the chip just silently fails to light.
+        if (want && !on) deps.onCameraUnavailable();
+      })
+      .finally(() => (tpCamBtn.disabled = false));
   });
 }
 

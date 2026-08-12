@@ -17,6 +17,8 @@ import {
   verdictBuffer,
 } from "../../session.ts";
 import { timingLabel, type BarVerdict } from "../../verdict.ts";
+import { drawHand } from "../../strumcam.ts";
+import { strumcam } from "../../strumcamShared.ts";
 
 // How many bars the highway keeps tinted behind the NOW line.
 const VERDICT_TRAIL_BARS = 3;
@@ -27,6 +29,28 @@ let hctx: CanvasRenderingContext2D;
 export function initHighway(): void {
   highway = document.getElementById("highway") as HTMLCanvasElement;
   hctx = highway.getContext("2d")!;
+}
+
+/// The tracked hand, painted faintly behind everything else.
+///
+/// Declared decoration: it carries no information the arrows and the ghost count
+/// don't already give, and it is drawn first so the chords always win the
+/// foreground. What it buys is the felt sense that the app is watching — and, when
+/// the tracker locks onto the wrong thing, a visible reason the arrows look wrong.
+///
+/// Alpha is deliberately low. A crisp skeleton over the highway would compete with
+/// the thing the player's eyes must be on.
+function drawAmbientHand(w: number, h: number): void {
+  const hand = strumcam.lastHand;
+  if (!hand) return;
+  hctx.save();
+  hctx.globalAlpha = 0.16;
+  drawHand(hctx, hand, w, h, {
+    color: "rgba(25, 227, 196, 0.9)",
+    jointColor: "rgba(25, 227, 196, 0.7)",
+    lineWidth: 3,
+  });
+  hctx.restore();
 }
 
 export function drawHighway() {
@@ -41,6 +65,7 @@ export function drawHighway() {
   }
   hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   hctx.clearRect(0, 0, w, h);
+  drawAmbientHand(w, h);
 
   const cx = w / 2;
   const nowY = h - 64; // NOW line sits just above the big current chord
@@ -195,6 +220,22 @@ function drawTrailToken(
         ctx.strokeStyle = `rgba(${col},0.45)`;
         ctx.lineWidth = 1 * scale;
         ctx.stroke();
+      }
+    }
+    // Camera direction, above the dots. Present only when the camera was watching
+    // this bar; `strokes` is null otherwise and nothing is drawn, rather than a row
+    // of neutral marks implying the hand was measured and found still.
+    //
+    // Descriptive, NOT scored: direction accuracy hasn't been established against a
+    // known-truth sequence yet, so this shows the player what was seen and nothing
+    // grades against it.
+    if (r.strokes && r.strokes.length) {
+      const arrows = r.strokes.slice(0, shown);
+      ctx.font = `700 ${Math.round(9 * scale)}px "Chakra Petch", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillStyle = `rgba(${col},0.75)`;
+      for (let i = 0; i < arrows.length; i++) {
+        ctx.fillText(arrows[i] === "down" ? "↓" : "↑", x0 + i * step, y - dot - 5 * scale);
       }
     }
   }

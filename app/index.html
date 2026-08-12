@@ -120,6 +120,10 @@
               <button class="tp-chip" id="tp-wait" title="Wait for me to play each chord before advancing">⏸ wait</button>
               <div class="track-picker" id="track-picker" hidden></div>
             </div>
+            <!-- Outside .backing-controls on purpose: that block is hidden unless the
+                 song has a backing track, and watching the strumming hand is useful
+                 for any song. Off by default, so practice needs no camera. -->
+            <button class="tp-chip" id="tp-cam" title="Watch my strumming hand — adds stroke direction and counts hand sweeps that miss the strings">◉ hand</button>
           </div>
         </div>
 
