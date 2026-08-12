@@ -29,6 +29,9 @@ let scStatusEl: HTMLElement;
 let scGlyphEl: HTMLElement;
 let scCallsEl: HTMLElement;
 let scCallsEmptyEl: HTMLElement;
+/// How many recent direction calls the CALLS list keeps. Enough to see a pattern
+/// across a phrase without growing the DOM for a long session.
+const SC_CALLS_KEPT = 40;
 let scDownsEl: HTMLElement;
 let scUpsEl: HTMLElement;
 let scUnsureEl: HTMLElement;
@@ -112,9 +115,16 @@ function scRecordCall(call: StrumCall, onsetT: number): void {
       : `${call.speed.toFixed(2)} h/s · ${Math.round(call.consistency * 100)}% agree · ${call.samples} fr`;
   row.innerHTML = `<span class="sc-call-arrow">${arrow}</span><span class="sc-call-label">${label}</span><span class="sc-call-meta">${meta}</span>`;
   scCallsEl.insertBefore(row, scCallsEl.firstChild);
-  while (scCallsEl.querySelectorAll(".sc-call").length > 40) {
-    scCallsEl.querySelector(".sc-call:last-of-type")?.remove();
-  }
+  // Trim to the newest SC_CALLS_KEPT by walking the matched set, NOT by
+  // re-querying until a count drops. The previous version used
+  // `.sc-call:last-of-type` in a while-loop and hung the whole app on the 41st
+  // strum: :last-of-type means "last <div> among its siblings", and the last
+  // sibling here is the #sc-calls-empty placeholder — also a <div>, but without
+  // .sc-call — so the selector matched nothing, the remove() no-opped, the count
+  // never fell, and the loop spun forever inside querySelector on the main
+  // thread. querySelectorAll returns a static list, so this cannot loop.
+  const rows = scCallsEl.querySelectorAll(".sc-call");
+  for (let i = SC_CALLS_KEPT; i < rows.length; i++) rows[i].remove();
 }
 
 function scResetSession(): void {
