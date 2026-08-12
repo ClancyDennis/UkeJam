@@ -6,19 +6,26 @@ import {
 } from "./native";
 import { getSong, type SongRecord } from "./library";
 import { activeTuning } from "./tunings";
-import { fmtTime } from "./time";
 import {
   hideSoundfontOpenFolder,
   initSoundfont,
 } from "./views/setup/soundfont";
 import { aiConfig, initAiSettings, renderAiPanel, setAiStatus } from "./views/setup/aiSettings";
 import { initOpenRouterAuth, resumeOpenRouterLogin } from "./views/setup/openrouterAuth";
-import { escapeHtml } from "./dom";
 import { initIosAudio } from "./iosAudio";
 import { drawGauge, initGauge, setGaugeReadout } from "./views/play/gauge";
 import { buildSongStrip, initStrip, updateStrip } from "./views/play/strip";
 import { buildLyrics, initLyrics, updateLyrics } from "./views/play/lyrics";
 import { drawHighway, initHighway } from "./views/play/highway";
+import { drawChroma, initChroma } from "./views/play/chroma";
+import { initBreakdown, renderBreakdown } from "./views/play/breakdown";
+import {
+  initTransport,
+  setBackingControlsVisible,
+  setPlayButtons,
+  setTimeReadout,
+  setTimingReadout,
+} from "./views/play/transport";
 import {
   initLibraryView,
   renderSongList,
@@ -53,7 +60,6 @@ import {
 } from "./views/play/fft";
 import {
   accumulateReading,
-  backingTrackList,
   buildSectionMap,
   currentChordIdx,
   currentRecord,
@@ -71,9 +77,6 @@ import {
   maybeAdvance,
   nextDistinctChord,
   resetScoring,
-  restartTransport,
-  selectedBackingChannels,
-  setBackingChannels,
   setLoadedSong,
   setTarget,
   setupBacking,
@@ -82,7 +85,6 @@ import {
   stopTransport,
   syncBackingPos,
   tickTransport,
-  toggleWaitMode,
   verdictBuffer,
 } from "./session";
 
@@ -96,7 +98,7 @@ import {
 } from "./views/tuner";
 import { initTuningSetup } from "./views/setup/tuningSetup";
 import { initStrumCam, stopStrumcamSession, strumcamOnset } from "./views/strumcamView";
-import { PITCH_CLASSES, chordPitchClasses, pcNameToIndex } from "./theory/chords";
+import { chordPitchClasses } from "./theory/chords";
 import {
   cycleShapeChoice,
   resetVoicingsForTuningChange,
@@ -136,6 +138,9 @@ initHighway();
 initFretboard({ cycleChordShape, isChordListening: () => chordListening });
 initArrangement({ cycleChordShape });
 initLibraryView({ loadSongIntoPlay });
+initTransport({ onPracticeStateChanged: updatePracticeUi });
+initChroma();
+initBreakdown();
 
 
 // =====================================================================
@@ -153,25 +158,9 @@ const modeBtns = document.querySelectorAll<HTMLButtonElement>("[data-mode]");
 
 const chordNameEl = document.getElementById("chord-name")!;
 const chordSubEl = document.getElementById("chord-sub")!;
-const transportEl = document.getElementById("transport")!;
-const tpPlayBtn = document.getElementById("tp-play") as HTMLButtonElement;
-const tpRestartBtn = document.getElementById("tp-restart") as HTMLButtonElement;
-const tpTimeEl = document.getElementById("tp-time")!;
-const tpBpmEl = document.getElementById("tp-bpm")!;
-const backingControlsEl = document.getElementById("backing-controls")!;
-const tpTracksBtn = document.getElementById("tp-tracks") as HTMLButtonElement;
-const tpWaitBtn = document.getElementById("tp-wait") as HTMLButtonElement;
-const trackPickerEl = document.getElementById("track-picker")!;
-const arrTransportEl = document.getElementById("arr-transport")!;
-const arrPlayBtn = document.getElementById("arr-play") as HTMLButtonElement;
-const arrRestartBtn = document.getElementById("arr-restart") as HTMLButtonElement;
-const arrTimeEl = document.getElementById("arr-time")!;
-const arrBpmEl = document.getElementById("arr-bpm")!;
 const cleanTargetEl = document.getElementById("clean-target")!;
 const coachEl = document.getElementById("coach")!;
-const targetNotesEl = document.getElementById("target-notes")!;
 const listenBtn2 = document.getElementById("listen-btn-2") as HTMLButtonElement;
-const chromaEl = document.getElementById("chroma")!;
 // analyzer panel (right column)
 const mMatchEl = document.getElementById("m-match")!;
 const mfMatchEl = document.getElementById("mf-match") as HTMLElement;
@@ -189,17 +178,6 @@ let lastOnsetAt = 0;
 let smoothClean = 0;
 
 // build chromagram bars (vertical bars; `.fill` height is driven from chroma values)
-const chromaFills: HTMLElement[] = [];
-const chromaBars: HTMLElement[] = [];
-for (let i = 0; i < 12; i++) {
-  const bar = document.createElement("div");
-  bar.className = "chroma-bar";
-  bar.innerHTML = `<div class="track"><div class="fill"></div></div><span class="pc">${PITCH_CLASSES[i]}</span>`;
-  chromaEl.appendChild(bar);
-  chromaBars.push(bar);
-  chromaFills.push(bar.querySelector(".fill")!);
-}
-
 // view navigation (Play is home; Tune + Setup are utility screens)
 modeBtns.forEach((btn) => {
   btn.addEventListener("click", async () => {
@@ -390,33 +368,18 @@ function loadSongIntoPlay(rec: SongRecord) {
 initSession({
   currentReading: () => chord,
   onPlayingChanged: (on) => {
-    tpPlayBtn.textContent = on ? "❚❚" : "▶";
-    tpPlayBtn.classList.toggle("on", on);
-    arrPlayBtn.textContent = on ? "❚❚" : "▶";
-    arrPlayBtn.classList.toggle("on", on);
+    setPlayButtons(on);
     updatePracticeUi();
   },
-  onTimeChanged: (sec) => {
-    tpTimeEl.textContent = fmtTime(sec);
-    arrTimeEl.textContent = fmtTime(sec);
-  },
-  onTimingReady: (timed, tempo) => {
-    transportEl.hidden = !timed;
-    arrTransportEl.hidden = !timed;
-    if (!timed) return;
-    tpBpmEl.textContent = `${Math.round(tempo)} bpm`;
-    arrBpmEl.textContent = `${Math.round(tempo)} bpm`;
-  },
+  onTimeChanged: setTimeReadout,
+  onTimingReady: setTimingReadout,
   onChordIndexChanged: () => {
     updateStrip();
     updateLyrics();
     updateArrangementState();
     updatePracticeUi();
   },
-  onBackingChanged: (has) => {
-    if (has) buildTrackPicker();
-    backingControlsEl.hidden = !has;
-  },
+  onBackingChanged: setBackingControlsVisible,
   onBarSealed,
   requestCoaching,
   onScoringReset: resetCoachBarCount,
@@ -424,45 +387,6 @@ initSession({
   syncKeepAwake,
 });
 
-tpPlayBtn.addEventListener("click", () => (isPlaying() ? stopTransport() : startTransport()));
-tpRestartBtn.addEventListener("click", restartTransport);
-arrPlayBtn.addEventListener("click", () => (isPlaying() ? stopTransport() : startTransport()));
-arrRestartBtn.addEventListener("click", restartTransport);
-
-tpWaitBtn.addEventListener("click", () => {
-  tpWaitBtn.classList.toggle("on", toggleWaitMode());
-  updatePracticeUi();
-});
-
-tpTracksBtn.addEventListener("click", () => {
-  trackPickerEl.hidden = !trackPickerEl.hidden;
-});
-
-// Build the channel checklist; toggling reloads the backing with the new mix.
-function buildTrackPicker() {
-  trackPickerEl.innerHTML = "";
-  for (const t of backingTrackList()) {
-    const on = selectedBackingChannels().includes(t.channel);
-    const row = document.createElement("label");
-    row.className = "track-opt";
-    row.innerHTML =
-      `<input type="checkbox" ${on ? "checked" : ""} /> ` +
-      `<span>${escapeHtml(t.name)}</span>` +
-      `<span class="t-meta">${t.isDrums ? "drums" : t.isBass ? "bass" : "ch" + (t.channel + 1)} · ${t.noteCount}</span>`;
-    const cb = row.querySelector("input") as HTMLInputElement;
-    cb.addEventListener("change", () => {
-      const channels = selectedBackingChannels();
-      // re-filter in place: keeps the current position + play state (no reload,
-      // no resend of the file), so the song doesn't restart on a toggle.
-      setBackingChannels(
-        cb.checked
-          ? channels.includes(t.channel) ? channels : [...channels, t.channel]
-          : channels.filter((c) => c !== t.channel)
-      );
-    });
-    trackPickerEl.appendChild(row);
-  }
-}
 
 
 
@@ -574,33 +498,6 @@ initAiSettings();
 resumeOpenRouterLogin();
 
 
-// Render the target chord-tones as present/missing tokens (the "where your
-// fingers are wrong" visual). Pulls the target chord's pitch classes and marks
-// each present unless the detector reports it missing; appends any extras.
-function renderBreakdown(reading: ChordReading | null) {
-  if (!currentTarget()) {
-    targetNotesEl.innerHTML = "";
-    return;
-  }
-  const pcs = chordPitchClasses(currentTarget());
-  const missingPcs = new Set((reading?.missing ?? []).map((n) => pcNameToIndex(n)));
-  const active = !!reading?.active;
-  let html = "";
-  for (const pc of pcs) {
-    const present = active && !missingPcs.has(pc);
-    const cls = !active ? "" : present ? "present" : "missing";
-    const mark = !active ? "" : present ? "✓" : "!";
-    html += `<div class="note-tok ${cls}"><span>${PITCH_CLASSES[pc]}</span>${
-      mark ? `<span class="mark">${mark}</span>` : ""
-    }</div>`;
-  }
-  for (const ex of reading?.extra ?? []) {
-    const pc = pcNameToIndex(ex);
-    if (pc < 0 || pcs.includes(pc)) continue;
-    html += `<div class="note-tok extra"><span>${PITCH_CLASSES[pc]}</span><span class="nm">extra</span><span class="mark">+</span></div>`;
-  }
-  targetNotesEl.innerHTML = html;
-}
 
 // map a note name like "G" / "F#" / "Bb" / "G3" to a pitch-class index 0..11
 
@@ -684,11 +581,7 @@ function renderChords() {
     renderBreakdown(c);
 
     // chromagram (height-driven vertical bars)
-    for (let i = 0; i < 12; i++) {
-      const v = Math.max(0, Math.min(1, c.chroma[i] || 0));
-      chromaFills[i].style.height = `${(4 + v * 92).toFixed(1)}%`;
-      chromaBars[i].classList.toggle("target", targetPcs.includes(i));
-    }
+    drawChroma(c.chroma, targetPcs);
 
     // spectrum: ease smoothed buffer toward incoming 96 real bins
     easeSpectrum(c.spectrum ?? []);
@@ -717,10 +610,7 @@ function renderChords() {
     mfMatchEl.style.width = "0%";
     mFluxEl.textContent = "—";
     mOnsetEl.classList.remove("lit");
-    for (let i = 0; i < 12; i++) {
-      chromaFills[i].style.height = "4%";
-      chromaBars[i].classList.toggle("target", targetPcs.includes(i));
-    }
+    drawChroma(null, targetPcs);
     // flat FFT when idle
     decaySpectrum();
     paintFretboards("", false);
