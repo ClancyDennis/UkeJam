@@ -11,7 +11,10 @@
     "verify:strumcam": "node src/verify-strumcam.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "verify:songparse": "node src/verify-songparse.mjs"
+    "verify:songparse": "node src/verify-songparse.mjs",
+    "verify:theory": "node src/verify-theory.mjs",
+    "verify:timing": "node src/verify-timing.mjs",
+    "verify": "pnpm verify:voicings && pnpm verify:verdicts && pnpm verify:strumcam && pnpm verify:songparse && pnpm verify:theory && pnpm verify:timing"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
