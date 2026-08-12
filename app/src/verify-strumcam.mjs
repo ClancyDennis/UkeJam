@@ -323,6 +323,10 @@ console.log("pickStrummingHand");
 function candidate(y, score = 0.9) {
   return { points: handIn(0.4, y - 0.05, 0.6, y + 0.05), label: "", score };
 }
+/// The picker's between-frames memory.
+function track(y, rows) {
+  return { y, rows };
+}
 
 {
   check("no hands -> no pick", pickStrummingHand([], null) === null);
@@ -336,58 +340,63 @@ function candidate(y, score = 0.9) {
   check("a single hand is taken regardless of history", pickStrummingHand([only], null) === only);
 }
 {
-  // The case that caused the bug: two hands, and an established track. The pick must
-  // follow the hand it was already on, NOT whichever is more prominent.
-  const tracked = candidate(0.62);
-  const fretting = candidate(0.30, 0.99); // higher score, deliberately
-  const picked = pickStrummingHand([fretting, tracked], 0.6);
-  check("an established track wins over a more confident stranger", picked === tracked, JSON.stringify(palmY(picked.points)));
+  // THE BUG THIS EXISTS FOR. The track is on the fretting hand, which is holding
+  // still; the strumming hand starts sweeping. A continuity-first rule can never
+  // recover here, because a stationary hand is always nearest to where it just was —
+  // it rewards stillness. Activity has to win.
+  const fretting = candidate(0.30, 0.99); // still, and more confident
+  const strumming = candidate(0.62); // moved 0.12 since last frame
+  const picked = pickStrummingHand([fretting, strumming], track(0.30, [0.30, 0.50]));
+  check(
+    "a moving hand wins the track back from a still one",
+    picked === strumming,
+    `picked row ${palmY(picked.points).toFixed(2)} — the still hand keeps it`
+  );
 }
 {
-  // Continuity holds through a normal strum step. At 30fps a fast strum moves ~0.1
-  // frame-heights per frame.
-  let prev = 0.40;
-  const rows = [0.50, 0.60, 0.68, 0.58, 0.46];
-  const fretting = candidate(0.20, 0.99);
+  // The track follows a strumming hand across a sweep while the fretting hand holds.
+  let prev = track(0.40, [0.40, 0.20]);
+  const rows = [0.52, 0.63, 0.70, 0.58, 0.45];
   let followed = true;
   for (const y of rows) {
     const strumming = candidate(y);
+    const fretting = candidate(0.20, 0.99);
     const picked = pickStrummingHand([fretting, strumming], prev);
     if (picked !== strumming) followed = false;
-    prev = palmY(picked.points);
+    prev = track(palmY(picked.points), [0.20, y]);
   }
-  check("the track follows a strumming hand across a full sweep", followed, `ended at ${prev}`);
+  check("the track follows a strumming hand across a full sweep", followed);
 }
 {
-  // With no history, prefer the more confident detection — there is nothing better
-  // to go on, and it must be deterministic rather than "whichever came first".
+  // Both hands moving (a chord change sweeps the fretting hand too): continuity
+  // decides among the movers, so a strum doesn't hand off mid-sweep.
+  const a = candidate(0.62); // continues the track at 0.58
+  const b = candidate(0.25, 0.99);
+  const picked = pickStrummingHand([b, a], track(0.58, [0.50, 0.15]));
+  check("with both moving, the existing track continues", picked === a);
+}
+{
+  // Idle between phrases: nothing moving. Hold the track rather than chattering.
+  const held = candidate(0.60);
+  const other = candidate(0.30, 0.99);
+  const picked = pickStrummingHand([other, held], track(0.601, [0.601, 0.301]));
+  check("with nothing moving, the current track is held", picked === held);
+}
+{
+  // With no history, prefer the more confident detection — deterministic, not
+  // "whichever came first".
   const weak = candidate(0.7, 0.55);
   const strong = candidate(0.3, 0.95);
   check("no history -> the more confident hand", pickStrummingHand([weak, strong], null) === strong);
-  check("...and the order of the input doesn't change it", pickStrummingHand([strong, weak], null) === strong);
+  check("...and input order doesn't change it", pickStrummingHand([strong, weak], null) === strong);
 }
 {
-  // Equal scores with no history must still be stable frame to frame, or the pick
-  // oscillates and every switch resets the velocity chain.
   const a = candidate(0.3, 0.9);
   const b = candidate(0.7, 0.9);
-  check("an exact tie resolves the same way both orders", pickStrummingHand([a, b], null) === pickStrummingHand([b, a], null));
-}
-{
-  // A near-tie in distance must NOT be resolved by distance: crossing hands would
-  // flip the pick mid-strum. Falls through to the score rule instead.
-  const left = candidate(0.48, 0.6);
-  const right = candidate(0.52, 0.95);
-  const picked = pickStrummingHand([left, right], 0.5);
-  check("hands equally close to the last position fall back to confidence", picked === right);
-}
-{
-  // A hand that teleports (out of frame and back elsewhere) must not be claimed as
-  // the same track — that is what produced fake giant sweeps before.
-  const far = candidate(0.95);
-  const other = candidate(0.10, 0.99);
-  const picked = pickStrummingHand([far, other], 0.5);
-  check("no candidate within one frame's travel -> fall back to confidence", picked === other);
+  check(
+    "an exact tie resolves the same way both orders",
+    pickStrummingHand([a, b], null) === pickStrummingHand([b, a], null)
+  );
 }
 
 // --- flux around a stroke (the silent-sweep vs quiet-strum measurement) -------

@@ -69,6 +69,12 @@ export interface Stroke {
   peak: number;
 }
 
+/// The flux ratio the Rust detector requires before it fires an onset
+/// (ONSET_RATIO in audio.rs). Mirrored here ONLY so the lab can print a stroke's
+/// flux against the bar it was judged by — a hardcoded copy silently lied about the
+/// threshold the moment the detector was retuned.
+export const ONSET_RATIO_MIRROR = 1.8;
+
 /// One audio window's spectral flux, as reported by the detector.
 export interface FluxSample {
   t: number;
@@ -76,6 +82,11 @@ export interface FluxSample {
   /// detector fires an onset at ONSET_RATIO (2.2) plus a rising test.
   ratio: number;
 }
+
+/// A stroke with no onset within this distance is a ghost. Also the span
+/// fluxAroundStroke measures over, so "was it heard" and "how loud was it" are always
+/// answered about the same slice of time.
+const GHOST_MATCH_MS = 180;
 
 /// How loud the strings were around a hand stroke — measurement only.
 ///
@@ -97,9 +108,11 @@ export interface FluxSample {
 export function fluxAroundStroke(
   flux: readonly FluxSample[],
   stroke: Stroke,
-  /// How far either side of the stroke to look, ms. Wide enough to cover the audio
-  /// pipeline's own lag plus the ~186ms FFT window that quantizes onset time.
-  padMs = 120
+  /// How far either side of the stroke to look, ms. Defaults to GHOST_MATCH_MS so
+  /// this measures over EXACTLY the span the ghost decision uses — with a narrower
+  /// pad, a stroke could be marked "heard" from an onset the flux window never saw,
+  /// printing a contradiction ("heard" next to flux 0.61x) on the same row.
+  padMs = GHOST_MATCH_MS
 ): { peak: number; samples: number } {
   const from = stroke.t0 - padMs;
   const to = stroke.t1 + padMs;
@@ -228,6 +241,25 @@ export interface HandCandidate {
   score: number;
 }
 
+/// What the picker remembers between frames.
+export interface HandTrack {
+  /// Palm row of the hand currently being tracked.
+  y: number;
+  /// Palm rows of EVERY hand seen last frame, so movement can be estimated without
+  /// persistent ids (MediaPipe provides none).
+  rows: readonly number[];
+}
+
+export interface PickOptions {
+  /// How far, in frame heights, a hand may move between frames and still be taken
+  /// for the same hand continuing.
+  maxJump?: number;
+  /// Row change per frame above which a hand counts as MOVING. At 30fps a strum
+  /// covers ~0.1 frame-heights per frame, while a fretting hand holding a chord
+  /// covers almost nothing, so this sits well below a strum and above jitter.
+  movingY?: number;
+}
+
 /// Which hand is doing the strumming.
 ///
 /// With numHands: 1 the tracker returned whatever hand it happened to find, so the
@@ -248,34 +280,58 @@ export interface HandCandidate {
 /// chain into fragments too short to call.
 export function pickStrummingHand(
   hands: readonly HandCandidate[],
-  prevY: number | null,
-  /// How far, in frame heights, the tracked hand could plausibly have moved since
-  /// the last frame. A strum peaks around 3 frame-heights/sec, so at 30fps that is
-  /// ~0.1 — doubled for headroom on a slow frame.
-  maxJump = 0.2
+  prev: HandTrack | null,
+  opts: PickOptions = {}
 ): HandCandidate | null {
+  const maxJump = opts.maxJump ?? 0.2;
+  const movingY = opts.movingY ?? 0.015;
   const usable = hands.filter((h) => h.points.length >= 21);
   if (!usable.length) return null;
   if (usable.length === 1) return usable[0];
 
-  // Continuity first: whichever hand is closest to where the tracked hand just was
-  // is almost certainly the same hand. Only accept it if it's clearly closer than
-  // the alternative, so a genuine hand-swap can still win.
-  if (prevY !== null) {
-    const byDistance = usable
-      .map((h) => ({ h, d: Math.abs(palmY(h.points) - prevY) }))
-      .sort((a, b) => a.d - b.d);
-    const [nearest, next] = byDistance;
-    // Inside one frame's plausible travel AND clearly closer than the runner-up.
-    // The margin matters: on a near-tie, picking by distance alone flip-flops between
-    // hands frame to frame, and every switch resets the velocity chain — leaving
-    // fragments too short for classifyStrum to call anything.
-    if (nearest.d < maxJump && nearest.d * 2 < next.d) return nearest.h;
+  // ACTIVITY FIRST. The strumming hand is the one that moves — that is the whole
+  // premise, and the only property that holds for every player regardless of
+  // handedness or camera mount.
+  //
+  // An earlier version led with continuity ("stay on whichever hand is nearest to
+  // where the tracked hand just was") and that inverted the test. A fretting hand
+  // sitting still is ALWAYS nearest to where it just was, so once the track latched
+  // onto it, a vigorously strumming hand could never win it back: the rule rewarded
+  // stillness, which is the opposite of the signal. That is the "grabs the left hand
+  // and won't go back" bug.
+  //
+  // `prev` carries each hand's previous row keyed by its position in the last frame's
+  // list, which is stable enough frame to frame for a movement estimate; MediaPipe
+  // does not give persistent ids, so nearest-match is the available proxy.
+  if (prev && prev.rows.length) {
+    const withMotion = usable.map((h) => {
+      const y = palmY(h.points);
+      // Distance to the closest known row from last frame == how far this hand moved,
+      // assuming the nearest previous row was this same hand.
+      const dy = Math.min(...prev.rows.map((r) => Math.abs(y - r)));
+      return { h, y, dy };
+    });
+    const active = withMotion.filter((m) => m.dy >= movingY).sort((a, b) => b.dy - a.dy);
+    if (active.length === 1) return active[0].h;
+    if (active.length > 1) {
+      // Both hands moving (a chord change sweeps the fretting hand too). Among the
+      // movers, prefer the one continuing the existing track, so a normal strum does
+      // not hand off mid-sweep and fragment the velocity chain.
+      const cont = active
+        .map((m) => ({ ...m, d: Math.abs(m.y - prev.y) }))
+        .sort((a, b) => a.d - b.d);
+      return cont[0].d < maxJump ? cont[0].h : active[0].h;
+    }
+    // Nothing moving: hold the current track rather than flip-flopping on detector
+    // noise while the player is idle between phrases.
+    const held = withMotion
+      .map((m) => ({ ...m, d: Math.abs(m.y - prev.y) }))
+      .sort((a, b) => a.d - b.d)[0];
+    if (held.d < maxJump) return held.h;
   }
 
-  // No usable history (first sighting, or the hands are equally plausible): prefer
-  // the more confident detection, and break an exact tie deterministically by frame
-  // position so the choice can't chatter between frames.
+  // No usable history: prefer the more confident detection, tie-broken by frame
+  // position so the choice cannot chatter between frames.
   return usable
     .slice()
     .sort((a, b) => b.score - a.score || palmY(a.points) - palmY(b.points))[0];
@@ -580,8 +636,6 @@ const RING_MS = 5000;
 /// The call for an onset is made this long after the onset, so the window has
 /// its trailing samples. Latency is fine: this feeds a tally, not the highway.
 const DECIDE_DELAY_MS = 160;
-/// A stroke with no onset within this distance is a ghost.
-const GHOST_MATCH_MS = 180;
 
 /// Where the build puts the MediaPipe assets (scripts/fetch-mediapipe.mjs —
 /// they are fetched/copied at build time, not committed).
@@ -620,9 +674,9 @@ export class StrumCam {
   /// knows the fretting hand is there and has deliberately not locked onto it.
   /// Empty when only one hand is visible.
   otherHands: ReadonlyArray<readonly HandPoint[]> = [];
-  /// Palm row of the hand currently being tracked, for the continuity test in
-  /// pickStrummingHand. Null breaks the track.
-  private trackedY: number | null = null;
+  /// What pickStrummingHand remembers between frames: the tracked hand's row plus
+  /// every hand's row, so movement can be estimated. Null breaks the track.
+  private track: HandTrack | null = null;
   fps = 0;
 
   private readonly events: StrumCamEvents;
@@ -691,7 +745,7 @@ export class StrumCam {
     this.flux = [];
     this.lastHand = null;
     this.otherHands = [];
-    this.trackedY = null;
+    this.track = null;
     this.frames = 0;
     this.fpsAt = performance.now();
     this.running = true;
@@ -710,7 +764,7 @@ export class StrumCam {
     this.stream = null;
     this.lastHand = null;
     this.otherHands = [];
-    this.trackedY = null;
+    this.track = null;
     if (this.video) {
       this.video.srcObject = null;
       this.video = null;
@@ -827,15 +881,18 @@ export class StrumCam {
         score: res.handedness?.[i]?.[0]?.score ?? 1,
       }));
       this.otherHands = found.length > 1 ? found.map((h) => h.points) : [];
-      const picked = pickStrummingHand(found, this.trackedY);
+      const picked = pickStrummingHand(found, this.track);
       if (picked) {
         hand = picked.points;
         score = picked.score;
-        this.trackedY = palmY(picked.points);
+        this.track = {
+          y: palmY(picked.points),
+          rows: found.filter((h) => h.points.length >= 21).map((h) => palmY(h.points)),
+        };
       } else {
         // Nothing usable: forget where we were, so a hand reappearing elsewhere
         // starts a fresh track instead of reading as one huge sweep.
-        this.trackedY = null;
+        this.track = null;
       }
     } catch (e) {
       // A broken inference session won't heal; fall back for the rest of the run.

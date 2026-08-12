@@ -1,4 +1,4 @@
-import { type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
+import { ONSET_RATIO_MIRROR, type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
 import { setCameraActive, strumcam, subscribeStrumCam } from "../strumcamShared.ts";
 import { nativeInvoke } from "../native.ts";
 
@@ -152,10 +152,11 @@ function scRecordCall(call: StrumCall, onsetT: number): void {
 /// onset is called a ghost, but that bundles two different things: a genuinely silent
 /// sweep, and a quiet strum (typically an upstroke) that the audio threshold missed.
 /// Whether they can be separated at all depends on whether their flux ratios
-/// overlap, so every stroke prints its peak flux next to the ONSET_RATIO of 2.2 the
-/// detector requires.
+/// overlap, so every stroke prints its peak flux next to the ratio the detector
+/// requires (ONSET_RATIO_MIRROR — the literal 2.20 that used to be here kept claiming
+/// the old threshold after the detector was retuned to 1.8).
 ///
-/// Read it like this: strokes marked `heard` cleared 2.2 and fired. Strokes marked
+/// Read it like this: strokes marked `heard` fired an onset. Strokes marked
 /// `silent` did not — and their flux number is the interesting one. If deliberate
 /// silent sweeps cluster low (~0.3) and missed upstrokes cluster just under the bar
 /// (~1.5), a threshold exists. If they overlap, this can't be done safely and the
@@ -171,7 +172,7 @@ function scRecordStroke(stroke: Stroke, ghost: boolean, audio: { peak: number; s
   const meta =
     audio.samples === 0
       ? "no audio in window"
-      : `flux ${audio.peak.toFixed(2)}x of 2.20 · ${Math.round(stroke.t1 - stroke.t0)}ms · peak ${stroke.peak.toFixed(2)} h/s`;
+      : `flux ${audio.peak.toFixed(2)}x of ${ONSET_RATIO_MIRROR.toFixed(2)} · ${Math.round(stroke.t1 - stroke.t0)}ms · peak ${stroke.peak.toFixed(2)} h/s`;
   row.innerHTML =
     `<span class="sc-call-arrow">${arrow}</span>` +
     `<span class="sc-call-label">${label}</span>` +
