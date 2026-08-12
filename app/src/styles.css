@@ -3467,6 +3467,13 @@ body.mobile .grain {
 .sc-call.up .sc-call-arrow {
   color: var(--gold);
 }
+/* Stroke measurement rows, distinct from the direction calls they sit among: these
+   are camera events with the audio around them, logged so the silent-sweep vs
+   quiet-strum threshold can be read off real numbers rather than guessed. */
+.sc-call.stroke {
+  border-style: dashed;
+}
+
 .sc-call.unsure .sc-call-arrow {
   color: var(--verdict-miss);
 }

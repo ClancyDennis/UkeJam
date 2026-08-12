@@ -16,6 +16,7 @@ import {
   MotionField,
   StrokeTracker,
   classifyStrum,
+  fluxAroundStroke,
   palmY,
   pickStrummingHand,
   spotlightFor,
@@ -387,6 +388,64 @@ function candidate(y, score = 0.9) {
   const other = candidate(0.10, 0.99);
   const picked = pickStrummingHand([far, other], 0.5);
   check("no candidate within one frame's travel -> fall back to confidence", picked === other);
+}
+
+// --- flux around a stroke (the silent-sweep vs quiet-strum measurement) -------
+//
+// Measurement only — nothing scores on this yet. It exists because "stroke with no
+// onset" currently bundles two different things: a genuinely silent sweep, and a
+// quiet strum the audio threshold missed. Reporting the PEAK matters: a strum's
+// attack is a spike a few tens of ms wide, and an average over the whole stroke
+// would bury it under the quiet frames either side.
+
+console.log("fluxAroundStroke");
+
+const stroke = { t0: 1000, t1: 1200, dir: "down", peak: 2.5 };
+
+{
+  const r = fluxAroundStroke([], stroke);
+  check("no audio at all -> zero samples, zero peak", r.samples === 0 && r.peak === 0, JSON.stringify(r));
+}
+{
+  // The attack spike must survive: a real strum is one loud window among quiet ones.
+  const flux = [
+    { t: 990, ratio: 0.9 },
+    { t: 1050, ratio: 4.2 }, // the attack
+    { t: 1120, ratio: 1.1 },
+    { t: 1190, ratio: 0.8 },
+  ];
+  const r = fluxAroundStroke(flux, stroke);
+  check("the attack spike is reported, not averaged away", r.peak === 4.2, JSON.stringify(r));
+  check("...and every in-window sample is counted", r.samples === 4, JSON.stringify(r));
+}
+{
+  // Audio outside the pad must not be dragged in, or a loud strum in the NEXT bar
+  // would make this sweep look heard.
+  const flux = [
+    { t: 500, ratio: 9 }, // long before
+    { t: 1100, ratio: 0.4 }, // inside
+    { t: 2000, ratio: 9 }, // long after
+  ];
+  const r = fluxAroundStroke(flux, stroke, 120);
+  check("distant loud audio is excluded", r.peak === 0.4, JSON.stringify(r));
+  check("...and not counted", r.samples === 1, JSON.stringify(r));
+}
+{
+  // The pad has to reach either side: the audio pipeline lags, and the ~186ms FFT
+  // window quantizes onset time, so a strum's flux can land just outside the stroke.
+  const flux = [{ t: 900, ratio: 3.0 }]; // 100ms BEFORE t0
+  check("audio just before the stroke is inside the pad", fluxAroundStroke(flux, stroke, 120).peak === 3.0);
+  check("...but not with a pad too small to reach it", fluxAroundStroke(flux, stroke, 50).peak === 0);
+}
+{
+  // A silent sweep is the case the whole measurement exists to identify: motion, and
+  // flux that never approaches the 2.2 the detector requires.
+  const quiet = [
+    { t: 1020, ratio: 0.31 },
+    { t: 1100, ratio: 0.28 },
+  ];
+  const r = fluxAroundStroke(quiet, stroke);
+  check("a silent sweep reports a low peak, well under ONSET_RATIO", r.peak < 1 && r.samples === 2, JSON.stringify(r));
 }
 
 if (failures) {

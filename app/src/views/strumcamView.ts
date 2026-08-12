@@ -64,11 +64,19 @@ subscribeStrumCam({
     if (!deps.isActiveView()) return;
     scRecordCall(call, onsetT);
   },
-  onStroke: (stroke: Stroke, ghost: boolean) => {
-    if (!ghost || !deps.isActiveView()) return;
+  onStroke: (stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }) => {
+    if (!deps.isActiveView()) return;
+    // EVERY stroke is logged with the audio around it, not just ghosts. That is the
+    // measurement: a silent sweep and a quiet strum the onset detector missed both
+    // arrive here as "ghost" today, and the only way to know where to draw the line
+    // between them is to see the flux numbers for both cases side by side.
+    scRecordStroke(stroke, ghost, audio);
+    if (!ghost) return;
     scTally.ghosts++;
     scRenderTally();
-    scFlashStatus(`ghost ${stroke.dir === "down" ? "▼" : "▲"} stroke — hand swept, no strum heard`);
+    scFlashStatus(
+      `ghost ${stroke.dir === "down" ? "▼" : "▲"} stroke — no strum heard (peak flux ${audio.peak.toFixed(2)}x)`
+    );
   },
   onStatus: (msg: string) => {
     // The status element only exists once initStrumCam has run.
@@ -134,6 +142,41 @@ function scRecordCall(call: StrumCall, onsetT: number): void {
   // .sc-call — so the selector matched nothing, the remove() no-opped, the count
   // never fell, and the loop spun forever inside querySelector on the main
   // thread. querySelectorAll returns a static list, so this cannot loop.
+  const rows = scCallsEl.querySelectorAll(".sc-call");
+  for (let i = SC_CALLS_KEPT; i < rows.length; i++) rows[i].remove();
+}
+
+/// Log a completed hand stroke with the audio around it, into the same CALLS list.
+///
+/// This is the measurement for the camera-led onset question. Today a stroke with no
+/// onset is called a ghost, but that bundles two different things: a genuinely silent
+/// sweep, and a quiet strum (typically an upstroke) that the audio threshold missed.
+/// Whether they can be separated at all depends on whether their flux ratios
+/// overlap, so every stroke prints its peak flux next to the ONSET_RATIO of 2.2 the
+/// detector requires.
+///
+/// Read it like this: strokes marked `heard` cleared 2.2 and fired. Strokes marked
+/// `silent` did not — and their flux number is the interesting one. If deliberate
+/// silent sweeps cluster low (~0.3) and missed upstrokes cluster just under the bar
+/// (~1.5), a threshold exists. If they overlap, this can't be done safely and the
+/// honest answer is to say so rather than ship a coin flip.
+function scRecordStroke(stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }): void {
+  scCallsEmptyEl.hidden = true;
+  const arrow = stroke.dir === "down" ? "▼" : "▲";
+  const row = document.createElement("div");
+  // Reuses .sc-call so the existing trim keeps the list bounded; `stroke` tints it
+  // apart from the direction calls above it.
+  row.className = `sc-call stroke ${ghost ? "unsure" : stroke.dir}`;
+  const label = `${stroke.dir} sweep · ${ghost ? "silent" : "heard"}`;
+  const meta =
+    audio.samples === 0
+      ? "no audio in window"
+      : `flux ${audio.peak.toFixed(2)}x of 2.20 · ${Math.round(stroke.t1 - stroke.t0)}ms · peak ${stroke.peak.toFixed(2)} h/s`;
+  row.innerHTML =
+    `<span class="sc-call-arrow">${arrow}</span>` +
+    `<span class="sc-call-label">${label}</span>` +
+    `<span class="sc-call-meta">${meta}</span>`;
+  scCallsEl.insertBefore(row, scCallsEl.firstChild);
   const rows = scCallsEl.querySelectorAll(".sc-call");
   for (let i = SC_CALLS_KEPT; i < rows.length; i++) rows[i].remove();
 }

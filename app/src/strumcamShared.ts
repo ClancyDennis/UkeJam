@@ -26,7 +26,7 @@ const STROKE_RING_MS = 12_000;
 export interface StrumCamSubscriber {
   onSample?: (s: MotionSample) => void;
   onCall?: (call: StrumCall, onsetT: number) => void;
-  onStroke?: (stroke: Stroke, ghost: boolean) => void;
+  onStroke?: (stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }) => void;
   onHand?: (hand: readonly HandPoint[], t: number) => void;
   onStatus?: (msg: string) => void;
 }
@@ -59,13 +59,13 @@ function fan<K extends keyof StrumCamSubscriber>(
 export const strumcam = new StrumCam({
   onSample: (s) => fan("onSample", (h) => h(s)),
   onCall: (call, onsetT) => fan("onCall", (h) => h(call, onsetT)),
-  onStroke: (stroke, ghost) => {
+  onStroke: (stroke, ghost, audio) => {
     // Midpoint, not t0: a sweep that straddles a bar line has to be assigned to
     // one bar, and the middle is the least arbitrary choice.
     strokeRing.push({ t: (stroke.t0 + stroke.t1) / 2, dir: stroke.dir, ghost });
     const cutoff = stroke.t1 - STROKE_RING_MS;
     while (strokeRing.length && strokeRing[0].t < cutoff) strokeRing.shift();
-    fan("onStroke", (h) => h(stroke, ghost));
+    fan("onStroke", (h) => h(stroke, ghost, audio));
   },
   onHand: (hand, t) => fan("onHand", (h) => h(hand, t)),
   onStatus: (msg) => fan("onStatus", (h) => h(msg)),
@@ -95,6 +95,13 @@ export function cameraActive(): boolean {
 /// in main.ts; a no-op while the camera is off.
 export function noteCameraOnset(t: number): void {
   if (strumcam.active) strumcam.noteOnset(t);
+}
+
+/// Every audio window's flux ratio, onset or not. Lets a stroke be asked afterwards
+/// how loud the strings were around it — the measurement behind deciding where a
+/// silent sweep ends and a quiet strum begins.
+export function noteCameraFlux(t: number, ratio: number): void {
+  if (strumcam.active) strumcam.noteFlux(t, ratio);
 }
 
 /// Start the camera, or stop it. Returns whether it ended up running, so a caller
