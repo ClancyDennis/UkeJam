@@ -247,17 +247,38 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 cd app
 pnpm install
 pnpm tauri ios init   # generates the Xcode project under src-tauri/gen/apple
+pnpm sync:ios-icons   # REQUIRED after init — see below
 pnpm tauri ios dev    # run on simulator or a plugged-in device
 pnpm tauri ios build  # archive/IPA
 ```
+
+`sync:ios-icons` is not optional. `tauri ios init` fills the asset catalog with
+**Tauri's own placeholder icon**, not this app's — measured on a fresh generate,
+all 18 entries come out near-white (mean RGB ~230,242,228) where the ukejam
+artwork is dark (~17,34,32). It never reads `icons/ios/`. And `tauri icon` only
+writes the desktop, Windows and Android sets — it touches neither `icons/ios/`
+nor `gen/apple/`. So the app builds and installs showing the placeholder rather
+than failing, which is why the omission is easy to miss. Re-running `init` after
+a config change silently reverts the icons the same way. Since `gen/` is
+gitignored, this applies to every fresh clone, every CI runner, and any time
+`gen/apple` is deleted to clear a build problem.
+
+The script copies exactly what `Contents.json` references, errors if a
+referenced file is absent, and re-checks that no icon carries an alpha channel
+(App Store Connect rejects those with `ERROR ITMS-90717`; `pnpm verify:icons`
+guards the sources independently). If an already-installed build still shows the
+old icon, delete the app from the simulator or device and reinstall — the icon is
+cached.
 
 Xcode does the final link against the Rust static lib, so the audio system
 frameworks cpal needs (CoreAudio, AudioToolbox, plus AVFoundation for the
 session glue) are declared in `tauri.conf.json > bundle > iOS > frameworks` —
 cargo-side link flags don't survive into a `.a`. If that list changes after
 the project was generated, delete `src-tauri/gen/apple` and re-run
-`pnpm tauri ios init` (undefined `_AudioComponent*` / `_AudioUnit*` symbols at
-link time mean the generated project predates the list).
+`pnpm tauri ios init` — then `pnpm sync:ios-icons` again, since deleting
+`gen/apple` takes the icons with it (undefined `_AudioComponent*` /
+`_AudioUnit*` symbols at link time mean the generated project predates the
+list).
 
 Note the simulator has no useful mic input — test the tuner/detector on a real
 device.
