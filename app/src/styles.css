@@ -1136,6 +1136,17 @@ body {
   min-width: 54px;
 }
 
+/* The "N extra / noisy" summary replaces a row of per-note tokens when broadband
+   sound (a whistle, a voice, a fan) lights most of the chroma. Wider than one note
+   token because it carries a count and a word, but ONE token instead of eight, so
+   noise can't wrap the panel into extra rows on a phone. */
+.note-tok.extra.noisy {
+  width: auto;
+  min-width: 74px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .note-tok .nm {
   display: block;
   font-family: "JetBrains Mono", monospace;
@@ -1607,6 +1618,18 @@ body {
   border-color: var(--gold-dim);
   background: rgba(245, 196, 81, 0.1);
   box-shadow: 0 0 12px rgba(245, 196, 81, 0.25);
+}
+
+/* The camera chip sits in the practice header rather than the transport bar (which
+   is hidden for untimed songs), so it needs its own breathing room from the listen
+   button beside it. */
+.cam-chip {
+  margin-right: 10px;
+  flex: none;
+}
+.tp-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* dropdown list of MIDI channels to toggle on/off */
@@ -3444,6 +3467,26 @@ body.mobile .grain {
 .sc-call.up .sc-call-arrow {
   color: var(--gold);
 }
+/* Stroke measurement rows, distinct from the direction calls they sit among: these
+   are camera events with the audio around them, logged so the silent-sweep vs
+   quiet-strum threshold can be read off real numbers rather than guessed. */
+/* Wraps onto two lines rather than squeezing: the meta column is `flex: none`
+   (its numbers are the point), and a stroke row's meta is long enough that it
+   starved the label to zero width — hiding the heard/silent verdict, which is the
+   one thing these rows exist to report. */
+.sc-call.stroke {
+  border-style: dashed;
+  flex-wrap: wrap;
+}
+.sc-call.stroke .sc-call-label {
+  min-width: 96px;
+}
+.sc-call.stroke .sc-call-meta {
+  flex-basis: 100%;
+  margin-left: 0;
+  padding-left: 22px;
+}
+
 .sc-call.unsure .sc-call-arrow {
   color: var(--verdict-miss);
 }

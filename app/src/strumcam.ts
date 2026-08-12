@@ -69,6 +69,63 @@ export interface Stroke {
   peak: number;
 }
 
+/// The flux ratio the Rust detector requires before it fires an onset
+/// (ONSET_RATIO in audio.rs). Mirrored here ONLY so the lab can print a stroke's
+/// flux against the bar it was judged by — a hardcoded copy silently lied about the
+/// threshold the moment the detector was retuned.
+export const ONSET_RATIO_MIRROR = 1.8;
+
+/// One audio window's spectral flux, as reported by the detector.
+export interface FluxSample {
+  t: number;
+  /// Flux as a multiple of its own slow baseline. 1.0 is steady state; the Rust
+  /// detector fires an onset at ONSET_RATIO (2.2) plus a rising test.
+  ratio: number;
+}
+
+/// A stroke with no onset within this distance is a ghost. Also the span
+/// fluxAroundStroke measures over, so "was it heard" and "how loud was it" are always
+/// answered about the same slice of time.
+const GHOST_MATCH_MS = 180;
+
+/// How loud the strings were around a hand stroke — measurement only.
+///
+/// This exists to answer one question with numbers instead of a guess: when a
+/// stroke produces NO onset, was the sweep silent (a real ghost) or was it a quiet
+/// strum the audio threshold missed? Soft upstrokes land in that gap today and are
+/// counted as ghosts, which matters because ghosts are already scored and reported
+/// to the coach as a good thing.
+///
+/// Camera-led by design. Relaxing the audio threshold whenever the hand sweeps
+/// cannot work for a player who only ever plays downstrokes — the relaxation would
+/// be permanently on, which is just a lower global threshold, and that is what
+/// caused 95 onsets for 46 real strums before the rising test was added. The stroke
+/// boundary is the same event whether the pattern is D D D D or D U D U, so the
+/// question is asked AT that boundary rather than continuously.
+///
+/// Reports peak flux in the window, since a strum's attack is a spike a few tens of
+/// ms wide and an average over the whole stroke would bury it.
+export function fluxAroundStroke(
+  flux: readonly FluxSample[],
+  stroke: Stroke,
+  /// How far either side of the stroke to look, ms. Defaults to GHOST_MATCH_MS so
+  /// this measures over EXACTLY the span the ghost decision uses — with a narrower
+  /// pad, a stroke could be marked "heard" from an onset the flux window never saw,
+  /// printing a contradiction ("heard" next to flux 0.61x) on the same row.
+  padMs = GHOST_MATCH_MS
+): { peak: number; samples: number } {
+  const from = stroke.t0 - padMs;
+  const to = stroke.t1 + padMs;
+  let peak = 0;
+  let samples = 0;
+  for (const f of flux) {
+    if (f.t < from || f.t > to) continue;
+    samples++;
+    if (f.ratio > peak) peak = f.ratio;
+  }
+  return { peak, samples };
+}
+
 export interface VelocityChainOptions {
   /// EMA factor applied to the raw velocity (1 = no smoothing).
   ema?: number;
@@ -173,6 +230,112 @@ export class MotionField {
 /// like healthy motion energy does on the fallback path (which sits around
 /// 10–40 on the 0..255 |diff| scale for a real strumming hand).
 const HAND_WEIGHT = 30;
+
+/// One hand as the tracker reports it, with the label MediaPipe assigns.
+export interface HandCandidate {
+  points: readonly HandPoint[];
+  /// "Left" / "Right" as MediaPipe names it, in MIRRORED (selfie) terms — see
+  /// pickStrummingHand for why the label alone can't be trusted.
+  label: string;
+  /// Handedness confidence, 0..1.
+  score: number;
+}
+
+/// What the picker remembers between frames.
+export interface HandTrack {
+  /// Palm row of the hand currently being tracked.
+  y: number;
+  /// Palm rows of EVERY hand seen last frame, so movement can be estimated without
+  /// persistent ids (MediaPipe provides none).
+  rows: readonly number[];
+}
+
+export interface PickOptions {
+  /// How far, in frame heights, a hand may move between frames and still be taken
+  /// for the same hand continuing.
+  maxJump?: number;
+  /// Row change per frame above which a hand counts as MOVING. At 30fps a strum
+  /// covers ~0.1 frame-heights per frame, while a fretting hand holding a chord
+  /// covers almost nothing, so this sits well below a strum and above jitter.
+  movingY?: number;
+}
+
+/// Which hand is doing the strumming.
+///
+/// With numHands: 1 the tracker returned whatever hand it happened to find, so the
+/// moment the strumming hand left frame it locked onto the FRETTING hand and kept
+/// reporting at full confidence. That is worse than losing tracking: the fretting
+/// hand slides along the neck, producing real vertical velocity, so every direction
+/// call stayed confident while describing the wrong hand.
+///
+/// Handedness labels alone don't settle it. MediaPipe labels in mirrored selfie
+/// terms, players strum with either hand, and a rotated or rear-facing mount flips
+/// the sense again — a left-handed player would be tracked on the wrong hand by any
+/// fixed rule. So the choice is made from BEHAVIOUR, which is the same for every
+/// player: the strumming hand moves vertically and the fretting hand does not.
+///
+/// `prevY` is the last accepted palm row, so an established track is preferred over
+/// a hand that merely happens to be nearer the middle of the frame this instant.
+/// Without that the pick oscillates between hands mid-strum, chopping the velocity
+/// chain into fragments too short to call.
+export function pickStrummingHand(
+  hands: readonly HandCandidate[],
+  prev: HandTrack | null,
+  opts: PickOptions = {}
+): HandCandidate | null {
+  const maxJump = opts.maxJump ?? 0.2;
+  const movingY = opts.movingY ?? 0.015;
+  const usable = hands.filter((h) => h.points.length >= 21);
+  if (!usable.length) return null;
+  if (usable.length === 1) return usable[0];
+
+  // ACTIVITY FIRST. The strumming hand is the one that moves — that is the whole
+  // premise, and the only property that holds for every player regardless of
+  // handedness or camera mount.
+  //
+  // An earlier version led with continuity ("stay on whichever hand is nearest to
+  // where the tracked hand just was") and that inverted the test. A fretting hand
+  // sitting still is ALWAYS nearest to where it just was, so once the track latched
+  // onto it, a vigorously strumming hand could never win it back: the rule rewarded
+  // stillness, which is the opposite of the signal. That is the "grabs the left hand
+  // and won't go back" bug.
+  //
+  // `prev` carries each hand's previous row keyed by its position in the last frame's
+  // list, which is stable enough frame to frame for a movement estimate; MediaPipe
+  // does not give persistent ids, so nearest-match is the available proxy.
+  if (prev && prev.rows.length) {
+    const withMotion = usable.map((h) => {
+      const y = palmY(h.points);
+      // Distance to the closest known row from last frame == how far this hand moved,
+      // assuming the nearest previous row was this same hand.
+      const dy = Math.min(...prev.rows.map((r) => Math.abs(y - r)));
+      return { h, y, dy };
+    });
+    const active = withMotion.filter((m) => m.dy >= movingY).sort((a, b) => b.dy - a.dy);
+    if (active.length === 1) return active[0].h;
+    if (active.length > 1) {
+      // Both hands moving (a chord change sweeps the fretting hand too). Among the
+      // movers, prefer the one continuing the existing track, so a normal strum does
+      // not hand off mid-sweep and fragment the velocity chain.
+      const cont = active
+        .map((m) => ({ ...m, d: Math.abs(m.y - prev.y) }))
+        .sort((a, b) => a.d - b.d);
+      return cont[0].d < maxJump ? cont[0].h : active[0].h;
+    }
+    // Nothing moving: hold the current track rather than flip-flopping on detector
+    // noise while the player is idle between phrases.
+    const held = withMotion
+      .map((m) => ({ ...m, d: Math.abs(m.y - prev.y) }))
+      .sort((a, b) => a.d - b.d)[0];
+    if (held.d < maxJump) return held.h;
+  }
+
+  // No usable history: prefer the more confident detection, tie-broken by frame
+  // position so the choice cannot chatter between frames.
+  return usable
+    .slice()
+    .sort((a, b) => b.score - a.score || palmY(a.points) - palmY(b.points))[0];
+}
 
 export interface HandMotionOptions extends VelocityChainOptions {
   /// Detections scoring below this are treated as "no hand".
@@ -473,8 +636,6 @@ const RING_MS = 5000;
 /// The call for an onset is made this long after the onset, so the window has
 /// its trailing samples. Latency is fine: this feeds a tally, not the highway.
 const DECIDE_DELAY_MS = 160;
-/// A stroke with no onset within this distance is a ghost.
-const GHOST_MATCH_MS = 180;
 
 /// Where the build puts the MediaPipe assets (scripts/fetch-mediapipe.mjs —
 /// they are fetched/copied at build time, not committed).
@@ -488,8 +649,10 @@ export interface StrumCamEvents {
   onSample?: (s: MotionSample) => void;
   /// A direction call for a mic onset (fires DECIDE_DELAY_MS after the onset).
   onCall?: (call: StrumCall, onsetT: number) => void;
-  /// A completed hand stroke; `ghost` = no mic onset anywhere near it.
-  onStroke?: (stroke: Stroke, ghost: boolean) => void;
+  /// A completed hand stroke; `ghost` = no mic onset anywhere near it. `audio` is
+  /// how loud the strings were around it (peak flux ratio + window sample count),
+  /// for measuring the silent-sweep vs quiet-strum boundary.
+  onStroke?: (stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }) => void;
   /// The 21-point skeleton for every frame a hand is seen (hand backend only).
   /// This is the hook for hand graphics on other surfaces, e.g. the highway.
   onHand?: (hand: readonly HandPoint[], t: number) => void;
@@ -504,8 +667,16 @@ export class StrumCam {
   /// Which tracking backend is live. "hand" once the model loads; "motion"
   /// until then and whenever the model can't be used.
   backend: StrumCamBackend = "motion";
-  /// Latest skeleton in video coordinates (un-mirrored), null when no hand.
+  /// Latest skeleton of the TRACKED (strumming) hand, in video coordinates
+  /// (un-mirrored). Null when no hand is seen.
   lastHand: readonly HandPoint[] | null = null;
+  /// Every other hand in frame — drawn faintly so the player can see that the app
+  /// knows the fretting hand is there and has deliberately not locked onto it.
+  /// Empty when only one hand is visible.
+  otherHands: ReadonlyArray<readonly HandPoint[]> = [];
+  /// What pickStrummingHand remembers between frames: the tracked hand's row plus
+  /// every hand's row, so movement can be estimated. Null breaks the track.
+  private track: HandTrack | null = null;
   fps = 0;
 
   private readonly events: StrumCamEvents;
@@ -521,6 +692,7 @@ export class StrumCam {
   private strokes = new StrokeTracker();
   private samples: MotionSample[] = [];
   private onsets: number[] = [];
+  private flux: FluxSample[] = [];
   private timers: ReturnType<typeof setTimeout>[] = [];
   private rafId = 0;
   private running = false;
@@ -570,7 +742,10 @@ export class StrumCam {
     this.strokes = new StrokeTracker();
     this.samples = [];
     this.onsets = [];
+    this.flux = [];
     this.lastHand = null;
+    this.otherHands = [];
+    this.track = null;
     this.frames = 0;
     this.fpsAt = performance.now();
     this.running = true;
@@ -588,6 +763,8 @@ export class StrumCam {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.lastHand = null;
+    this.otherHands = [];
+    this.track = null;
     if (this.video) {
       this.video.srcObject = null;
       this.video = null;
@@ -597,6 +774,16 @@ export class StrumCam {
 
   /// The mic heard a strum at `t` (performance.now() domain). Schedule a
   /// direction call once the trailing half of the window has been captured.
+  /// Every audio window's flux ratio, whether or not it fired an onset. Kept so a
+  /// stroke can be asked afterwards how loud the strings actually were — see
+  /// fluxAroundStroke. Measurement only; nothing scores on this yet.
+  noteFlux(t: number, ratio: number): void {
+    if (!this.running) return;
+    this.flux.push({ t, ratio });
+    const cutoff = t - RING_MS;
+    while (this.flux.length && this.flux[0].t < cutoff) this.flux.shift();
+  }
+
   noteOnset(t: number): void {
     if (!this.running) return;
     this.onsets.push(t);
@@ -629,7 +816,11 @@ export class StrumCam {
           this.landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
             baseOptions: { modelAssetPath: HAND_MODEL_PATH, delegate },
             runningMode: "VIDEO",
-            numHands: 1,
+            // Both hands, so the strumming one can be CHOSEN. With numHands: 1 the
+            // tracker returned whichever hand it found, and the moment the strumming
+            // hand left frame it locked onto the fretting hand and kept reporting at
+            // full confidence — see pickStrummingHand.
+            numHands: 2,
           });
           break;
         } catch (e) {
@@ -677,15 +868,31 @@ export class StrumCam {
     this.drawPreview(sample);
   }
 
-  /// Hand backend: palm centroid of the best-scoring hand.
+  /// Hand backend: palm centroid of the STRUMMING hand, chosen from every hand in
+  /// frame (see pickStrummingHand). Both hands are drawn; only one is tracked.
   private handFrame(video: HTMLVideoElement, t: number): MotionSample | null {
     let hand: readonly HandPoint[] | null = null;
     let score = 1;
     try {
       const res = this.landmarker!.detectForVideo(video, t);
-      if (res.landmarks && res.landmarks.length > 0) {
-        hand = res.landmarks[0];
-        score = res.handedness?.[0]?.[0]?.score ?? 1;
+      const found: HandCandidate[] = (res.landmarks ?? []).map((points, i) => ({
+        points,
+        label: res.handedness?.[i]?.[0]?.categoryName ?? "",
+        score: res.handedness?.[i]?.[0]?.score ?? 1,
+      }));
+      this.otherHands = found.length > 1 ? found.map((h) => h.points) : [];
+      const picked = pickStrummingHand(found, this.track);
+      if (picked) {
+        hand = picked.points;
+        score = picked.score;
+        this.track = {
+          y: palmY(picked.points),
+          rows: found.filter((h) => h.points.length >= 21).map((h) => palmY(h.points)),
+        };
+      } else {
+        // Nothing usable: forget where we were, so a hand reappearing elsewhere
+        // starts a fresh track instead of reading as one huge sweep.
+        this.track = null;
       }
     } catch (e) {
       // A broken inference session won't heal; fall back for the rest of the run.
@@ -720,7 +927,11 @@ export class StrumCam {
       const ghost = !this.onsets.some(
         (o) => o >= stroke.t0 - GHOST_MATCH_MS && o <= stroke.t1 + GHOST_MATCH_MS
       );
-      this.events.onStroke?.(stroke, ghost);
+      // Measurement rides along: how loud the strings were around this stroke,
+      // whether or not an onset fired. Nothing scores on it — it exists so the
+      // silent-sweep vs quiet-strum threshold can be chosen from real numbers
+      // instead of guessed at.
+      this.events.onStroke?.(stroke, ghost, fluxAroundStroke(this.flux, stroke));
     }, GHOST_MATCH_MS + DECIDE_DELAY_MS);
     this.timers.push(timer);
     if (this.timers.length > 64) this.timers.shift();
@@ -765,6 +976,20 @@ export class StrumCam {
       ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
+    }
+
+    // Untracked hands (the fretting hand) in outline only, under the spotlit one.
+    // Drawn at all so the player can see the app KNOWS the other hand is there and
+    // has deliberately not locked onto it — when direction calls look wrong, "it's
+    // watching the wrong hand" is the first thing worth ruling out, and an unmarked
+    // hand makes that invisible.
+    for (const other of this.otherHands) {
+      if (other === this.lastHand) continue;
+      drawHand(ctx, other, width, height, {
+        color: "rgba(120, 132, 146, 0.30)",
+        jointColor: "rgba(120, 132, 146, 0.22)",
+        lineWidth: 1.5,
+      });
     }
 
     // Overlays are drawn in video pixel space (un-flip a flipped sample).

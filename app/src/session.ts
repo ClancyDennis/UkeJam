@@ -19,9 +19,12 @@ import {
   accumulate,
   newAccumulator,
   seal,
+  strokesInBar,
   type BarAccumulator,
   type BarVerdict,
+  type CameraStrokes,
 } from "./verdict.ts";
+import { cameraActive, clearStrokes, recentStrokes } from "./strumcamShared.ts";
 import { maybeSoundfontError, playBacking } from "./views/setup/soundfont.ts";
 
 export interface SessionDeps {
@@ -282,6 +285,10 @@ export function resetScoring() {
   currentBarChordIdx = 0;
   currentBarStartedAt = null;
   currentBarWaited = false;
+  // Buffered camera strokes go with the verdicts. They are timestamped, so on a
+  // restart the first bar's window would otherwise still cover sweeps from the
+  // previous attempt and credit them to the new one.
+  clearStrokes();
   // Anything counting bars in the buffer we just emptied has to reset with it —
   // otherwise it stays ahead of verdicts.length and the sectionless trigger
   // stops firing for a whole extra window.
@@ -291,6 +298,25 @@ export function resetScoring() {
 // Close out the bar the accumulator has been filling and file its verdict.
 // `nextBar`/`nextChordIdx` open the following bar in the same step, so the
 // downbeat timestamp used for the timing offset is the one we actually crossed.
+/// The camera strokes belonging to the bar that just closed, or null when the
+/// camera wasn't running for it.
+///
+/// Null, never an empty array: an empty array claims the hand never moved, which is
+/// a judgement about something nobody was watching. Everything downstream — the
+/// subtitle, the highway, the coach prompt — keys off that distinction.
+///
+/// Windowed by timestamp rather than taking whatever has arrived, because a ghost
+/// resolves ~340ms after its stroke ends (it is defined by an onset NOT arriving),
+/// which is often after this bar has already sealed. Arrival order would silently
+/// lose the strokes at the ends of bars.
+function cameraStrokesForBar(startedAt: number | null, endedAt: number | null): CameraStrokes | null {
+  if (!cameraActive() || startedAt === null) return null;
+  // A bar closing with no end timestamp (untimed advance) has no window to slice,
+  // so make no claim rather than guessing at one.
+  if (endedAt === null) return null;
+  return strokesInBar(recentStrokes(), startedAt, endedAt);
+}
+
 export function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number | null) {
   let sealed: BarVerdict | null = null;
   const expected = loadedSong?.chordSequence[currentBarChordIdx] ?? "";
@@ -313,6 +339,7 @@ export function sealCurrentBar(nextBar: number, nextChordIdx: number, at: number
       // verdict, which is right: there is no grid to have played against.
       beats: timed ? beatsPerBar : 0,
       secPerBeat: timed ? secPerBeat : 0,
+      camera: cameraStrokesForBar(currentBarStartedAt, at),
     });
     verdicts.push(sealed);
   }

@@ -110,6 +110,10 @@ Strums NOT in time mean loose timing, which is a real and useful thing to raise 
 but you cannot tell whether they were early or late, so do not say which.\n\
 Rhythm is often more useful for a beginner than chord shapes, so prefer it when \
 the bars show a pattern in it.\n\
+Nothing in this input describes the player's hand MOVEMENT, only the sound. Say \
+nothing about how they hold or move their strumming hand — a camera can watch it, but \
+what it measures is not trustworthy enough to coach from yet, so it is deliberately \
+not given to you.\n\
 These verdicts are measured facts. Treat them as correct.\n\
 Rules:\n\
 (1) Find PATTERNS ACROSS BARS, not single-bar events. 'Every change into F is \
@@ -125,7 +129,10 @@ No emoji, no markdown, no bullet characters, no headings, no code fences.\n\
 (5) Only mention timing if the lines actually carry early/late figures. If the \
 input says it is untimed, say nothing about timing or rhythm at all.\n\
 (6) If the bars show no clear pattern, say only what is working. Never invent a \
-problem to have something to report.";
+problem to have something to report.\n\
+(7) Never say which way the hand was strumming, and never coach up-versus-down. The \
+app shows the player the strokes it saw, but their accuracy has not been established \
+yet, so any claim you make about direction could be exactly backwards.";
 
 /// What kind of tab enhancement to run. Coaching is deliberately not a variant
 /// here: it has its own model and timeout, so it gets its own entry point

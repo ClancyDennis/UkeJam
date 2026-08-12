@@ -21,6 +21,8 @@ import {
   rhythmLabel,
   scoreRhythm,
   seal,
+  strokePattern,
+  strokesInBar,
   timingLabel,
 } from "./verdict.ts";
 
@@ -296,13 +298,16 @@ function verdict(over = {}) {
 }
 
 /// A rhythm block for digest tests: `strums` attacks in a `beats`-beat bar.
-function rhy(strums, beats, offsets = null) {
+/// `camera` defaults to null — the camera-off case, which is what most bars are.
+function rhy(strums, beats, offsets = null, camera = null) {
   const offs = offsets ?? new Array(strums).fill(0);
   return {
     strums,
     beats,
     offsets: offs,
     onBeat: offs.filter((o) => Math.abs(o) < 70).length,
+    strokes: camera ? camera.map((s) => s.dir) : null,
+    ghosts: camera ? camera.filter((s) => s.ghost).length : null,
   };
 }
 {
@@ -415,6 +420,170 @@ console.log("digest()");
   check("untimed digests say so", out.startsWith("untimed"), out);
 }
 eq("an empty buffer digests to nothing", new VerdictBuffer().digest(8, { tempo: 120, timeSig: [4, 4] }), "");
+
+// --- camera strokes: ghosts and direction -----------------------------------
+//
+// Two failure modes are guarded here, both of the "absence read as evidence" kind
+// that has already bitten this codebase twice (an empty note-diff scoring silence
+// as HIT; a source guard scanning a file the code had moved out of):
+//
+//   1. camera off must be null, never 0. Zero says "your hand didn't move" — a
+//      judgement about audio nobody recorded.
+//   2. a ghost is only knowable ~340ms after the stroke ends, which is AFTER the
+//      bar may have sealed. Strokes are therefore assigned by timestamp, not by
+//      arrival, or the ones at the ends of bars vanish and it still looks like it
+//      mostly works.
+
+const D = (t, ghost = false) => ({ t, dir: "down", ghost });
+const U = (t, ghost = false) => ({ t, dir: "up", ghost });
+
+/// The non-camera half of a seal() context, so each test below states only the
+/// camera fields it is actually about.
+const ctx = () => ({ bar: 1, chordIdx: 0, expected: "C", section: "" });
+
+{
+  // (1) The camera-off case, which is the default for every bar today.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 1000);
+  const v = seal(acc, { ...ctx(), barStartAt: 1000, beats: 4, secPerBeat: 0.5 });
+  eq("camera off -> strokes is null, NOT an empty array", v.rhythm.strokes, null);
+  eq("camera off -> ghosts is null, NOT zero", v.rhythm.ghosts, null);
+  check(
+    "camera off says nothing about the hand in the label",
+    !rhythmLabel(v.rhythm).includes("hand"),
+    rhythmLabel(v.rhythm)
+  );
+}
+{
+  // Camera on but the hand genuinely still: 0 is now a real measurement, and must
+  // be distinguishable from null.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 1000);
+  const v = seal(acc, { ...ctx(), barStartAt: 1000, beats: 4, secPerBeat: 0.5, camera: [] });
+  eq("camera on, no strokes -> empty array, not null", v.rhythm.strokes, []);
+  eq("camera on, no ghosts -> 0, not null", v.rhythm.ghosts, 0);
+}
+{
+  // (2) The late-arrival case. Bar 1 is [1000, 3000); a ghost at 2900 resolves at
+  // ~3240, after the bar sealed, and must still land in bar 1.
+  const all = [D(1000), U(1250), D(2900, true), D(3100)];
+  eq(
+    "a stroke near the end of a bar belongs to THAT bar",
+    strokesInBar(all, 1000, 3000).map((s) => s.t),
+    [1000, 1250, 2900]
+  );
+  eq(
+    "...and the next bar's stroke does not leak backwards",
+    strokesInBar(all, 3000, 5000).map((s) => s.t),
+    [3100]
+  );
+}
+{
+  // A stroke exactly on a downbeat belongs to the bar STARTING, counted once.
+  const all = [D(3000)];
+  eq("a boundary stroke is not in the closing bar", strokesInBar(all, 1000, 3000).length, 0);
+  eq("...it is in the opening bar", strokesInBar(all, 3000, 5000).length, 1);
+}
+{
+  // Out-of-order arrival is normal: a 160ms direction call can be reported after a
+  // 340ms ghost from earlier. The bar's strokes must still read in time order.
+  const all = [U(2000), D(1000), D(1500, true)];
+  eq(
+    "strokes come back in time order regardless of arrival order",
+    strokesInBar(all, 1000, 3000).map((s) => s.t),
+    [1000, 1500, 2000]
+  );
+}
+{
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 1000);
+  const camera = [D(1000), U(1250, true), D(1500)];
+  const v = seal(acc, { ...ctx(), barStartAt: 1000, beats: 4, secPerBeat: 0.5, camera });
+  eq("strokes record direction in order", v.rhythm.strokes, ["down", "up", "down"]);
+  eq("ghosts count only the silent sweeps", v.rhythm.ghosts, 1);
+  eq("the pattern renders in strumming notation", strokePattern(v.rhythm), "↓↑↓");
+  // Ghosts are measured but NOT told to the player: a live session counted 25 against
+  // 54 strokes, and their flux showed most were quiet strums the onset detector missed.
+  // Praising someone for keeping the hand moving when the app just failed to hear them
+  // play is the one inversion a practice tool cannot afford.
+  check(
+    "a ghost is recorded but never surfaces in the label",
+    !rhythmLabel(v.rhythm).includes("hand"),
+    rhythmLabel(v.rhythm)
+  );
+}
+{
+  // Zero ghosts with the camera on is CORRECT playing for anyone strumming every
+  // beat. It must read exactly as it did before the camera existed.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true }), 1000);
+  const bare = seal(acc, { ...ctx(), barStartAt: 1000, beats: 4, secPerBeat: 0.5 });
+  const seen = seal(acc, {
+    ...ctx(),
+    barStartAt: 1000,
+    beats: 4,
+    secPerBeat: 0.5,
+    camera: [D(1000)],
+  });
+  eq("zero ghosts reads the same as no camera", rhythmLabel(seen.rhythm), rhythmLabel(bare.rhythm));
+  eq("no strokes -> no pattern text", strokePattern(bare.rhythm), "");
+}
+{
+  // Ghosts must not touch the chord verdict. Rhythm and chord fail independently,
+  // and coupling them would make a clean chord look wrong for a hand movement.
+  const acc = newAccumulator();
+  accumulate(acc, reading({ onset: true, missing: [], extra: [] }), 1000);
+  const withGhosts = seal(acc, {
+    ...ctx(),
+    barStartAt: 1000,
+    beats: 4,
+    secPerBeat: 0.5,
+    camera: [D(1000, true), U(1200, true), D(1400, true)],
+  });
+  eq("ghosts never change the chord verdict", withGhosts.status, "HIT");
+  eq("...and grade() is untouched by them", grade([], []), "HIT");
+}
+{
+  // The digest must distinguish camera-off from hand-still, and survive the
+  // existing prompt guards.
+  const off = new VerdictBuffer();
+  off.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(4, 4) }));
+  off.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(4, 4) }));
+  const offOut = off.digest(8, { tempo: 120, timeSig: [4, 4] });
+  check("camera off adds no sweep clause", !offOut.includes("sweep"), offOut);
+
+  const on = new VerdictBuffer();
+  on.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
+  on.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
+  const onOut = on.digest(8, { tempo: 120, timeSig: [4, 4] });
+  check("a ghost never reaches the coach digest", !onOut.includes("sweep"), onOut);
+  check("...and no hand claim is made either way", !onOut.includes("hand"), onOut);
+  check("no markdown survives the new clause", !/[*#`|]/.test(onOut), onOut);
+  check("still never claims dragging or rushing", !/dragging|rushing/.test(onOut), onOut);
+
+  const zero = new VerdictBuffer();
+  zero.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4, [0, 0], [D(0), U(1)]) }));
+  zero.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4, [0, 0], [D(0), U(1)]) }));
+  check(
+    "camera on with zero ghosts also adds no clause",
+    !zero.digest(8, { tempo: 120, timeSig: [4, 4] }).includes("sweep"),
+    zero.digest(8, { tempo: 120, timeSig: [4, 4] })
+  );
+}
+{
+  // The rolling subtitle: ghosts appear only when observed, and camera-off bars
+  // don't dilute the count.
+  const buf = new VerdictBuffer();
+  buf.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4, [0, 0], [D(0), U(1, true)]) }));
+  buf.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4) })); // camera off
+  const s = buf.rhythmSummary(16);
+  check("the subtitle does not report ghosts yet", !s.includes("ghost"), s);
+
+  const none = new VerdictBuffer();
+  none.push(verdict({ bar: 1, chordIdx: 0, rhythm: rhy(2, 4) }));
+  none.push(verdict({ bar: 2, chordIdx: 1, rhythm: rhy(2, 4) }));
+  check("no camera, no ghost text", !none.rhythmSummary(16).includes("ghost"), none.rhythmSummary(16));
+}
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

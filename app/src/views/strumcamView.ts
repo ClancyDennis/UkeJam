@@ -1,4 +1,5 @@
-import { StrumCam, type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
+import { ONSET_RATIO_MIRROR, type MotionSample, type Stroke, type StrumCall } from "../strumcam.ts";
+import { setCameraActive, strumcam, subscribeStrumCam } from "../strumcamShared.ts";
 import { nativeInvoke } from "../native.ts";
 
 export interface StrumCamDeps {
@@ -47,28 +48,46 @@ let scMicOn = false;
 let scRafId = 0;
 let scStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-const strumcam = new StrumCam({
+// This view is one subscriber to the shared camera (strumcamShared.ts), not its
+// owner: practice scoring reads the same stream, and two StrumCam instances would
+// mean two getUserMedia calls fighting over one device. Every handler below is
+// gated on this being the visible view, so a session started from the Play screen
+// leaves the lab's tally and strip chart untouched.
+subscribeStrumCam({
   onSample: (s: MotionSample) => {
+    if (!deps.isActiveView()) return;
     scSamples.push(s);
     const cutoff = s.t - 6000;
     while (scSamples.length && scSamples[0].t < cutoff) scSamples.shift();
   },
-  onCall: (call: StrumCall, onsetT: number) => scRecordCall(call, onsetT),
-  onStroke: (stroke: Stroke, ghost: boolean) => {
+  onCall: (call: StrumCall, onsetT: number) => {
+    if (!deps.isActiveView()) return;
+    scRecordCall(call, onsetT);
+  },
+  onStroke: (stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }) => {
+    if (!deps.isActiveView()) return;
+    // EVERY stroke is logged with the audio around it, not just ghosts. That is the
+    // measurement: a silent sweep and a quiet strum the onset detector missed both
+    // arrive here as "ghost" today, and the only way to know where to draw the line
+    // between them is to see the flux numbers for both cases side by side.
+    scRecordStroke(stroke, ghost, audio);
     if (!ghost) return;
     scTally.ghosts++;
     scRenderTally();
-    scFlashStatus(`ghost ${stroke.dir === "down" ? "▼" : "▲"} stroke — hand swept, no strum heard`);
+    scFlashStatus(
+      `ghost ${stroke.dir === "down" ? "▼" : "▲"} stroke — no strum heard (peak flux ${audio.peak.toFixed(2)}x)`
+    );
   },
   onStatus: (msg: string) => {
-    scStatusEl.textContent = msg;
+    // The status element only exists once initStrumCam has run.
+    if (scStatusEl) scStatusEl.textContent = msg;
   },
 });
+
 export function strumcamOnset(t: number): void {
   if (!deps.isActiveView() || !strumcam.active) return;
   scMarks.push({ t, call: null });
   if (scMarks.length > 64) scMarks.shift();
-  strumcam.noteOnset(t);
 }
 
 function scRenderTally(): void {
@@ -127,6 +146,42 @@ function scRecordCall(call: StrumCall, onsetT: number): void {
   for (let i = SC_CALLS_KEPT; i < rows.length; i++) rows[i].remove();
 }
 
+/// Log a completed hand stroke with the audio around it, into the same CALLS list.
+///
+/// This is the measurement for the camera-led onset question. Today a stroke with no
+/// onset is called a ghost, but that bundles two different things: a genuinely silent
+/// sweep, and a quiet strum (typically an upstroke) that the audio threshold missed.
+/// Whether they can be separated at all depends on whether their flux ratios
+/// overlap, so every stroke prints its peak flux next to the ratio the detector
+/// requires (ONSET_RATIO_MIRROR — the literal 2.20 that used to be here kept claiming
+/// the old threshold after the detector was retuned to 1.8).
+///
+/// Read it like this: strokes marked `heard` fired an onset. Strokes marked
+/// `silent` did not — and their flux number is the interesting one. If deliberate
+/// silent sweeps cluster low (~0.3) and missed upstrokes cluster just under the bar
+/// (~1.5), a threshold exists. If they overlap, this can't be done safely and the
+/// honest answer is to say so rather than ship a coin flip.
+function scRecordStroke(stroke: Stroke, ghost: boolean, audio: { peak: number; samples: number }): void {
+  scCallsEmptyEl.hidden = true;
+  const arrow = stroke.dir === "down" ? "▼" : "▲";
+  const row = document.createElement("div");
+  // Reuses .sc-call so the existing trim keeps the list bounded; `stroke` tints it
+  // apart from the direction calls above it.
+  row.className = `sc-call stroke ${ghost ? "unsure" : stroke.dir}`;
+  const label = `${stroke.dir} sweep · ${ghost ? "silent" : "heard"}`;
+  const meta =
+    audio.samples === 0
+      ? "no audio in window"
+      : `flux ${audio.peak.toFixed(2)}x of ${ONSET_RATIO_MIRROR.toFixed(2)} · ${Math.round(stroke.t1 - stroke.t0)}ms · peak ${stroke.peak.toFixed(2)} h/s`;
+  row.innerHTML =
+    `<span class="sc-call-arrow">${arrow}</span>` +
+    `<span class="sc-call-label">${label}</span>` +
+    `<span class="sc-call-meta">${meta}</span>`;
+  scCallsEl.insertBefore(row, scCallsEl.firstChild);
+  const rows = scCallsEl.querySelectorAll(".sc-call");
+  for (let i = SC_CALLS_KEPT; i < rows.length; i++) rows[i].remove();
+}
+
 function scResetSession(): void {
   scTally.downs = scTally.ups = scTally.unsure = scTally.ghosts = 0;
   scMarks.length = 0;
@@ -139,10 +194,10 @@ function scResetSession(): void {
 }
 
 async function startStrumcamSession(): Promise<void> {
-  try {
-    await strumcam.start();
-  } catch (e) {
-    scStatusEl.textContent = `camera error: ${e}`;
+  // Through the shared setter so the Play screen's camera chip and this button
+  // reflect one device rather than each tracking its own idea of it.
+  if (!(await setCameraActive(true))) {
+    scStatusEl.textContent = "camera unavailable — check the permission and try again";
     return;
   }
   strumcam.flip = scFlipEl.checked;
@@ -161,7 +216,7 @@ async function startStrumcamSession(): Promise<void> {
 }
 
 export function stopStrumcamSession(): void {
-  if (strumcam.active) strumcam.stop();
+  void setCameraActive(false);
   cancelAnimationFrame(scRafId);
   if (scMicOn) {
     scMicOn = false;

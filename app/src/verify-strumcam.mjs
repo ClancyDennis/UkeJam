@@ -16,7 +16,9 @@ import {
   MotionField,
   StrokeTracker,
   classifyStrum,
+  fluxAroundStroke,
   palmY,
+  pickStrummingHand,
   spotlightFor,
 } from "./strumcam.ts";
 
@@ -301,6 +303,158 @@ function handIn(x0, y0, x1, y1) {
   const big = spotlightFor(handIn(0.05, 0.05, 0.95, 0.95), 640, 480, false);
   const small = spotlightFor(handIn(0.45, 0.45, 0.55, 0.55), 640, 480, false);
   check("the spotlight scales with the hand", big.r > small.r, JSON.stringify({ big, small }));
+}
+
+// --- picking the strumming hand ---------------------------------------------
+//
+// The tracker used to run with numHands: 1 and take whatever it found. When the
+// strumming hand left frame it locked onto the FRETTING hand and kept reporting at
+// full confidence — worse than losing the track, because the fretting hand slides
+// along the neck and so produces real vertical velocity. Every direction call
+// stayed confident while describing the wrong hand.
+//
+// The pick is behavioural, not label-based: handedness labels are mirrored, players
+// strum with either hand, and a rotated mount flips the sense again, so any fixed
+// left/right rule would track the wrong hand for someone.
+
+console.log("pickStrummingHand");
+
+/// A hand candidate centred on row `y`.
+function candidate(y, score = 0.9) {
+  return { points: handIn(0.4, y - 0.05, 0.6, y + 0.05), label: "", score };
+}
+/// The picker's between-frames memory.
+function track(y, rows) {
+  return { y, rows };
+}
+
+{
+  check("no hands -> no pick", pickStrummingHand([], null) === null);
+  check(
+    "a hand with too few landmarks is not usable",
+    pickStrummingHand([{ points: [{ x: 0.5, y: 0.5 }], label: "", score: 1 }], null) === null
+  );
+}
+{
+  const only = candidate(0.5);
+  check("a single hand is taken regardless of history", pickStrummingHand([only], null) === only);
+}
+{
+  // THE BUG THIS EXISTS FOR. The track is on the fretting hand, which is holding
+  // still; the strumming hand starts sweeping. A continuity-first rule can never
+  // recover here, because a stationary hand is always nearest to where it just was —
+  // it rewards stillness. Activity has to win.
+  const fretting = candidate(0.30, 0.99); // still, and more confident
+  const strumming = candidate(0.62); // moved 0.12 since last frame
+  const picked = pickStrummingHand([fretting, strumming], track(0.30, [0.30, 0.50]));
+  check(
+    "a moving hand wins the track back from a still one",
+    picked === strumming,
+    `picked row ${palmY(picked.points).toFixed(2)} — the still hand keeps it`
+  );
+}
+{
+  // The track follows a strumming hand across a sweep while the fretting hand holds.
+  let prev = track(0.40, [0.40, 0.20]);
+  const rows = [0.52, 0.63, 0.70, 0.58, 0.45];
+  let followed = true;
+  for (const y of rows) {
+    const strumming = candidate(y);
+    const fretting = candidate(0.20, 0.99);
+    const picked = pickStrummingHand([fretting, strumming], prev);
+    if (picked !== strumming) followed = false;
+    prev = track(palmY(picked.points), [0.20, y]);
+  }
+  check("the track follows a strumming hand across a full sweep", followed);
+}
+{
+  // Both hands moving (a chord change sweeps the fretting hand too): continuity
+  // decides among the movers, so a strum doesn't hand off mid-sweep.
+  const a = candidate(0.62); // continues the track at 0.58
+  const b = candidate(0.25, 0.99);
+  const picked = pickStrummingHand([b, a], track(0.58, [0.50, 0.15]));
+  check("with both moving, the existing track continues", picked === a);
+}
+{
+  // Idle between phrases: nothing moving. Hold the track rather than chattering.
+  const held = candidate(0.60);
+  const other = candidate(0.30, 0.99);
+  const picked = pickStrummingHand([other, held], track(0.601, [0.601, 0.301]));
+  check("with nothing moving, the current track is held", picked === held);
+}
+{
+  // With no history, prefer the more confident detection — deterministic, not
+  // "whichever came first".
+  const weak = candidate(0.7, 0.55);
+  const strong = candidate(0.3, 0.95);
+  check("no history -> the more confident hand", pickStrummingHand([weak, strong], null) === strong);
+  check("...and input order doesn't change it", pickStrummingHand([strong, weak], null) === strong);
+}
+{
+  const a = candidate(0.3, 0.9);
+  const b = candidate(0.7, 0.9);
+  check(
+    "an exact tie resolves the same way both orders",
+    pickStrummingHand([a, b], null) === pickStrummingHand([b, a], null)
+  );
+}
+
+// --- flux around a stroke (the silent-sweep vs quiet-strum measurement) -------
+//
+// Measurement only — nothing scores on this yet. It exists because "stroke with no
+// onset" currently bundles two different things: a genuinely silent sweep, and a
+// quiet strum the audio threshold missed. Reporting the PEAK matters: a strum's
+// attack is a spike a few tens of ms wide, and an average over the whole stroke
+// would bury it under the quiet frames either side.
+
+console.log("fluxAroundStroke");
+
+const stroke = { t0: 1000, t1: 1200, dir: "down", peak: 2.5 };
+
+{
+  const r = fluxAroundStroke([], stroke);
+  check("no audio at all -> zero samples, zero peak", r.samples === 0 && r.peak === 0, JSON.stringify(r));
+}
+{
+  // The attack spike must survive: a real strum is one loud window among quiet ones.
+  const flux = [
+    { t: 990, ratio: 0.9 },
+    { t: 1050, ratio: 4.2 }, // the attack
+    { t: 1120, ratio: 1.1 },
+    { t: 1190, ratio: 0.8 },
+  ];
+  const r = fluxAroundStroke(flux, stroke);
+  check("the attack spike is reported, not averaged away", r.peak === 4.2, JSON.stringify(r));
+  check("...and every in-window sample is counted", r.samples === 4, JSON.stringify(r));
+}
+{
+  // Audio outside the pad must not be dragged in, or a loud strum in the NEXT bar
+  // would make this sweep look heard.
+  const flux = [
+    { t: 500, ratio: 9 }, // long before
+    { t: 1100, ratio: 0.4 }, // inside
+    { t: 2000, ratio: 9 }, // long after
+  ];
+  const r = fluxAroundStroke(flux, stroke, 120);
+  check("distant loud audio is excluded", r.peak === 0.4, JSON.stringify(r));
+  check("...and not counted", r.samples === 1, JSON.stringify(r));
+}
+{
+  // The pad has to reach either side: the audio pipeline lags, and the ~186ms FFT
+  // window quantizes onset time, so a strum's flux can land just outside the stroke.
+  const flux = [{ t: 900, ratio: 3.0 }]; // 100ms BEFORE t0
+  check("audio just before the stroke is inside the pad", fluxAroundStroke(flux, stroke, 120).peak === 3.0);
+  check("...but not with a pad too small to reach it", fluxAroundStroke(flux, stroke, 50).peak === 0);
+}
+{
+  // A silent sweep is the case the whole measurement exists to identify: motion, and
+  // flux that never approaches the 2.2 the detector requires.
+  const quiet = [
+    { t: 1020, ratio: 0.31 },
+    { t: 1100, ratio: 0.28 },
+  ];
+  const r = fluxAroundStroke(quiet, stroke);
+  check("a silent sweep reports a low peak, well under ONSET_RATIO", r.peak < 1 && r.samples === 2, JSON.stringify(r));
 }
 
 if (failures) {

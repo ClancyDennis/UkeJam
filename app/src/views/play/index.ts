@@ -7,6 +7,7 @@
 // none of which know about each other.
 
 import { chordPitchClasses } from "../../theory/chords.ts";
+import { strokePattern } from "../../verdict.ts";
 import { currentMode, isPracticeMode } from "../../state/appMode.ts";
 import { nativeInvoke, type ChordReading } from "../../native.ts";
 import {
@@ -31,7 +32,7 @@ import { drawHighway } from "./highway.ts";
 import { drawGauge, setGaugeReadout } from "./gauge.ts";
 import { decaySpectrum, drawFFT, easeSpectrum, setFftGoldPitchClasses } from "./fft.ts";
 import { drawChroma } from "./chroma.ts";
-import { renderBreakdown } from "./breakdown.ts";
+import { EXTRA_ITEMISE_LIMIT, renderBreakdown } from "./breakdown.ts";
 import { paintFretboards, updateFretboardPanelState } from "./fretboard.ts";
 
 export interface PlayViewDeps {
@@ -132,6 +133,20 @@ export function toggleDiagnostics(force?: boolean) {
 }
 
 
+/// The stroke pattern of the most recent bar the camera saw, as " · ↓↑↓↑".
+///
+/// Walks back from the newest bar rather than reading only the last one: with the
+/// camera just switched on, the newest sealed bar may predate it, and showing
+/// nothing then would look like the toggle hadn't worked. Stops at the first bar
+/// that has strokes, so it never stitches two bars into one fake pattern.
+function latestStrokePattern(): string {
+  for (const v of verdictBuffer().recent(8).reverse()) {
+    const pattern = strokePattern(v.rhythm);
+    if (pattern) return ` · ${pattern}`;
+  }
+  return "";
+}
+
 export function updatePracticeUi() {
   const song = currentSong();
   // mode bar edge + tag: teal "free play" vs. gold "practice"
@@ -163,12 +178,17 @@ export function updatePracticeUi() {
   // Rhythm alongside the chord score, because they fail independently: a player
   // can hold every chord perfectly and still strum once where the bar wants four.
   const rhythmText = isTimed() ? verdictBuffer().rhythmSummary(16) : "";
+  // The strokes of the most recent bar the camera actually saw, in the notation
+  // strumming is taught in. Only the last bar, not a rolling window: a pattern is a
+  // per-bar shape, and concatenating several would read as one long nonsense bar.
+  // "" when the camera is off, so nothing implies the hand was measured.
+  const strokeText = latestStrokePattern();
 
   songTagEl.textContent = artist ? `${title} · ${artist}` : title;
   practiceTitleEl.textContent = artist ? `${title} — ${artist}` : title;
   practiceSubEl.textContent =
     (isTimed() ? `${modeText} · ${micText} · ${backingText}` : `${modeText} · ${micText}`) +
-    scoreText + rhythmText;
+    scoreText + rhythmText + strokeText;
   practicePosEl.textContent = `${currentChordIdx() + 1}/${song.chordSequence.length} · ${current}`;
   practiceNextEl.textContent = next ? `next ${next}` : "last chord";
 }
@@ -243,6 +263,15 @@ function renderChords() {
     } else if (isCleanHit(c)) {
       coachEl.className = "coach good";
       coachEl.innerHTML = `<span class="ok">nice — that's a clean ${currentTarget()} ✓</span>`;
+    } else if (c.extra.length > EXTRA_ITEMISE_LIMIT) {
+      // Most of the octave is sounding, which fingers cannot do on four strings —
+      // it's a whistle, a voice, a speaker or a fan. Telling the player to mute
+      // eight notes would be nonsense advice about notes they never played, so name
+      // the actual cause instead.
+      coachEl.className = "coach";
+      coachEl.innerHTML =
+        `<span class="miss">too much other sound</span> — the mic is hearing more than the uke, ` +
+        `so the chord can't be read`;
     } else {
       coachEl.className = "coach";
       const parts: string[] = [];

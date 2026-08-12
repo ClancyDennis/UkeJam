@@ -39,8 +39,50 @@ const PRESENCE: f32 = 0.18; // chroma bin above this counts as "sounding"
 // not an absolute level — the same setting works for a quiet fingerpick and a
 // loud strum without recalibrating.
 const FLUX_SMOOTH: f32 = 0.05; // EMA weight for the slow flux baseline
-const ONSET_RATIO: f32 = 2.2; // flux must exceed this multiple of the baseline
-const ONSET_REFRACTORY: Duration = Duration::from_millis(60); // one strum = one onset
+// Flux must exceed this multiple of the baseline. LOWERED from 2.2 after the camera
+// work exposed what it was costing: a third of real strokes in a live session were
+// being classified as silent hand sweeps because their strum was never heard.
+//
+// The reason is structural. The baseline is an EMA of recent flux, so a loud strum
+// RAISES the bar the next strum is measured against — a soft upstroke after a hard
+// downstroke gets a ratio near 1.9 while being an unmistakable attack. Instrumenting
+// the real 12-strum fixture found windows with a rise factor of 1675x (a string
+// plainly being struck) rejected for a ratio of 1.70.
+//
+// So the rise test, not the ratio, is the discriminating signal: a decaying string
+// cannot rise, whereas a level ratio only asks "is this louder than lately". The
+// ratio is kept as a cheap floor against room noise, not as the main gate.
+//
+// 1.8 chosen by sweeping the fixture (12 real strums, three buffer sizes):
+//
+//   1.5 -> 14/16/16   over-fires: double-triggers return
+//   1.8 -> 12/13/13   +1 worst case, tightest spread
+//   2.0 -> 11/12/13
+//   2.2 -> 11/11/12   the old value — already MISSING a strum at two buffer sizes
+//
+// Note that the fixture is all downstrokes at even force (see its .json), so it can
+// bound the over-firing risk of relaxing the gate but cannot show the quiet-upstroke
+// case that motivated this. That is why the value is conservative rather than as low
+// as the upstroke evidence alone would suggest.
+const ONSET_RATIO: f32 = 1.8;
+// One strum = one onset. RAISED from 60ms alongside the ratio change above.
+//
+// Relaxing the ratio gate brought back re-fires the old value tolerated because the
+// high ratio was suppressing them anyway. Swept against the fixture, the shortest
+// inter-onset gap goes 93ms (60ms refractory) -> 140ms (100-140) -> 163ms (160), and
+// only 160ms clears every gap inside a strum's ~350ms envelope.
+//
+// 160ms is NOT chosen, because it costs more than it buys: sixteenth notes are 125ms
+// apart at 120bpm, so a refractory that long would silently drop fast strumming — the
+// same class of error as the ratio gate dropping quiet upstrokes, just at the other
+// end. 140ms keeps sixteenths detectable up to ~105bpm while removing the worst
+// re-fires.
+//
+// The residual is one 140ms gap on this recording. It is a re-fire, not a strum, and
+// it is why the double-trigger test asserts >=120ms rather than a strum-spacing
+// figure: that is what this detector honestly achieves, and pretending otherwise
+// would mean a test that passes by being loose.
+const ONSET_REFRACTORY: Duration = Duration::from_millis(140);
 // An onset must also be RISING: this window's flux has to exceed the previous
 // window's by this factor.
 //
@@ -529,6 +571,7 @@ impl Analyzer {
     /// `now` is passed in rather than read here so the tests can drive the
     /// refractory gate deterministically.
     fn track_onset(&self, mag: &[f32], now: Instant) -> (bool, f32) {
+        let (ratio_gate, refractory) = (ONSET_RATIO, ONSET_REFRACTORY);
         let (lo, hi) = self.chroma_bins(mag.len());
         let mut st = self.onset.lock().unwrap();
         let flux: f32 = (lo..hi)
@@ -548,11 +591,11 @@ impl Analyzer {
 
         let clear_of_refractory = st
             .last_onset
-            .is_none_or(|t| now.duration_since(t) >= ONSET_REFRACTORY);
+            .is_none_or(|t| now.duration_since(t) >= refractory);
         // Rising, not merely loud — see ONSET_RISE_RATIO. Without this the ringing
         // tail of one strum reads as several attacks.
         let rising = flux > st.prev_flux * ONSET_RISE_RATIO;
-        if ratio >= ONSET_RATIO && rising && clear_of_refractory {
+        if ratio >= ratio_gate && rising && clear_of_refractory {
             st.last_onset = Some(now);
             st.latched = true;
         }
@@ -834,6 +877,29 @@ mod tests {
     /// milliseconds, so every window would look simultaneous and the refractory
     /// would suppress everything. Virtual time derived from the sample position is
     /// what the refractory gate sees live, and it makes the result deterministic.
+    /// Milliseconds between consecutive onsets, for the double-trigger check.
+    fn onset_gaps_ms(samples: &[f32], chunk: usize) -> Vec<u64> {
+        let analyzer = Analyzer::new(44_100.0);
+        let t0 = Instant::now();
+        let mut at_ms: Vec<u64> = vec![];
+        let mut pos = FFT_SIZE;
+        while pos <= samples.len() {
+            let window = &samples[pos - FFT_SIZE..pos];
+            let (mag, rms) = analyzer.spectrum(window);
+            if rms < RMS_GATE {
+                analyzer.reset_onset();
+            } else {
+                let ms = (pos as u64 * 1000) / 44_100;
+                if analyzer.track_onset(&mag, t0 + Duration::from_millis(ms)).0 {
+                    at_ms.push(ms);
+                }
+                analyzer.clear_onset();
+            }
+            pos += chunk;
+        }
+        at_ms.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
     fn count_onsets(samples: &[f32], chunk: usize) -> usize {
         let analyzer = Analyzer::new(44_100.0);
         let t0 = Instant::now();
@@ -880,9 +946,39 @@ mod tests {
         for chunk in [512usize, 1024, 2048] {
             let n = count_onsets(&samples, chunk);
             assert!(
-                (10..=14).contains(&n),
-                "chunk {chunk}: {n} onsets for 12 real strums — expected 10..=14 \
-                 (without the rising test this audio gives 16-17)"
+                (11..=13).contains(&n),
+                "chunk {chunk}: {n} onsets for 12 real strums — expected 11..=13. \
+                 Measured 12/13/13 at ONSET_RATIO 1.8. Above 13 means double-triggers \
+                 (the rising test has stopped separating attack from ring-out); below \
+                 11 means real strums are being dropped, which is what a high ratio \
+                 gate did before — it cost a third of strokes in a live session."
+            );
+        }
+    }
+
+    /// Onsets must be spaced like strums, not clustered like a mis-fired tail.
+    ///
+    /// The count bound above is necessary but not sufficient: relaxing the ratio gate
+    /// could hold the total near 12 while pairing up — one strum firing twice and
+    /// another dropped. That would score as "about right" and be wrong twice over, so
+    /// the SPACING is pinned separately.
+    #[test]
+    fn real_strums_are_not_double_triggered() {
+        let samples = real_strums();
+        for chunk in [512usize, 1024, 2048] {
+            let gaps = onset_gaps_ms(&samples, chunk);
+            let shortest = gaps.iter().copied().min().unwrap_or(u64::MAX);
+            // The fixture packs each strum into ~350ms with 150ms of silence between,
+            // so genuine onsets here are ~500ms apart. The bound is 120ms rather than
+            // anything near 500 because that is what this detector actually achieves:
+            // one 140ms re-fire survives, and clearing it needs a 160ms refractory
+            // that would drop sixteenth notes above ~95bpm. Asserting the honest
+            // figure means this test fails if re-firing gets WORSE, which is the point
+            // — a bound set at the aspiration would just always pass.
+            assert!(
+                shortest >= 120,
+                "chunk {chunk}: two onsets only {shortest}ms apart — that is one strum \
+                 counted twice, not two strums. Gaps: {gaps:?}"
             );
         }
     }
@@ -1027,3 +1123,5 @@ mod tests {
         );
     }
 }
+
+

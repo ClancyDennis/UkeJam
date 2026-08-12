@@ -98,6 +98,7 @@ import {
 } from "./views/tuner";
 import { initTuningSetup } from "./views/setup/tuningSetup";
 import { initStrumCam, stopStrumcamSession, strumcamOnset } from "./views/strumcamView";
+import { noteCameraFlux, noteCameraOnset } from "./strumcamShared";
 import {
   cycleShapeChoice,
   resetVoicingsForTuningChange,
@@ -137,7 +138,11 @@ initHighway();
 initFretboard({ cycleChordShape, isChordListening });
 initArrangement({ cycleChordShape });
 initLibraryView({ loadSongIntoPlay });
-initTransport({ onPracticeStateChanged: updatePracticeUi });
+initTransport({
+  onPracticeStateChanged: updatePracticeUi,
+  onCameraUnavailable: () =>
+    setCoachMessage("couldn't open the camera — check the camera permission, then tap ◉ hand again"),
+});
 initChroma();
 initBreakdown();
 initPlayView({
@@ -278,6 +283,10 @@ onNative<ChordReading>("chord", (reading) => {
   lastChordAt = performance.now();
   setConn(true);
   noteTunerRms(reading.rms);
+  // Every window's flux, onset or not: a stroke is asked afterwards how loud the
+  // strings were around it, which is how the silent-sweep vs quiet-strum boundary
+  // gets measured rather than guessed. No-op while the camera is off.
+  noteCameraFlux(lastChordAt, reading.flux);
   // Fold this window into the bar being scored. Gated on the transport being
   // engaged so noodling with the song paused isn't graded — but NOT on `waiting`:
   // wait-for-me parks the playhead mid-bar precisely so the player can find the
@@ -291,6 +300,10 @@ onNative<ChordReading>("chord", (reading) => {
   }
   if (reading.onset) {
     noteOnset(lastChordAt);
+    // The camera needs every onset regardless of which screen is up: an onset is how
+    // a stroke is judged sounded-or-ghost, and the Play screen scores ghosts too.
+    // The lab view's own strip chart stays gated inside strumcamOnset.
+    noteCameraOnset(lastChordAt);
     strumcamOnset(lastChordAt);
   }
   if (practicing) maybeAdvance(reading);
