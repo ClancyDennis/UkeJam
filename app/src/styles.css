@@ -1514,6 +1514,37 @@ body {
   color: var(--text-dim);
   margin-bottom: 12px;
 }
+
+/* Viewport forensics readout (see #diag-viewport in index.html). Lowercase
+   monospace: these are raw numbers to photograph, not chrome. */
+.diag-viewport {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: none;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0 12px;
+}
+
+/* Invisible probes whose computed size IS the safe-area inset — the only way
+   to read env() from JS. Fixed so they cost no layout. */
+.env-probe {
+  position: fixed;
+  visibility: hidden;
+  pointer-events: none;
+  width: 1px;
+}
+.env-probe.top {
+  height: env(safe-area-inset-top, 0px);
+}
+.env-probe.bottom {
+  height: env(safe-area-inset-bottom, 0px);
+}
 .drawer-close {
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;

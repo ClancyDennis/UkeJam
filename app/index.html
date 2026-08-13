@@ -216,6 +216,11 @@
       <div class="drawer" id="diag-drawer" hidden>
         <div class="drawer-head">
           Diagnostics
+          <!-- Viewport forensics for the iPad letterbox/safe-area hunt: how big
+               the webview THINKS it is vs. the screen, and what the safe-area
+               env() vars actually resolve to. One screenshot of this line from
+               a device tells us which layer is eating the pixels. -->
+          <span class="diag-viewport" id="diag-viewport">—</span>
           <button class="drawer-close" id="diag-close" title="Close (d)">close ✕</button>
         </div>
         <div class="diag-grid">
