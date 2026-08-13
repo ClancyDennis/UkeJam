@@ -4,6 +4,7 @@
 // The verdict tint persists for the whole run, so the strip doubles as a map of
 // where the song went wrong — the highway trail only shows the last few bars.
 
+import { scrollWithin } from "../../dom.ts";
 import { currentChordIdx, currentSong, jumpToChord, verdictBuffer } from "../../session.ts";
 
 let songStrip: HTMLElement;
@@ -53,6 +54,9 @@ export function updateStrip() {
     el.classList.toggle("wrong", v?.status === "WRONG");
     el.classList.toggle("miss", v?.status === "MISS");
   });
-  // keep the current chord in view
-  stripChordEls[currentChordIdx()]?.scrollIntoView({ block: "nearest", inline: "center" });
+  // Keep the current chord in view by scrolling the strip itself — NOT
+  // scrollIntoView, which also scrolls the clipped .song-bar/.bottom-band
+  // ancestors and leaves the whole bottom band sliced off (see scrollWithin).
+  const cur = stripChordEls[currentChordIdx()];
+  if (cur) scrollWithin(songStrip, cur);
 }
