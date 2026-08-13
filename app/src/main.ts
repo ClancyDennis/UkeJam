@@ -309,9 +309,11 @@ onNative<ChordReading>("chord", (reading) => {
   if (practicing) maybeAdvance(reading);
 });
 
-// backing-track playback position from Rust drives the highway playhead
+// Backing-track playback position from Rust anchors the highway playhead.
+// Paused statuses matter too: they stop the dead-reckoning in tickTransport,
+// so the playhead can't glide on while the engine is silent (wait-mode).
 onNative<BackingStatus>("backing", (status) => {
-  if (status.playing) syncBackingPos(status.pos);
+  syncBackingPos(status.pos, status.latency ?? 0, status.playing);
 });
 
 initIosAudio({

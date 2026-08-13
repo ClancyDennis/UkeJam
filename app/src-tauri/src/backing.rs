@@ -31,9 +31,14 @@ const MAX_VLQ: u64 = 0x0FFF_FFFF;
 #[derive(Serialize, Clone)]
 pub struct BackingStatus {
     pub playing: bool,
-    pub pos: f64,    // playback position in seconds
+    pub pos: f64,    // samples RENDERED so far, in seconds (leads the speaker)
     pub length: f64, // total length in seconds
     pub loaded: bool,
+    // Output pipeline latency in seconds (cpal's playback-vs-callback
+    // timestamp gap): how far `pos` runs ahead of what is audible right now.
+    // The frontend subtracts this so the highway playhead tracks the sound,
+    // not the render cursor. 0.0 when the host can't report it.
+    pub latency: f64,
 }
 
 /// The synthesizer + sequencer + loaded song, shared with the output thread.
@@ -45,6 +50,7 @@ struct Engine {
     playing: bool,
     loaded: bool,
     looping: bool,
+    latency: f64, // last measured output latency in seconds (see BackingStatus)
     midi: Option<Arc<MidiFile>>, // kept so the synth can rebuild at device rate
     raw: Option<Arc<Vec<u8>>>, // original (unfiltered) MIDI, for re-filtering channels
 }
@@ -81,6 +87,7 @@ fn new_engine(sound_font: &Arc<SoundFont>, sample_rate: f64) -> Engine {
         playing: false,
         loaded: false,
         looping: true,
+        latency: 0.0,
         midi: None,
         raw: None,
     }
@@ -336,12 +343,14 @@ impl BackingState {
                 pos: eng.pos,
                 length: eng.length,
                 loaded: eng.loaded,
+                latency: eng.latency,
             },
             None => BackingStatus {
                 playing: false,
                 pos: 0.0,
                 length: 0.0,
                 loaded: false,
+                latency: 0.0,
             },
         }
     }
@@ -528,13 +537,13 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
     let mut right = vec![0f32; BLOCK];
     let app_cb = app.clone();
     let eng_cb = engine.clone();
-    let mut frame = 0usize; // for throttling status emits
+    let mut emit = EmitState::new(); // for throttling status emits
 
     let err_fn = |e| eprintln!("backing output error: {e}");
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(
             &config.into(),
-            move |out: &mut [f32], _| {
+            move |out: &mut [f32], info| {
                 fill_output(
                     out,
                     out_channels,
@@ -542,7 +551,8 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
                     &mut right,
                     &eng_cb,
                     &app_cb,
-                    &mut frame,
+                    &mut emit,
+                    output_latency(info),
                 );
             },
             err_fn,
@@ -552,7 +562,7 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
             let mut mix = Vec::<f32>::new();
             device.build_output_stream(
                 &config.into(),
-                move |out: &mut [i16], _| {
+                move |out: &mut [i16], info| {
                     if mix.len() < out.len() {
                         mix.resize(out.len(), 0.0);
                     }
@@ -563,7 +573,8 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
                         &mut right,
                         &eng_cb,
                         &app_cb,
-                        &mut frame,
+                        &mut emit,
+                        output_latency(info),
                     );
                     for (dst, src) in out.iter_mut().zip(&mix) {
                         *dst = f32_to_i16(*src);
@@ -577,7 +588,7 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
             let mut mix = Vec::<f32>::new();
             device.build_output_stream(
                 &config.into(),
-                move |out: &mut [u16], _| {
+                move |out: &mut [u16], info| {
                     if mix.len() < out.len() {
                         mix.resize(out.len(), 0.0);
                     }
@@ -588,7 +599,8 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
                         &mut right,
                         &eng_cb,
                         &app_cb,
-                        &mut frame,
+                        &mut emit,
+                        output_latency(info),
                     );
                     for (dst, src) in out.iter_mut().zip(&mix) {
                         *dst = f32_to_u16(*src);
@@ -606,6 +618,38 @@ fn build_output(engine: Arc<Mutex<Option<Engine>>>, app: AppHandle) -> Result<cp
     Ok(stream)
 }
 
+/// How far the frontend playhead may drift before a fresh position event is
+/// worth an IPC round-trip. The frontend dead-reckons between events, so this
+/// only bounds how long a rate mismatch can accumulate.
+const EMIT_INTERVAL_SECS: f64 = 0.05;
+
+/// Per-stream state for throttling `backing` status emits.
+struct EmitState {
+    last_pos: f64,
+    last_playing: bool,
+}
+
+impl EmitState {
+    fn new() -> Self {
+        Self {
+            // forces an emit on the first playing callback
+            last_pos: f64::NEG_INFINITY,
+            last_playing: false,
+        }
+    }
+}
+
+/// The gap between "this callback is running" and "these samples reach the
+/// speaker", per cpal's stream timestamps. None/zero on hosts that don't
+/// report it — the frontend then simply gets no latency compensation.
+fn output_latency(info: &cpal::OutputCallbackInfo) -> f64 {
+    let ts = info.timestamp();
+    ts.playback
+        .duration_since(&ts.callback)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
 /// Render synth audio into the device output buffer, honoring play/pause.
 fn fill_output(
     out: &mut [f32],
@@ -614,7 +658,8 @@ fn fill_output(
     right: &mut [f32],
     engine: &Arc<Mutex<Option<Engine>>>,
     app: &AppHandle,
-    frame: &mut usize,
+    emit: &mut EmitState,
+    latency: f64,
 ) {
     let frames = out.len() / channels.max(1);
     let mut written = 0;
@@ -634,6 +679,7 @@ fn fill_output(
                 return;
             };
             playing = eng.playing && eng.loaded;
+            eng.latency = latency;
             if playing {
                 eng.sequencer.render(&mut left[..n], &mut right[..n]);
                 eng.pos += n as f64 / eng.sample_rate;
@@ -669,19 +715,26 @@ fn fill_output(
         written += n;
     }
 
-    // throttle status events (~ every 8 callbacks)
-    *frame += 1;
-    if (*frame).is_multiple_of(8) || hit_end {
-        let st = {
-            let guard = engine.lock().unwrap();
-            guard.as_ref().map(|eng| BackingStatus {
-                playing: eng.playing,
-                pos: if pos_secs > 0.0 { pos_secs } else { eng.pos },
-                length: eng.length,
-                loaded: eng.loaded,
-            })
-        };
-        if let Some(st) = st {
+    // Throttle status events by MUSICAL TIME, not callback count: the old
+    // every-8th-callback rule meant one event per ~170ms with a typical 1024-
+    // frame device buffer — the highway playhead visibly advanced in steps.
+    // The frontend dead-reckons between events now, so all an emit has to do
+    // is re-anchor the extrapolation and report play/pause flips promptly.
+    let st = {
+        let guard = engine.lock().unwrap();
+        guard.as_ref().map(|eng| BackingStatus {
+            playing: eng.playing,
+            pos: if pos_secs > 0.0 { pos_secs } else { eng.pos },
+            length: eng.length,
+            loaded: eng.loaded,
+            latency: eng.latency,
+        })
+    };
+    if let Some(st) = st {
+        let due = st.playing && (st.pos - emit.last_pos).abs() >= EMIT_INTERVAL_SECS;
+        if due || st.playing != emit.last_playing || hit_end {
+            emit.last_pos = st.pos;
+            emit.last_playing = st.playing;
             let _ = app.emit("backing", st);
         }
     }

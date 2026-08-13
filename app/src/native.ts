@@ -87,9 +87,13 @@ export interface ChordReading {
 
 export interface BackingStatus {
   playing: boolean;
+  // Samples rendered so far, in seconds. This RUNS AHEAD of what the speaker
+  // is playing by `latency` — subtract it to get the audible position.
   pos: number;
   length: number;
   loaded: boolean;
+  // Output pipeline latency in seconds (0 when the host can't report it).
+  latency: number;
 }
 
 export interface AudioInterruption {
