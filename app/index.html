@@ -148,10 +148,14 @@
             <div class="now-tag">— NOW —</div>
             <div class="highway-stage">
               <canvas id="highway" class="highway-canvas"></canvas>
-              <div class="current-chord">
-                <div class="chord-name" id="chord-name">—</div>
-                <div class="chord-sub" id="chord-sub">Playing</div>
-              </div>
+            </div>
+            <!-- In flow BELOW the lane, not overlaid on it: as an absolute
+                 overlay the 96px glyph covered the NOW line and the entire
+                 verdict trail on tall screens (iPad), so chords vanished
+                 before they ever "arrived". -->
+            <div class="current-chord">
+              <div class="chord-name" id="chord-name">—</div>
+              <div class="chord-sub" id="chord-sub">Playing</div>
             </div>
             <!-- slim inline cleanliness (replaces the radial gauge in the cluster) -->
             <div class="clean-inline">

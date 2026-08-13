@@ -75,7 +75,7 @@ export function drawHighway() {
   drawAmbientHand(w, h);
 
   const cx = w / 2;
-  const nowY = h - 64; // NOW line sits just above the big current chord
+  const nowY = h - 64; // leaves room below the line for the verdict trail
   const topY = 28;
   const TEAL = "25,227,196";
   const GOLD = "245,196,81";
