@@ -296,7 +296,12 @@ onNative<ChordReading>("chord", (reading) => {
   // grade bars or advance the song, so noodling in the lab can't touch a score.
   const practicing = isPracticeMode(currentMode());
   if (practicing && currentSong() && (!isTimed() || isPlaying())) {
-    accumulateReading(reading, lastChordAt);
+    // Grade the strum at the moment it HAPPENED, not when its reading arrived:
+    // the pipeline (capture buffer + emit coalescing + IPC) delivered it
+    // 40-90ms late, the same order as the 70ms timing tolerance, so a player
+    // dead on the beat read as "late". The camera fusion below deliberately
+    // stays on arrival time — its pairing thresholds were tuned against it.
+    accumulateReading(reading, lastChordAt - (reading.onsetAgeMs || 0));
   }
   if (reading.onset) {
     noteOnset(lastChordAt);
