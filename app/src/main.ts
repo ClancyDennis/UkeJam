@@ -89,6 +89,7 @@ import {
 } from "./session";
 
 import { currentMode, isPracticeMode, setMode, type AppMode } from "./state/appMode";
+import { initWelcome } from "./views/welcome";
 import {
   initTuner,
   isTunerListening,
@@ -127,6 +128,10 @@ function syncKeepAwake() {
   keepAwake = want;
   nativeInvoke("set_keep_awake", { awake: want }).catch(() => {});
 }
+
+// The launch splash goes first: it is opaque, so everything below wires up
+// out of sight and the reveal lands on a finished screen.
+initWelcome();
 
 initTuner({ setConn, syncKeepAwake });
 initGauge();

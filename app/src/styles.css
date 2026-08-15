@@ -3529,3 +3529,89 @@ body.mobile .grain {
     height: 180px;
   }
 }
+
+/* ---------- Welcome flight (one-shot launch splash) ---------- */
+.welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above grain (50) and the corner label (60) */
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(25, 227, 196, 0.05), transparent 55%),
+    var(--bg);
+  cursor: pointer;
+  transition: opacity 0.85s ease;
+}
+.welcome-overlay.out {
+  opacity: 0;
+  pointer-events: none;
+}
+.welcome-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The wordmark lands where the canvas bloom opens: same face and glow as the
+   topbar .logo, scaled up for the moment. Brought in by .on from the flight. */
+.welcome-logo {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%) scale(0.86);
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: clamp(48px, 10vw, 96px);
+  letter-spacing: 3px;
+  color: var(--teal);
+  text-shadow: 0 0 12px rgba(25, 227, 196, 0.9), 0 0 46px rgba(25, 227, 196, 0.4);
+  opacity: 0;
+  transition: opacity 0.7s ease, transform 1s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.welcome-logo .jam {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(245, 196, 81, 0.9), 0 0 46px rgba(245, 196, 81, 0.4);
+}
+.welcome-overlay.on .welcome-logo {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.welcome-credit {
+  position: absolute;
+  right: 26px;
+  bottom: 22px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.9s ease 0.5s; /* trails the wordmark in */
+  pointer-events: none;
+}
+.welcome-credit .name {
+  color: var(--gold);
+  text-shadow: 0 0 8px rgba(245, 196, 81, 0.45);
+}
+.welcome-overlay.on .welcome-credit {
+  opacity: 1;
+}
+
+.welcome-skip {
+  position: absolute;
+  left: 26px;
+  bottom: 22px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+  opacity: 0;
+  animation: ukRise 0.8s ease 1.6s forwards; /* appears once the flight is rolling */
+  transform: none;
+  pointer-events: none;
+}
+.welcome-overlay.on .welcome-skip {
+  opacity: 0 !important; /* the hint has done its job once the wordmark is up */
+  animation: none;
+}
