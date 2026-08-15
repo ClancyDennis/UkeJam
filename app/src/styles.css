@@ -3529,3 +3529,362 @@ body.mobile .grain {
     height: 180px;
   }
 }
+
+/* =====================================================================
+   PHONE CHROME (GarageBand-style)
+   =====================================================================
+   The desktop layout is a multi-panel lab bench; on a phone that collapses
+   into an unusable column of tiny controls. This section rebuilds the app
+   the way iOS music apps (GarageBand) do it: a slim status strip up top, a
+   fixed tab bar at the bottom for navigation, one big stage per screen, and
+   44pt+ touch targets on everything you hit mid-song.
+
+   Keyed on body.phone (set in main.ts when the SHORT viewport edge is
+   phone-sized) rather than a width query: a rotated iPhone is 900px wide
+   and would otherwise fall back to the desktop bench. Everything here is
+   self-contained — it does not rely on the 860px media block above, which a
+   landscape phone never matches. */
+
+/* the tab bar exists only in phone chrome */
+.tabbar {
+  display: none;
+}
+
+/* decorative layers a phone GPU shouldn't pay for; the vignette also eats
+   ~1/3 of a small screen's brightness at the edges */
+body.phone .labgrid,
+body.phone .grain,
+body.phone .vignette,
+body.phone .corner-label,
+body.phone .kbd {
+  display: none !important;
+}
+
+/* content column: tighter margins, bottom padding clears the fixed tab bar */
+body.phone .app {
+  padding: calc(8px + env(safe-area-inset-top, 0px))
+    calc(10px + env(safe-area-inset-right, 0px))
+    calc(66px + env(safe-area-inset-bottom, 0px))
+    calc(10px + env(safe-area-inset-left, 0px));
+  gap: 10px;
+}
+
+body.phone .panel {
+  padding: 14px;
+  border-radius: 12px;
+}
+
+/* ---------- slim top strip: brand + live dot, nothing else ---------- */
+/* navigation moves to the tab bar; the topbar shrinks to a status strip */
+body.phone .topbar {
+  padding-bottom: 8px;
+  gap: 8px;
+}
+body.phone .topbar .util-btn,
+body.phone .tagline {
+  display: none;
+}
+body.phone .logo {
+  font-size: 19px;
+}
+body.phone .brand-mark {
+  width: 26px;
+  height: 26px;
+}
+body.phone .conn {
+  padding: 5px 11px;
+  font-size: 10px;
+}
+
+/* ---------- bottom tab bar ---------- */
+body.phone .tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: rgba(6, 10, 12, 0.92);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--line-teal);
+  box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.55);
+}
+body.phone .tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 50px;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  border-radius: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+body.phone .tab-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+body.phone .tab-label {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+body.phone .tab-btn.active {
+  color: var(--teal);
+  background: rgba(25, 227, 196, 0.08);
+}
+body.phone .tab-btn.active .tab-icon {
+  text-shadow: 0 0 14px rgba(25, 227, 196, 0.8);
+}
+
+/* the SoundFont modal must cover the tab bar, not float under it */
+body.phone .sf-overlay {
+  z-index: 80;
+}
+
+/* phone-only affordances (e.g. the StrumCam entry on the Setup screen) */
+body:not(.phone) .phone-only {
+  display: none !important;
+}
+
+/* =====================================================================
+   PLAY — the instrument screen
+   ===================================================================== */
+body.phone .play-view {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  gap: 10px;
+}
+
+/* ---------- control bar: three stacked rows, GarageBand-style ----------
+   Row 1: song picker · title/position    (what am I playing)
+   Row 2: hand-cam chip · big listen      (the record-ish button)
+   Row 3: transport, centered, 44pt+      (only for timed songs)          */
+body.phone .modebar {
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 12px;
+}
+body.phone .mode-tag,
+body.phone .mode-spacer {
+  display: none;
+}
+body.phone .modebar-song-btn {
+  order: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  font-size: 19px;
+}
+body.phone .mode-main {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+}
+body.phone .mode-stats {
+  order: 2;
+}
+body.phone .cam-chip {
+  order: 3;
+  margin-right: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 12px;
+  border-radius: 11px;
+}
+body.phone .listen-btn.slim {
+  order: 4;
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+body.phone .modebar .transport {
+  order: 5;
+  flex-basis: 100%;
+  justify-content: center;
+  gap: 12px;
+}
+body.phone .tp-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 17px;
+}
+/* play/pause is the one you reach for blind: biggest, round, gold */
+body.phone .tp-btn.play {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  font-size: 21px;
+}
+body.phone .tp-time,
+body.phone .tp-bpm {
+  font-size: 13px;
+}
+body.phone .tp-chip {
+  min-height: 38px;
+  padding: 6px 12px;
+  font-size: 11px;
+  border-radius: 10px;
+}
+
+/* ---------- the stage: highway + chord letter first and biggest ---------- */
+body.phone .cluster {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+body.phone .cluster .highway-panel {
+  grid-column: 1 / -1;
+  order: -1;
+  height: 52vh;
+  min-height: 300px;
+}
+/* now/next fingerings share one row under the stage, sized for a glance */
+body.phone .cluster .finger-panel {
+  min-height: 0;
+  padding: 12px 10px;
+}
+body.phone .fretboard {
+  max-width: 126px;
+}
+/* bigger than desktop's 22px, but capped so both chevrons + the count still
+   fit the half-width panel title row without clipping */
+body.phone .shape-btn,
+body.phone .arr-shape-btn {
+  width: 28px;
+  height: 28px;
+}
+body.phone .finger-panel .panel-title {
+  letter-spacing: 1px;
+}
+/* half-width panels can't fit tag + chevrons + count: the tag text already
+   says "shape 1/10", so drop the duplicate count and let the tag ellipsize
+   rather than shoving the second chevron off the panel */
+body.phone .finger-panel .shape-count {
+  display: none;
+}
+body.phone .finger-panel .panel-title .tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.phone .clean-val {
+  font-size: 30px;
+}
+
+/* ---------- below the fold: song strip, lyrics, coaching ---------- */
+body.phone .bottom-band {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: none;
+  overflow: visible;
+  flex: 0 0 auto;
+}
+body.phone .song-bar-empty {
+  flex-wrap: wrap;
+}
+body.phone .strip-chord {
+  font-size: 16px;
+  padding: 8px 13px;
+}
+/* the band's 38vh budget doesn't exist in a scrolling column; give lyrics
+   their own screenful cap instead */
+body.phone .lyrics-view {
+  max-height: 44vh;
+}
+
+/* =====================================================================
+   SECONDARY SCREENS — every view is one scrolling column
+   ===================================================================== */
+body.phone .tuner-view,
+body.phone .library-view,
+body.phone .arrangement-view,
+body.phone .strumcam-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+body.phone .tuner-view > .panel,
+body.phone .library-view > .panel,
+body.phone .arrangement-view > .panel,
+body.phone .strumcam-view > .panel {
+  flex: 0 0 auto;
+  overflow-y: visible;
+}
+body.phone .setup-view {
+  gap: 10px;
+  padding-bottom: 12px;
+}
+body.phone .setup-panel {
+  margin-top: 0;
+  max-width: none;
+}
+
+/* "← Play" back buttons are desktop chrome — the tab bar already does this
+   job. Back buttons that navigate elsewhere (♬ Choose a song) stay. */
+body.phone .back-btn[data-mode="play"] {
+  display: none;
+}
+body.phone .note-name {
+  font-size: 92px;
+}
+
+/* primary action buttons go full-width, thumb-sized */
+body.phone .tuner-view .listen-btn,
+body.phone .setup-view .listen-btn,
+body.phone .sc-controls .listen-btn {
+  align-self: stretch;
+  width: 100%;
+  min-height: 48px;
+}
+body.phone .sc-controls {
+  flex-wrap: wrap;
+}
+body.phone .sc-strip-wrap {
+  flex: 0 0 auto;
+  height: 160px;
+}
+
+/* library: fields stack, buttons wrap, 16px text stops focus zoom */
+body.phone .lib-fields {
+  flex-direction: column;
+}
+body.phone .tab-search-row,
+body.phone .lib-add-row {
+  flex-wrap: wrap;
+}
+body.phone .tab-search-row .lib-input {
+  flex-basis: 100%;
+}
+body.phone .lib-input,
+body.phone .paste-box {
+  font-size: 16px;
+}
+body.phone .paste-box {
+  min-height: 150px;
+}
+body.phone .lib-add-row .listen-btn {
+  min-height: 44px;
+}
+body.phone .tuning-choice {
+  flex-direction: column;
+}
