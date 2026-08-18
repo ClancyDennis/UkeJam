@@ -489,14 +489,27 @@ section("the shipped views still route through the gate");
   }
 
   // 4. A rejected invoke is never rendered raw: the bridge's internal
-  //    "native runtime unavailable" is not a sentence for a player.
+  //    "native runtime unavailable" is not a sentence for a player, and an
+  //    endpoint can return a whole HTML error page.
+  //
+  //    Counted, not merely present. A file with two AI calls and one
+  //    describeAiFailure() has an unhandled path, and "the string appears
+  //    somewhere in the file" cannot see that — verified by deleting one of
+  //    libraryView's two and watching the check stay green.
+  const count = (src, needle) => src.split(needle).length - 1;
   for (const [label, src] of [
     ["the coach", coach],
     ["the library", library],
     ["tab search", tabSearch],
     ["Setup", settings],
   ]) {
-    ok(`${label} renders failures through describeAiFailure()`, src.includes("describeAiFailure("));
+    const calls = AI_COMMANDS.reduce((n, cmd) => n + count(src, `"${cmd}"`), 0);
+    const wrapped = count(src, "describeAiFailure(");
+    ok(
+      `${label} renders every one of its ${calls} AI failures through describeAiFailure()`,
+      calls > 0 && wrapped >= calls,
+      `${calls} AI call(s), ${wrapped} wrapped`
+    );
   }
 
   // 5. A failed enhance still saves the song, and a failed search still runs.
