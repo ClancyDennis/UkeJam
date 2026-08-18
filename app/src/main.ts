@@ -332,6 +332,17 @@ initSoundfont({
   },
 });
 
+// Phone chrome (GarageBand-style: bottom tab bar, slim topbar, big transport).
+// Keyed on the short viewport edge rather than the platform: a rotated iPhone
+// must keep its tab bar even at 900px wide, an iPad must not get one, and a
+// desktop window dragged phone-narrow is honestly phone-shaped. One class so
+// every phone rule in the stylesheet agrees on what "phone" means.
+function syncPhoneChrome() {
+  document.body.classList.toggle("phone", Math.min(window.innerWidth, window.innerHeight) <= 520);
+}
+syncPhoneChrome();
+window.addEventListener("resize", syncPhoneChrome);
+
 // Mobile platforms have no user-facing file manager to open into the app's
 // sandbox; hide desktop-only affordances and give CSS a hook (body.mobile)
 // for touch-sized layout tweaks beyond what width queries catch.

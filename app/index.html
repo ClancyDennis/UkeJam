@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="icon" type="image/png" href="/icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- maximum-scale stops WKWebView zooming the page when an input focuses;
+         pinch-zoom has no place in an instrument surface -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -476,6 +478,21 @@
             <div class="setup-status" id="ai-status"></div>
           </div>
         </div>
+
+        <!-- Phone-only: the topbar StrumCam button is hidden in phone chrome
+             and the tab bar only carries the five main screens, so the lab is
+             reached from here instead. -->
+        <div class="panel setup-panel phone-only">
+          <div class="panel-title">Strum Cam <span class="tag">camera lab</span></div>
+          <div class="setup-body">
+            <p class="setup-copy">
+              Point the camera at your strumming hand and every strum the mic
+              hears gets a ▼/▲ direction call — the lab where the motion
+              tracker proves itself with numbers.
+            </p>
+            <button class="listen-btn ghost" data-mode="strumcam">◉ Open Strum Cam</button>
+          </div>
+        </div>
       </main>
 
       <!-- Library view (paste tabs + saved songs) -->
@@ -547,6 +564,29 @@
       </main>
 
       <div class="corner-label" id="corner-label">ukejam / Chords · native</div>
+
+      <!-- Phone tab bar (GarageBand-style chrome): on phone-sized screens the
+           topbar's utility buttons are hidden and this is the navigation.
+           The buttons ride the same data-mode router as everything else; the
+           whole bar is display:none outside body.phone. Play starts active to
+           match the router's initial mode. -->
+      <nav class="tabbar" aria-label="Main">
+        <button class="tab-btn active" data-mode="play">
+          <span class="tab-icon">▸</span><span class="tab-label">Play</span>
+        </button>
+        <button class="tab-btn" data-mode="library">
+          <span class="tab-icon">♬</span><span class="tab-label">Songs</span>
+        </button>
+        <button class="tab-btn" data-mode="arrangement">
+          <span class="tab-icon">▦</span><span class="tab-label">Chart</span>
+        </button>
+        <button class="tab-btn" data-mode="tuner">
+          <span class="tab-icon">♪</span><span class="tab-label">Tune</span>
+        </button>
+        <button class="tab-btn" data-mode="cal-mic">
+          <span class="tab-icon">⚙</span><span class="tab-label">Setup</span>
+        </button>
+      </nav>
 
       <!-- SoundFont install prompt: backing playback needs a GM SoundFont, and
            none is bundled (the good banks aren't free to redistribute). -->
