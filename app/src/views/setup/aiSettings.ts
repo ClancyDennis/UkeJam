@@ -3,13 +3,16 @@
 // store (see ai.ts); the live object travels with every enhance/test invoke.
 
 import {
+  AI_NEEDS_NATIVE_APP,
   AI_PROVIDERS,
-  aiConfigProblem,
+  aiProblem as evaluateAiProblem,
   appleAvailabilityHint,
+  describeAiFailure,
   hydrateAiConfig,
   invokeAiConfig,
   loadAiConfig,
   saveAiConfig,
+  type AiProblem,
   type AiProviderId,
 } from "../../ai.ts";
 import { nativeInvoke, nativeRuntime } from "../../native.ts";
@@ -41,8 +44,44 @@ let aiScanBtn: HTMLButtonElement;
 let aiTestBtn: HTMLButtonElement;
 let aiStatusEl: HTMLElement;
 
-export function aiEnhanceProblem(): string | null {
-  return aiConfigProblem(aiConfig, appleStatus);
+/**
+ * Why AI can't run right now, or null. THE gate for every AI feature: the
+ * library's ✨ enhance, tab search's ✨ smart and the practice coach all ask
+ * this before invoking, so an unconfigured provider produces one honest status
+ * line instead of a round trip whose failure each caller has to interpret.
+ */
+export function aiEnhanceProblem(): AiProblem | null {
+  return evaluateAiProblem(aiConfig, appleStatus, nativeRuntime);
+}
+
+// --- change notification ---
+//
+// The ✨ toggles that live on OTHER screens (add-a-song, tab search) show why
+// enhance would be skipped, so they have to hear about a key being pasted, a
+// provider being switched, the durable store landing, or the on-device probe
+// coming back. Without this they render once at boot and go stale — the exact
+// shape of the bug that had a player connect OpenRouter and still be told the
+// key was missing.
+
+type AiConfigListener = () => void;
+const aiConfigListeners = new Set<AiConfigListener>();
+
+/** Run `listener` whenever the config or its availability verdict changes. */
+export function onAiConfigChange(listener: AiConfigListener): () => void {
+  aiConfigListeners.add(listener);
+  listener();
+  return () => aiConfigListeners.delete(listener);
+}
+
+function notifyAiConfigChange() {
+  for (const listener of [...aiConfigListeners]) {
+    try {
+      listener();
+    } catch (e) {
+      // A stale view must not take the settings panel down with it.
+      console.warn("ai config listener failed", e);
+    }
+  }
 }
 
 export function setAiStatus(text: string, tone: "" | "done" | "err" = "") {
@@ -63,12 +102,16 @@ const AI_PROVIDER_NOTES: Record<AiProviderId, string> = {
 function renderAiStatusLine() {
   const problem = aiEnhanceProblem();
   if (problem) {
-    setAiStatus(`${problem} — ✨ AI enhance will be skipped`);
+    // The reason is already on screen in the panel that owns it, so this line
+    // says what the reason COSTS rather than repeating "open ⚙ Setup" at the
+    // player while they are standing in Setup.
+    setAiStatus(`${problem.message} — ✨ AI enhance will be skipped`, problem.fixable ? "" : "err");
   } else if (aiConfig.provider === "apple") {
     setAiStatus("ready — runs privately on this device", "done");
   } else {
     setAiStatus("configured — test the connection to be sure");
   }
+  notifyAiConfigChange();
 }
 
 // Full structural render: provider options (with availability verdicts), field
@@ -95,6 +138,13 @@ export function renderAiPanel() {
   aiKeyField.hidden = provider === "apple";
   aiModelField.hidden = provider === "apple";
   aiScanBtn.hidden = provider === "apple";
+  // Both buttons make a request through Rust. In a browser preview there is no
+  // Rust, so they can only ever fail — disable them WITH the reason in the
+  // tooltip rather than let the player press them for a bridge error.
+  aiScanBtn.disabled = !nativeRuntime;
+  aiTestBtn.disabled = !nativeRuntime;
+  aiScanBtn.title = nativeRuntime ? "" : AI_NEEDS_NATIVE_APP;
+  aiTestBtn.title = nativeRuntime ? "" : AI_NEEDS_NATIVE_APP;
   updateOpenRouterButtons();
   aiBaseUrlInput.value = aiConfig.baseUrl || AI_PROVIDERS.openai.defaultBaseUrl;
   aiKeyInput.value = aiConfig.apiKey;
@@ -161,6 +211,10 @@ export function initAiSettings(): void {
     aiScanBtn.disabled = true;
     setAiStatus("scanning the endpoint's model catalog…");
     try {
+      // The catalog must be scanned from the endpoint that is actually saved,
+      // not the boot seed — a key hydrated a moment ago changes which models
+      // the endpoint is willing to list.
+      await aiConfigReady;
       const models = await nativeInvoke<string[]>("ai_models", { config: invokeAiConfig(aiConfig) });
       aiModelList.replaceChildren(
         ...models.map((id) => {
@@ -173,6 +227,9 @@ export function initAiSettings(): void {
         aiConfig.model = models[0];
         aiModelInput.value = models[0];
         saveAiConfig(aiConfig);
+        // Adopting a model can clear the "no model selected" problem, which the
+        // ✨ toggles on other screens are showing.
+        notifyAiConfigChange();
       }
       setAiStatus(
         models.length
@@ -180,28 +237,32 @@ export function initAiSettings(): void {
           : "the endpoint returned no models — enter a model id manually"
       );
     } catch (e) {
-      setAiStatus(`model scan failed: ${e}`, "err");
+      setAiStatus(`model scan failed: ${describeAiFailure(e)}`, "err");
     } finally {
-      aiScanBtn.disabled = false;
+      aiScanBtn.disabled = !nativeRuntime;
     }
   });
 
   // A real chat round trip — the only probe that proves the key AND model work.
   aiTestBtn.addEventListener("click", async () => {
-    const problem = aiEnhanceProblem();
-    if (problem) {
-      setAiStatus(problem, "err");
-      return;
-    }
     aiTestBtn.disabled = true;
-    setAiStatus(`testing ${aiConfig.provider === "apple" ? "the on-device model" : aiConfig.model.trim()}…`);
     try {
+      // Same reason as the scan: test what is saved, not the seed.
+      await aiConfigReady;
+      const problem = aiEnhanceProblem();
+      if (problem) {
+        setAiStatus(problem.message, "err");
+        return;
+      }
+      setAiStatus(
+        `testing ${aiConfig.provider === "apple" ? "the on-device model" : aiConfig.model.trim()}…`
+      );
       const reply = await nativeInvoke<string>("test_ai", { config: invokeAiConfig(aiConfig) });
       setAiStatus(`connection works — replied “${reply}”`, "done");
     } catch (e) {
-      setAiStatus(`${e}`, "err");
+      setAiStatus(describeAiFailure(e), "err");
     } finally {
-      aiTestBtn.disabled = false;
+      aiTestBtn.disabled = !nativeRuntime;
     }
   });
 

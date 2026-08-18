@@ -4,10 +4,10 @@
 // on its own, so the guards below matter as much as the call — an eager coach
 // that interrupts every few seconds is worse than no coach.
 
-import { invokeAiConfig } from "../../ai.ts";
+import { aiProblemNote, describeAiFailure, invokeAiConfig, type AiProblem } from "../../ai.ts";
 import { escapeHtml } from "../../dom.ts";
 import { nativeInvoke, nativeRuntime } from "../../native.ts";
-import { aiConfig } from "../setup/aiSettings.ts";
+import { aiConfig, aiConfigReady, aiEnhanceProblem } from "../setup/aiSettings.ts";
 import { currentSong, isTimed, verdictBuffer } from "../../session.ts";
 import type { BarVerdict } from "../../verdict.ts";
 
@@ -25,9 +25,12 @@ let coachInFlight = false;
 let coachLastAt = 0;
 let coachLastSection = "";
 let coachBarsAtLastRequest = 0;
-// Shown once per session, not per failure: a player without an endpoint
-// configured would otherwise get the same error at every section boundary.
-let coachEndpointWarned = false;
+// The last reason coaching couldn't run, so the explanation is written once per
+// distinct cause rather than at every section boundary. Keyed by TEXT, not a
+// boolean: a player who fixes a missing key and then hits an unreachable
+// endpoint deserves to hear the second reason too, which a one-shot latch
+// swallowed.
+let coachLastProblemNote = "";
 
 /// Ask for advice on the bars just played. Called from several triggers, all of
 /// which can fire close together, so this is the single place the guards live.
@@ -49,21 +52,45 @@ export function requestCoaching(reason: string) {
   });
   if (!digest) return;
 
+  // Claim the slot and the cooldown SYNCHRONOUSLY. Everything below is async,
+  // and several triggers can fire within one bar — the guards have to be set
+  // before the first await or two calls go out for the same bars.
   coachInFlight = true;
   coachLastAt = now;
   coachBarsAtLastRequest = verdictBuffer().length;
   renderCoachThinking(reason);
-  // Same provider as tab enhancement — whatever is configured in Setup.
-  nativeInvoke<string>("coach_bars", {
-    digest,
-    reason,
-    config: invokeAiConfig(aiConfig),
-  })
-    .then((text) => renderCoachAdvice(text))
-    .catch((e) => renderCoachError(e))
-    .finally(() => {
-      coachInFlight = false;
+  void sendCoachingRequest(digest, reason);
+}
+
+async function sendCoachingRequest(digest: string, reason: string) {
+  try {
+    // The provider config is read from the durable native store asynchronously
+    // at boot, and coaching can fire within seconds of a song loading. Without
+    // this the first request of a session goes out with the localStorage seed —
+    // which on iOS may have been evicted, so a player WITH a configured key
+    // gets told coaching needs a provider, once, for the whole session.
+    await aiConfigReady;
+    // A provider that can't run costs nothing to detect, so detect it instead
+    // of spending a round trip to be told. This is the same gate the library's
+    // ✨ enhance and tab search's ✨ smart use.
+    const problem = aiEnhanceProblem();
+    if (problem) {
+      renderCoachProblem(problem);
+      return;
+    }
+    // Same provider as tab enhancement — whatever is configured in Setup.
+    const text = await nativeInvoke<string>("coach_bars", {
+      digest,
+      reason,
+      config: invokeAiConfig(aiConfig),
     });
+    coachLastProblemNote = "";
+    renderCoachAdvice(text);
+  } catch (e) {
+    renderCoachError(e);
+  } finally {
+    coachInFlight = false;
+  }
 }
 
 /// Called after each bar is graded: the automatic triggers that depend on how
@@ -121,20 +148,41 @@ function renderCoachAdvice(text: string) {
     .join("");
 }
 
-/// A failed coaching call must never interrupt practice. The most likely cause by
-/// far is no configured provider, so say that once and then stay quiet.
+/// Coaching can't run and we know why before asking. Says so once per distinct
+/// cause, and always says what still works — the panel going quiet mid-practice
+/// otherwise reads as the app breaking.
+function renderCoachProblem(problem: AiProblem) {
+  // The note can quote a base URL the player typed, so it is escaped like any
+  // other user text before it reaches innerHTML.
+  const note = aiProblemNote(problem);
+  renderCoachUnavailable(note, `${escapeHtml(note)}. Bar-by-bar scoring keeps working without it.`);
+}
+
+/// A failed coaching call must never interrupt practice. Unlike the pre-check
+/// above this is the endpoint's own words (a 401, an unreachable host, a model
+/// id it doesn't have), which is exactly what the player needs to fix it.
 function renderCoachError(e: unknown) {
-  if (coachEndpointWarned) {
-    coachAdviceEl.innerHTML = `<span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>`;
-    coachTagEl.textContent = "across bars";
+  const detail = describeAiFailure(e);
+  console.warn("coaching unavailable", e);
+  renderCoachUnavailable(
+    detail,
+    `Coaching couldn't reach the AI provider (${escapeHtml(detail)}) — check ⚙ Setup. ` +
+      `Bar-by-bar scoring keeps working without it.`
+  );
+}
+
+/// The shared body. Repeating the same explanation at every section boundary is
+/// nagging, but replacing it with the idle line ("Play a few bars and I'll tell
+/// you what to work on") promises coaching that is never coming — so a repeat
+/// keeps a short standing note instead of either.
+function renderCoachUnavailable(cause: string, html: string) {
+  coachTagEl.textContent = "unavailable";
+  if (cause === coachLastProblemNote) {
+    coachAdviceEl.innerHTML = `<span class="coach-note">Coaching is off — see ⚙ Setup. Scoring continues.</span>`;
     return;
   }
-  coachEndpointWarned = true;
-  console.warn("coaching unavailable", e);
-  coachTagEl.textContent = "unavailable";
-  coachAdviceEl.innerHTML =
-    `<span class="coach-note">Coaching needs an AI provider — pick one on the Setup screen. ` +
-    `Bar-by-bar scoring keeps working without it.</span>`;
+  coachLastProblemNote = cause;
+  coachAdviceEl.innerHTML = `<span class="coach-note">${html}</span>`;
 }
 
 /// Forget the advice on screen. Called on song load: advice about the previous
@@ -142,6 +190,10 @@ function renderCoachError(e: unknown) {
 export function resetCoaching() {
   coachLastSection = "";
   coachBarsAtLastRequest = 0;
+  // A new song is a fresh chance to explain: the player may have visited Setup
+  // between songs, and if the same problem is still there it is re-reported
+  // once rather than never.
+  coachLastProblemNote = "";
   coachTagEl.textContent = "across bars";
   coachAdviceEl.innerHTML =
     `<span class="coach-idle">Play a few bars and I'll tell you what to work on.</span>`;

@@ -4,9 +4,9 @@
 // the paste box so it flows through the normal ✨ enhance → Add pipeline.
 // =====================================================================
 
-import { invokeAiConfig } from "../ai.ts";
+import { aiProblemNote, describeAiFailure, invokeAiConfig, type AiProblem } from "../ai.ts";
 import { nativeInvoke, onNative } from "../native.ts";
-import { aiConfig, aiConfigReady } from "./setup/aiSettings.ts";
+import { aiConfig, aiConfigReady, aiEnhanceProblem, onAiConfigChange } from "./setup/aiSettings.ts";
 
 interface TabHit {
   artist: string;
@@ -38,6 +38,7 @@ let deps: TabSearchDeps;
 let tabSearchInput: HTMLInputElement;
 let tabSearchBtn: HTMLButtonElement;
 let smartSearchToggle: HTMLInputElement;
+let smartSearchHint: HTMLElement;
 let tabResultsEl: HTMLElement;
 let tabSearchStatus: HTMLElement;
 
@@ -61,29 +62,63 @@ async function runTabSearch() {
     // smart mode goes through the configured AI provider — wait for the
     // durable settings so a saved key/model is actually used
     if (smartSearchToggle.checked) await aiConfigReady;
+    // Rust degrades a failed interpretation to a plain search so smart mode is
+    // never LESS capable than the plain one (see search_tabs in lib.rs). That
+    // safety net is invisible from here, though: the player ticks ✨, gets
+    // ordinary results, and believes the description was understood. So when
+    // the provider is known to be unusable, skip the AI leg deliberately and
+    // SAY the search ran plainly.
+    const problem = smartSearchToggle.checked ? aiEnhanceProblem() : null;
+    const smart = smartSearchToggle.checked && !problem;
+    if (problem) renderSmartSearchHint();
     const out = await nativeInvoke<TabSearchOutcome>("search_tabs", {
       query: q,
-      smart: smartSearchToggle.checked,
-      config: smartSearchToggle.checked ? invokeAiConfig(aiConfig) : null,
+      smart,
+      config: smart ? invokeAiConfig(aiConfig) : null,
     });
-    renderTabResults(q, out);
+    renderTabResults(q, out, { smartAsked: smartSearchToggle.checked, problem });
   } catch (e) {
-    setTabSearchStatus(`search failed: ${e}`);
+    setTabSearchStatus(`search failed: ${describeAiFailure(e)}`);
   } finally {
     tabSearching = false;
     tabSearchBtn.disabled = false;
   }
 }
 
-function renderTabResults(rawQuery: string, out: TabSearchOutcome) {
-  if (out.hits.length === 0) {
-    setTabSearchStatus("no chord tabs found — try adding the artist, or ✨ smart");
-    return;
-  }
+/// Why ✨ smart can't run, shown beside the toggle so it is visible BEFORE a
+/// search rather than only in the result line afterwards. Re-rendered whenever
+/// the provider config changes.
+function renderSmartSearchHint() {
+  // Only while ✨ is actually ticked. An unconfigured provider is not a fault
+  // to nag about on a screen whose plain search works perfectly well.
+  const problem = smartSearchToggle.checked ? aiEnhanceProblem() : null;
+  smartSearchHint.hidden = !problem;
+  smartSearchHint.textContent = problem ? `✨ ${aiProblemNote(problem)}` : "";
+}
+
+function renderTabResults(
+  rawQuery: string,
+  out: TabSearchOutcome,
+  smartState: { smartAsked: boolean; problem: AiProblem | null }
+) {
   // when smart mode rewrote the query, show what was actually searched
   const rewrote = out.queries.length > 1 || out.queries[0] !== rawQuery;
+  // ✨ was ticked but the words went out exactly as typed: either we skipped the
+  // AI leg on purpose (problem) or Rust's fallback caught a failure we can't
+  // see. Either way the player must not be left thinking it was interpreted.
+  const skipped = smartState.smartAsked && !rewrote;
+  const smartNote = !skipped
+    ? ""
+    : smartState.problem
+      ? ` · ✨ skipped (${smartState.problem.message})`
+      : " · ✨ couldn't interpret that — searched your words as typed";
+
+  if (out.hits.length === 0) {
+    setTabSearchStatus(`no chord tabs found — try adding the artist${smartNote}`);
+    return;
+  }
   const searched = rewrote ? ` · searched: ${out.queries.join(" / ")}` : "";
-  setTabSearchStatus(`${out.hits.length} chord tabs${searched}`, true);
+  setTabSearchStatus(`${out.hits.length} chord tabs${searched}${smartNote}`, true);
 
   for (const hit of out.hits) {
     const row = document.createElement("div");
@@ -151,8 +186,14 @@ export function initTabSearch(d: TabSearchDeps): void {
   tabSearchInput = document.getElementById("tab-search-input") as HTMLInputElement;
   tabSearchBtn = document.getElementById("tab-search-btn") as HTMLButtonElement;
   smartSearchToggle = document.getElementById("smart-search") as HTMLInputElement;
+  smartSearchHint = document.getElementById("smart-search-hint")!;
   tabResultsEl = document.getElementById("tab-results")!;
   tabSearchStatus = document.getElementById("tab-search-status")!;
+
+  // The hint tracks Setup live: connecting OpenRouter on the next screen must
+  // clear it without a reload.
+  onAiConfigChange(renderSmartSearchHint);
+  smartSearchToggle.addEventListener("change", renderSmartSearchHint);
 
   tabSearchBtn.addEventListener("click", runTabSearch);
   tabSearchInput.addEventListener("keydown", (e) => {
