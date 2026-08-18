@@ -83,13 +83,21 @@ export interface ChordReading {
   onset: boolean;
   // Spectral flux as a multiple of its slow baseline (1.0 = steady state).
   flux: number;
+  // How long ago the strum this reading reports actually happened, in ms
+  // (detection-to-emit coalescing + the mic's capture latency). 0 when
+  // `onset` is false. Subtract from the arrival time before grading timing.
+  onsetAgeMs: number;
 }
 
 export interface BackingStatus {
   playing: boolean;
+  // Samples rendered so far, in seconds. This RUNS AHEAD of what the speaker
+  // is playing by `latency` — subtract it to get the audible position.
   pos: number;
   length: number;
   loaded: boolean;
+  // Output pipeline latency in seconds (0 when the host can't report it).
+  latency: number;
 }
 
 export interface AudioInterruption {

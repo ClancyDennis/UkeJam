@@ -1272,7 +1272,8 @@ body {
 .highway-stage {
   position: relative;
   flex: 1 1 auto;
-  min-height: 0;
+  /* the lane must survive the in-flow chord glyph below it on short windows */
+  min-height: 90px;
 }
 
 /* the scrolling chord highway is drawn on a canvas filling the stage */
@@ -1513,6 +1514,37 @@ body {
   color: var(--text-dim);
   margin-bottom: 12px;
 }
+
+/* Viewport forensics readout (see #diag-viewport in index.html). Lowercase
+   monospace: these are raw numbers to photograph, not chrome. */
+.diag-viewport {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: none;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0 12px;
+}
+
+/* Invisible probes whose computed size IS the safe-area inset — the only way
+   to read env() from JS. Fixed so they cost no layout. */
+.env-probe {
+  position: fixed;
+  visibility: hidden;
+  pointer-events: none;
+  width: 1px;
+}
+.env-probe.top {
+  height: env(safe-area-inset-top, 0px);
+}
+.env-probe.bottom {
+  height: env(safe-area-inset-bottom, 0px);
+}
 .drawer-close {
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
@@ -1672,14 +1704,15 @@ body {
   font-size: 10px;
 }
 
-/* the big current chord sits at the NOW line, pinned to lower-center */
+/* The big current chord sits just under the NOW line, in flow below the
+   highway stage. It used to be an absolute overlay pinned to the stage's
+   bottom, but on tall screens (iPad) the 96px glyph covered the NOW line and
+   the whole verdict trail — approaching chords disappeared behind the letters
+   right before they arrived, and the early/late arrows were never visible. */
 .current-chord {
-  position: absolute;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
+  flex: 0 0 auto;
+  margin: 2px 0 4px;
   text-align: center;
-  z-index: 5;
   pointer-events: none;
 }
 
@@ -2771,7 +2804,13 @@ body {
 .song-panel .song-bar {
   flex: 0 0 auto;
   max-height: 96px;
-  overflow: hidden; /* the strip (max-height 120) must not spill past the bar */
+  overflow: hidden;
+}
+/* The strip's scrollport must MATCH the bar that clips it: at 120px inside a
+   96px bar, the strip's scroll math thought its bottom 24px were visible while
+   the bar hid them, so the "current" chip could sit in an invisible zone. */
+.song-panel .song-bar .song-bar-strip {
+  max-height: 96px;
 }
 
 /* ---------- Lyrics view (chord cues above syllables) ---------- */

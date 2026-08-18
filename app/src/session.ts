@@ -111,6 +111,17 @@ let backingTracks: import("./library").BackingTrackInfo[] = [];
 let selectedChannels: number[] = [];
 let currentMidiB64: string | null = null;
 
+// The last latency-compensated position reported by the audio engine, and when
+// it arrived. Between events (which arrive every ~50ms of playback) the render
+// loop dead-reckons from this anchor, so the playhead moves every frame instead
+// of stepping once per event. `playing` is the ENGINE's flag: extrapolation
+// must stop the moment the engine is paused (wait-mode, pause), even though our
+// transport flag may still be on.
+let backingAnchor: { pos: number; at: number; playing: boolean } | null = null;
+// Never extrapolate further than this past the anchor: if events stop coming
+// (stream died, app backgrounded), the playhead freezes instead of running off.
+const BACKING_COAST_MAX = 0.5;
+
 // Whether the detector could actually parse the current target. False for a
 // chord name neither side understands (a typo, or a quality we don't support):
 // Rust then holds no target, so `missing`/`extra` come back empty, which looks
@@ -193,6 +204,7 @@ export function nextDistinctChord(): string {
 // fall back to all non-lead channels.
 export function setupBacking(rec: SongRecord) {
   nativeInvoke("stop_backing").catch(() => {});
+  backingAnchor = null; // stale anchors belong to the previous song's stream
   hasBacking = !!rec.midi && !!rec.tracks?.length;
   backingTracks = rec.tracks ?? [];
   currentMidiB64 = rec.midi ?? null;
@@ -235,6 +247,7 @@ export function applyChannelSelection() {
 export function setupTiming(song: Song) {
   stopTransport();
   songTime = 0;
+  backingAnchor = null;
   resetScoring();
   timed = isTimedSong(song);
   chordBeat = [];
@@ -389,6 +402,9 @@ export function restartTransport() {
   songTime = 0;
   songIdx = 0;
   waiting = false;
+  // The engine is about to be re-armed at 0; an anchor from the old position
+  // would extrapolate the playhead right back to where it was.
+  backingAnchor = null;
   resetScoring(); // a fresh run from the top is a fresh score
   deps.onTimeChanged(0);
   deps.onChordIndexChanged();
@@ -452,8 +468,15 @@ export function tickTransport() {
   }
 
   if (hasBacking) {
-    // position comes from the `backing` event (syncBackingPos); nothing to
-    // integrate here. Wait-mode boundary checks still run below via beat.
+    // The `backing` events anchor the playhead every ~50ms; dead-reckon from
+    // the newest anchor so the highway advances every FRAME, not every event.
+    // Without this the playhead stepped once per status event (~170ms with the
+    // old emit throttle) and chords hit the NOW line visibly off the audio.
+    if (backingAnchor?.playing) {
+      const dt = Math.min(BACKING_COAST_MAX, (performance.now() - backingAnchor.at) / 1000);
+      const t = backingAnchor.pos + dt;
+      if (t > songTime) applyBackingTime(t);
+    }
     return;
   }
 
@@ -495,18 +518,38 @@ function maybeWaitAtBoundary(beat: number) {
 
 // Called from the `backing` event: the Rust playback position is authoritative
 // when audio is playing, so map it onto the highway playhead.
-export function syncBackingPos(pos: number) {
+//
+// `pos` counts samples RENDERED into the output buffer, which runs ahead of the
+// speaker by `latency` (device buffer + route latency — tens of ms wired,
+// hundreds on Bluetooth); subtract it so the NOW line tracks what the player
+// HEARS. Events arrive every ~50ms of playback; this only (re-)anchors the
+// dead-reckoning that tickTransport advances every frame.
+export function syncBackingPos(pos: number, latency = 0, enginePlaying = true) {
   if (!timed || !loadedSong || !hasBacking) return;
+  const heard = Math.max(0, pos - latency);
+  backingAnchor = { pos: heard, at: performance.now(), playing: enginePlaying };
+  if (!enginePlaying) return;
   // The backing engine owns looping, so a position that jumps backwards is the
   // song wrapping. Review the pass and start a fresh score, mirroring what the
   // wall-clock path does at `beat >= songBeats`.
-  if (pos + 0.5 < songTime) {
+  if (heard + 0.5 < songTime) {
     deps.requestCoaching("song end");
     resetScoring();
+    songTime = heard;
   }
-  songTime = pos;
-  const beat = pos / secPerBeat;
-  deps.onTimeChanged(pos);
+  // Between-event positions come from extrapolation; an anchor slightly behind
+  // the extrapolated playhead is jitter, not information. Let applyBackingTime
+  // hold until real time catches up rather than stepping the playhead backwards.
+  applyBackingTime(Math.max(songTime, heard));
+}
+
+// Advance the playhead to `t` (seconds) and run the beat machinery. Shared by
+// the event anchor and the per-frame extrapolation so bars can't be sealed
+// differently depending on which one happened to notice the boundary.
+function applyBackingTime(t: number) {
+  songTime = t;
+  const beat = t / secPerBeat;
+  deps.onTimeChanged(t);
   maybeWaitAtBoundary(beat);
   if (!waiting) applyBeat(beat);
 }

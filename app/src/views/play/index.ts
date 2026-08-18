@@ -130,6 +130,33 @@ export function toggleDiagnostics(force?: boolean) {
   const open = force ?? diagDrawer.hidden;
   diagDrawer.hidden = !open;
   diagBtn.classList.toggle("on", open);
+  if (open) updateViewportForensics();
+}
+
+// Viewport forensics for the iPad letterbox/safe-area hunt: what the webview
+// believes its geometry is, versus the physical screen, versus what the
+// safe-area env() vars resolve to. If screen > innerHeight the NATIVE layer is
+// short (letterbox/compat mode or a shrunken webview frame); if they match but
+// the insets read 0 on a home-indicator device, the viewport meta isn't being
+// honored (env() dead); if the insets are real, any remaining bar is CSS.
+function updateViewportForensics(): void {
+  const el = document.getElementById("diag-viewport");
+  if (!el) return;
+  const probe = (cls: string): number => {
+    const p = document.createElement("div");
+    p.className = `env-probe ${cls}`;
+    document.body.appendChild(p);
+    const h = p.getBoundingClientRect().height;
+    p.remove();
+    return Math.round(h);
+  };
+  const vv = window.visualViewport;
+  el.textContent =
+    `win ${innerWidth}×${innerHeight} · ` +
+    `screen ${screen.width}×${screen.height} · ` +
+    `vv ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)}` : "—"} · ` +
+    `dpr ${window.devicePixelRatio} · ` +
+    `inset t${probe("top")} b${probe("bottom")}`;
 }
 
 

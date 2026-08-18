@@ -38,17 +38,24 @@ export function initHighway(): void {
 /// foreground. What it buys is the felt sense that the app is watching — and, when
 /// the tracker locks onto the wrong thing, a visible reason the arrows look wrong.
 ///
-/// Alpha is deliberately low. A crisp skeleton over the highway would compete with
-/// the thing the player's eyes must be on.
+/// Alpha is deliberately low, and the skeleton is confined to the top-right
+/// corner of the canvas — the one region the token lane never reaches (the lane
+/// converges toward the top, and the trail hugs the center). Mapped full-frame,
+/// a camera-centered hand landed exactly on the upcoming chords and read
+/// straight through their translucent boxes.
 function drawAmbientHand(w: number, h: number): void {
   const hand = strumcam.lastHand;
   if (!hand) return;
+  // corner viewport: right ~30% of the width, top ~40% of the height
+  const vw = w * 0.3;
+  const vh = h * 0.4;
   hctx.save();
   hctx.globalAlpha = 0.16;
-  drawHand(hctx, hand, w, h, {
+  hctx.translate(w - vw - 8, 8);
+  drawHand(hctx, hand, vw, vh, {
     color: "rgba(25, 227, 196, 0.9)",
     jointColor: "rgba(25, 227, 196, 0.7)",
-    lineWidth: 3,
+    lineWidth: 2,
   });
   hctx.restore();
 }
@@ -68,7 +75,7 @@ export function drawHighway() {
   drawAmbientHand(w, h);
 
   const cx = w / 2;
-  const nowY = h - 64; // NOW line sits just above the big current chord
+  const nowY = h - 64; // leaves room below the line for the verdict trail
   const topY = 28;
   const TEAL = "25,227,196";
   const GOLD = "245,196,81";
@@ -125,6 +132,10 @@ export function drawHighway() {
     const th = 30 * scale;
     roundRect(hctx, cx - tw / 2, y - th / 2, tw, th, 8 * scale);
     hctx.globalAlpha = alpha;
+    // opaque backing first: the rails (and anything else behind the lane) must
+    // not read through the token, the tint alone is nearly transparent
+    hctx.fillStyle = "rgba(8, 13, 16, 0.92)";
+    hctx.fill();
     hctx.strokeStyle = `rgba(${col},${isNow ? 0.95 : 0.55})`;
     hctx.lineWidth = 1.5 * scale;
     hctx.shadowColor = `rgba(${col},0.7)`;
@@ -178,6 +189,10 @@ function drawTrailToken(
   const th = 26 * scale;
   ctx.globalAlpha = alpha;
   roundRect(ctx, cx - tw / 2, y - th / 2, tw, th, 7 * scale);
+  // same opaque backing as the upcoming tokens: verdicts must stay readable
+  // over whatever sits behind the trail
+  ctx.fillStyle = "rgba(8, 13, 16, 0.92)";
+  ctx.fill();
   ctx.strokeStyle = `rgba(${col},0.7)`;
   ctx.lineWidth = 1.2 * scale;
   ctx.stroke();

@@ -4,7 +4,7 @@
 // Reads the current position from the session and follows it; the shape cards
 // borrow the fretboard rail's SVG drawing rather than duplicating it.
 
-import { escapeHtml } from "../dom.ts";
+import { escapeHtml, scrollWithin } from "../dom.ts";
 import type { SongLine } from "../song.ts";
 import { activeTuning } from "../tunings.ts";
 import { chordShapeState, shapeLabel } from "../theory/voicings.ts";
@@ -215,7 +215,9 @@ export function updateArrangementState(forceScroll = false) {
   });
 
   if ((forceScroll || lastArrangementScrollIdx !== currentChordIdx()) && curLine && !arrangementView.hidden) {
-    curLine.scrollIntoView({ block: "center" });
+    // scroll only the sheet — scrollIntoView would also scroll its clipped
+    // panel ancestors (see scrollWithin)
+    scrollWithin(arrangementSheetEl, curLine as HTMLElement, "center");
     lastArrangementScrollIdx = currentChordIdx();
   }
 }

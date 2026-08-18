@@ -1,7 +1,7 @@
 // The lyric sheet under the Play view: each chord cue sits over the word it
 // falls on, and clicking a cue jumps the target there.
 
-import { escapeHtml } from "../../dom.ts";
+import { escapeHtml, scrollWithin } from "../../dom.ts";
 import { currentChordIdx, currentSong, jumpToChord } from "../../session.ts";
 
 let lyricsView: HTMLElement;
@@ -119,5 +119,9 @@ export function updateLyrics() {
   lyricsView.querySelectorAll(".lyric-line").forEach((l) => {
     l.classList.toggle("now", l === curLine);
   });
-  lyricTokenEls[currentChordIdx()]?.scrollIntoView({ block: "nearest" });
+  // Scroll only the lyric sheet itself — scrollIntoView also scrolls the
+  // clipped .bottom-band ancestor on WKWebView, slicing off the panel titles
+  // (see scrollWithin).
+  const tok = lyricTokenEls[currentChordIdx()];
+  if (tok) scrollWithin(lyricsView, tok);
 }

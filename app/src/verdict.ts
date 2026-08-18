@@ -224,8 +224,10 @@ export function seal(
 }
 
 /// A strum this far off the downbeat is worth mentioning. Below it, the number
-/// is mostly detector latency and window quantization (~186ms FFT windows, so
-/// onset time is coarse) rather than the player being early or late.
+/// is mostly window quantization (~186ms FFT windows, so onset time is coarse)
+/// rather than the player being early or late. The pipeline's systematic delay
+/// (capture latency + emit coalescing) is compensated upstream — readings carry
+/// an onsetAgeMs the caller subtracts — so this covers only the random part.
 export const TIMING_TOLERANCE_MS = 70;
 
 /// Score a bar's strums against its rhythmic grid.

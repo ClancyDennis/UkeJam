@@ -8,7 +8,7 @@
 //! This is the native port of the prototype's analysis path; the chord
 //! detector will extend the same capture/FFT pipeline later.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::TrySendError;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -187,6 +187,14 @@ pub struct ChordReading {
     /// Spectral flux as a multiple of its slow baseline (1.0 = steady state).
     /// Exposed for tuning the onset threshold from the diagnostics drawer.
     pub flux: f32,
+    /// How long ago the strum this reading reports actually happened, in ms:
+    /// the latch's detection-to-emit age (coalescing can hold an onset for a
+    /// few windows) plus the input device's capture latency. 0 when `onset` is
+    /// false. The frontend subtracts this from the reading's arrival time so
+    /// timing verdicts measure the player, not the pipeline — the arrival bias
+    /// is the same order as the 70ms timing tolerance.
+    #[serde(rename = "onsetAgeMs")]
+    pub onset_age_ms: f32,
 }
 
 /// Runtime-adjustable analysis settings, shared with the capture thread.
@@ -332,24 +340,40 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<CaptureRun
     let channels = config.channels() as usize;
 
     let (sample_tx, sample_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(8);
+    // Capture-to-callback latency (µs) as cpal reports it: how long the newest
+    // samples sat in the input pipeline before we saw them. Written by the
+    // callback, read at emit time to age the onset it carries.
+    let input_latency_us = Arc::new(AtomicU32::new(0));
     let worker_shared = shared.clone();
     let worker_app = app.clone();
+    let worker_latency = input_latency_us.clone();
     let worker = std::thread::spawn(move || {
         let mut buf = Vec::with_capacity(FFT_SIZE * 2);
         let analyzer = Analyzer::new(sample_rate);
         let mut last_emit = Instant::now();
         while let Ok(chunk) = sample_rx.recv() {
             feed(&mut buf, &chunk);
-            drain_and_emit(&buf, &analyzer, &worker_app, &worker_shared, &mut last_emit);
+            drain_and_emit(
+                &buf,
+                &analyzer,
+                &worker_app,
+                &worker_shared,
+                &mut last_emit,
+                &worker_latency,
+            );
         }
     });
 
     let err_fn = |e| eprintln!("audio stream error: {e}");
 
+    let lat_f32 = input_latency_us.clone();
+    let lat_i16 = input_latency_us.clone();
+    let lat_u16 = input_latency_us;
     let stream_result = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
-            move |data: &[f32], _| {
+            move |data: &[f32], info| {
+                note_input_latency(&lat_f32, info);
                 send_chunk(&sample_tx, downmix_f32(data, channels));
             },
             err_fn,
@@ -357,7 +381,8 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<CaptureRun
         ),
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.into(),
-            move |data: &[i16], _| {
+            move |data: &[i16], info| {
+                note_input_latency(&lat_i16, info);
                 send_chunk(&sample_tx, downmix_i16(data, channels));
             },
             err_fn,
@@ -365,7 +390,8 @@ fn build_stream(app: AppHandle, shared: Arc<Mutex<Shared>>) -> Result<CaptureRun
         ),
         cpal::SampleFormat::U16 => device.build_input_stream(
             &config.into(),
-            move |data: &[u16], _| {
+            move |data: &[u16], info| {
+                note_input_latency(&lat_u16, info);
                 send_chunk(&sample_tx, downmix_u16(data, channels));
             },
             err_fn,
@@ -404,6 +430,16 @@ fn feed(buf: &mut Vec<f32>, data: &[f32]) {
     if buf.len() > cap {
         let drop = buf.len() - cap;
         buf.drain(0..drop);
+    }
+}
+
+/// Record the capture-to-callback gap cpal reports for this input buffer.
+/// Stored in µs; f32 ms precision is recovered at read time. None on hosts
+/// that can't report it — the stored value then just stays at its last (or 0).
+fn note_input_latency(slot: &AtomicU32, info: &cpal::InputCallbackInfo) {
+    let ts = info.timestamp();
+    if let Some(d) = ts.callback.duration_since(&ts.capture) {
+        slot.store(d.as_micros().min(u32::MAX as u128) as u32, Ordering::Relaxed);
     }
 }
 
@@ -463,6 +499,7 @@ fn drain_and_emit(
     app: &AppHandle,
     shared: &Arc<Mutex<Shared>>,
     last_emit: &mut Instant,
+    input_latency_us: &AtomicU32,
 ) {
     if buf.len() < FFT_SIZE {
         return;
@@ -482,9 +519,16 @@ fn drain_and_emit(
             }
         }
         Mode::Chord => {
-            let reading = analyzer.analyze_chord(window, target.as_deref(), gate);
+            let mut reading = analyzer.analyze_chord(window, target.as_deref(), gate);
             if due {
                 *last_emit = Instant::now();
+                // Age the strum this reading carries: latch-to-emit wait plus
+                // the capture latency of the buffer it arrived in. Computed
+                // before the latch is cleared, which resets that clock.
+                if reading.onset {
+                    reading.onset_age_ms = analyzer.onset_age_ms()
+                        + input_latency_us.load(Ordering::Relaxed) as f32 / 1000.0;
+                }
                 // The onset latch is released only once a reading carrying it has
                 // been handed to the frontend; dropping this reading would
                 // otherwise swallow the strum it was set for.
@@ -607,6 +651,20 @@ impl Analyzer {
         (st.latched, ratio)
     }
 
+    /// Age of the currently latched onset in ms — how long detection has been
+    /// waiting for an emit to carry it. 0 when nothing is latched. Read BEFORE
+    /// clear_onset, or the age is gone with the latch.
+    fn onset_age_ms(&self) -> f32 {
+        let st = self.onset.lock().unwrap();
+        if st.latched {
+            st.last_onset
+                .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        }
+    }
+
     /// Clear the onset latch — called once a reading carrying it has been emitted.
     fn clear_onset(&self) {
         self.onset.lock().unwrap().latched = false;
@@ -707,6 +765,7 @@ impl Analyzer {
                 rms,
                 onset: false,
                 flux: 0.0,
+                onset_age_ms: 0.0,
             };
         }
         let (onset, flux) = self.track_onset(&mag, Instant::now());
@@ -745,6 +804,9 @@ impl Analyzer {
             rms,
             onset,
             flux,
+            // filled in at emit time (drain_and_emit): the age keeps growing
+            // while coalescing holds the latch, so it can't be computed here
+            onset_age_ms: 0.0,
         }
     }
 
