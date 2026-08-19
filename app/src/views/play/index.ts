@@ -379,6 +379,15 @@ export function initPlayView(d: PlayViewDeps): void {
   diagBtn.addEventListener("click", () => toggleDiagnostics());
   diagCloseBtn.addEventListener("click", () => toggleDiagnostics(false));
 
+  // Phone chrome hides the topbar button and a phone has no "d" key, so the
+  // Setup screen carries the drawer's only phone-reachable opener. Route
+  // through Play on the way: the router stops the mic when you leave a
+  // practice mode, and the instrumentation is only worth looking at live.
+  document.getElementById("diag-phone-btn")?.addEventListener("click", () => {
+    (document.querySelector('.tab-btn[data-mode="play"]') as HTMLButtonElement | null)?.click();
+    toggleDiagnostics(true);
+  });
+
   listenBtn2.addEventListener("click", async () => {
     if (!chordListening) {
       try {

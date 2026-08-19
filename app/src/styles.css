@@ -3792,6 +3792,47 @@ body.phone .sf-overlay {
   z-index: 80;
 }
 
+/* ---------- diagnostics drawer ----------
+   The drawer is a three-column instrument bench sized for a desktop window.
+   On a phone it stacks into one scrolling column and rides ABOVE the tab bar
+   (z-index 70) rather than under it — its own close button is the way out. */
+body.phone .drawer {
+  z-index: 75;
+  max-height: 78vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+}
+/* the forensics readout exists to be READ off a device screenshot, so give it
+   its own row here rather than letting it ellipsize into "screen 390×…" */
+body.phone .drawer-head {
+  flex-wrap: wrap;
+}
+body.phone .diag-viewport {
+  order: 3;
+  flex: 1 0 100%;
+  margin: 8px 0 0;
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.6;
+}
+body.phone .diag-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+  height: auto;
+  min-height: 0;
+}
+/* metrics sit UNDER the chroma bars in one column, so the divider that
+   separates the two columns on desktop has to move with them */
+body.phone .chroma-analyzer {
+  grid-template-columns: minmax(0, 1fr);
+}
+body.phone .inline-metrics {
+  padding: 12px 0 0;
+  border-left: none;
+  border-top: 1px solid rgba(25, 227, 196, 0.18);
+}
+
 /* phone-only affordances (e.g. the StrumCam entry on the Setup screen) */
 body:not(.phone) .phone-only {
   display: none !important;

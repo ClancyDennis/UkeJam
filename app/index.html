@@ -502,6 +502,22 @@
             <button class="listen-btn ghost" data-mode="strumcam">◉ Open Strum Cam</button>
           </div>
         </div>
+
+        <!-- Phone-only: the drawer's only other openers are the topbar button
+             (hidden in phone chrome) and the "d" key (no soft keyboard sends
+             it), so on a phone this is the way in. It jumps to Play first —
+             leaving Play stops the mic, and dead canvases diagnose nothing. -->
+        <div class="panel setup-panel phone-only">
+          <div class="panel-title">Diagnostics <span class="tag">analyzer bench</span></div>
+          <div class="setup-body">
+            <p class="setup-copy">
+              The analyzer instrumentation — cleanliness gauge, chromagram,
+              live FFT, detected peaks — plus the viewport forensics line worth
+              screenshotting when the layout looks wrong on a device.
+            </p>
+            <button class="listen-btn ghost" id="diag-phone-btn">◇ Open Diagnostics</button>
+          </div>
+        </div>
       </main>
 
       <!-- Library view (paste tabs + saved songs) -->
