@@ -141,13 +141,73 @@ export function invokeAiConfig(config: AiConfig) {
     provider: config.provider,
     baseUrl,
     apiKey: config.apiKey.trim(),
-    model: config.model.trim() || AI_PROVIDERS[config.provider].defaultModel,
+    model: resolvedModel(config),
   };
+}
+
+/**
+ * The model id actually sent. Fixed-endpoint providers get their default filled
+ * in — `anthropic/claude-sonnet-4.5` is a real model on OpenRouter and
+ * `apple-on-device` is the only one there is — but a CUSTOM endpoint does not:
+ * substituting `gpt-4.1-mini` into a request aimed at LM Studio or Ollama sends
+ * a model that host has never heard of, and its 404 reads like a broken app
+ * rather than an empty Model field. Sending the blank through instead lets
+ * Rust's own "no model selected" guard (enhance.rs) name the real cause, and
+ * `aiConfigProblem` below stops it before it ever gets that far.
+ */
+function resolvedModel(config: AiConfig): string {
+  const model = config.model.trim();
+  if (model) return model;
+  return config.provider === "openai" ? "" : AI_PROVIDERS[config.provider].defaultModel;
+}
+
+/** The hostname of a base URL, for naming it in a message. */
+function endpointHost(baseUrl: string): string {
+  return parseEndpoint(baseUrl)?.hostname ?? "";
+}
+
+function parseEndpoint(baseUrl: string): URL | null {
+  const raw = baseUrl.trim();
+  if (!raw) return null;
+  try {
+    // A host typed without a scheme ("localhost:1234/v1") is what people
+    // actually paste for a local server, so assume http rather than reject it.
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this endpoint is one of the keyless-by-design local servers — LM
+ * Studio, Ollama's compatible API, llama.cpp, a dev proxy on the LAN.
+ *
+ * This is the difference between "no API key" being a valid choice and being a
+ * misconfiguration. A blank key against a loopback server is normal and works;
+ * a blank key against a host on the public internet is a guaranteed 401, so it
+ * is worth saying so before the request rather than relaying the rejection.
+ */
+export function isLocalEndpoint(baseUrl: string): boolean {
+  const host = parseEndpoint(baseUrl)?.hostname.toLowerCase();
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host === "::1" || host === "[::1]" || host === "0.0.0.0") return true;
+  // Loopback, and the three private IPv4 ranges (RFC 1918) a LAN dev box sits on.
+  return (
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  );
 }
 
 /**
  * Why AI enhance can't run yet, or null when it can. Apple availability is
  * probed asynchronously by the caller and passed in.
+ *
+ * Every AI feature funnels through here BEFORE it invokes, so an unconfigured
+ * provider costs a status line rather than a doomed round trip whose error the
+ * player then has to interpret.
  */
 export function aiConfigProblem(config: AiConfig, appleStatus: string): string | null {
   if (config.provider === "apple") {
@@ -155,18 +215,87 @@ export function aiConfigProblem(config: AiConfig, appleStatus: string): string |
       ? null
       : `Apple Intelligence is unavailable (${appleAvailabilityHint(appleStatus)})`;
   }
-  if (config.provider === "openrouter" && !config.apiKey.trim()) {
-    return "OpenRouter needs an API key";
+  if (config.provider === "openrouter") {
+    return config.apiKey.trim() ? null : "OpenRouter needs an API key";
   }
-  if (!config.model.trim() && !AI_PROVIDERS[config.provider].defaultModel) {
-    return "no model selected";
+  // A custom OpenAI-compatible endpoint. Both fields are genuinely optional
+  // depending on the host, so each is judged against the endpoint rather than
+  // required outright.
+  const { baseUrl, apiKey } = invokeAiConfig(config);
+  if (!baseUrl) return "no endpoint address";
+  if (!parseEndpoint(baseUrl)) return `"${baseUrl.trim()}" isn't a usable endpoint address`;
+  if (!apiKey && !isLocalEndpoint(baseUrl)) {
+    return `${endpointHost(baseUrl)} needs an API key`;
   }
+  // Unlike the fixed-endpoint providers there is no safe default to fall back
+  // on here — see resolvedModel above.
+  if (!resolvedModel(config)) return "no model selected";
   return null;
+}
+
+/** Nothing in Setup can fix a host with no native bridge, so it says so itself. */
+export const AI_NEEDS_NATIVE_APP =
+  "AI features need the installed app — this preview can't reach a provider";
+
+/** Why AI can't run at all here, regardless of configuration. */
+export function aiHostProblem(nativeRuntime: boolean): string | null {
+  return nativeRuntime ? null : AI_NEEDS_NATIVE_APP;
+}
+
+export interface AiProblem {
+  /** Player-facing reason, without a trailing pointer or punctuation. */
+  message: string;
+  /** Whether ⚙ Setup is where this gets fixed (a host problem is not). */
+  fixable: boolean;
+}
+
+/**
+ * The one gate every AI feature asks. Host first: with no native bridge the
+ * configuration is irrelevant, and telling someone to open Setup when Setup
+ * cannot help is worse than saying nothing.
+ */
+export function aiProblem(
+  config: AiConfig,
+  appleStatus: string,
+  nativeRuntime: boolean
+): AiProblem | null {
+  const host = aiHostProblem(nativeRuntime);
+  if (host) return { message: host, fixable: false };
+  const configured = aiConfigProblem(config, appleStatus);
+  return configured ? { message: configured, fixable: true } : null;
+}
+
+/**
+ * The problem as a whole sentence, with the pointer to where it gets fixed.
+ * Composed here rather than at each call site so the "open ⚙ Setup" advice can
+ * never be attached to something Setup can't fix.
+ */
+export function aiProblemNote(problem: AiProblem): string {
+  return problem.fixable ? `${problem.message} — open ⚙ Setup` : problem.message;
+}
+
+/** Errors cross the Tauri bridge as plain strings; this is that sentinel. */
+const NATIVE_UNAVAILABLE = "native runtime unavailable";
+const MAX_FAILURE_CHARS = 200;
+
+/**
+ * Player-facing text for a rejected AI invoke. Two jobs: translate the bridge's
+ * internal "native runtime unavailable" (which means the browser preview, not a
+ * provider fault) and keep a verbose endpoint error from overrunning a
+ * single-line status.
+ */
+export function describeAiFailure(error: unknown): string {
+  const text = (
+    typeof error === "string" ? error : String((error as Error)?.message ?? error ?? "")
+  ).trim();
+  if (!text) return "the provider failed without saying why";
+  if (text.includes(NATIVE_UNAVAILABLE)) return AI_NEEDS_NATIVE_APP;
+  return text.length > MAX_FAILURE_CHARS ? `${text.slice(0, MAX_FAILURE_CHARS - 1)}…` : text;
 }
 
 /**
  * Player-facing wording for a non-`available` on-device status, mirroring the
- * plugin's availability enum.
+ * plugin's availability enum (tauri-plugin-local-llm/src/models.rs).
  */
 export function appleAvailabilityHint(status: string): string {
   switch (status) {

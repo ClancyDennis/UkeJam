@@ -7,7 +7,7 @@
 // over a timed chart before it is saved; a failure there is always survivable,
 // and the un-enhanced chart is saved rather than nothing.
 
-import { invokeAiConfig } from "../ai.ts";
+import { aiProblemNote, describeAiFailure, invokeAiConfig } from "../ai.ts";
 import { escapeHtml } from "../dom.ts";
 import { nativeInvoke } from "../native.ts";
 import {
@@ -20,7 +20,7 @@ import {
   type SongRecord,
 } from "../library.ts";
 import { buildFusedChordPro, parseChordChart } from "../midi.ts";
-import { aiConfig, aiConfigReady, aiEnhanceProblem } from "./setup/aiSettings.ts";
+import { aiConfig, aiConfigReady, aiEnhanceProblem, onAiConfigChange } from "./setup/aiSettings.ts";
 import { currentMode } from "../state/appMode.ts";
 import { clearMidiStaging, initMidiImport, stagedMidi } from "./midiImport.ts";
 import { initTabSearch } from "./tabSearch.ts";
@@ -38,6 +38,7 @@ let songArtistInput: HTMLInputElement;
 let addSongBtn: HTMLButtonElement;
 let lyricsBox: HTMLTextAreaElement;
 let aiEnhanceToggle: HTMLInputElement;
+let aiEnhanceHint: HTMLElement;
 let libAddStatus: HTMLElement;
 let songListEl: HTMLElement;
 let libCountEl: HTMLElement;
@@ -107,7 +108,7 @@ async function onAddSong() {
       source = buildFusedChordPro(header, bars, lyricByBar);
       libAddStatus.textContent = `laid ${lyricByBar.size} bars of lyrics over ${bars.length} bars`;
     } catch (e) {
-      libAddStatus.textContent = `lyric fusion failed (${e}) — saved chart only`;
+      libAddStatus.textContent = `lyric fusion failed (${describeAiFailure(e)}) — saved chart only`;
     } finally {
       addSongBtn.disabled = false;
     }
@@ -116,12 +117,12 @@ async function onAddSong() {
     aiSkipNote = true;
     libAddStatus.classList.remove("done");
     libAddStatus.textContent = aiProblem
-      ? `${aiProblem} — open ⚙ Setup · saved chart only`
+      ? `${aiProblemNote(aiProblem)} · saved chart only`
       : "lyrics need ✨ AI enhance to merge — saved chart only";
   } else if (aiEnhanceToggle.checked && aiProblem) {
     aiSkipNote = true;
     libAddStatus.classList.remove("done");
-    libAddStatus.textContent = `${aiProblem} — open ⚙ Setup · saved raw`;
+    libAddStatus.textContent = `${aiProblemNote(aiProblem)} · saved raw`;
   } else if (aiEnhanceToggle.checked) {
     addSongBtn.disabled = true;
     libAddStatus.classList.remove("done");
@@ -135,7 +136,7 @@ async function onAddSong() {
       });
       if (cleaned && cleaned.trim()) source = cleaned.trim();
     } catch (e) {
-      libAddStatus.textContent = `AI enhance failed (${e}) — saved raw`;
+      libAddStatus.textContent = `AI enhance failed (${describeAiFailure(e)}) — saved raw`;
     } finally {
       addSongBtn.disabled = false;
     }
@@ -171,6 +172,15 @@ async function onAddSong() {
   clearMidiStaging();
   renderSongList();
   deps.loadSongIntoPlay(rec);
+}
+
+/// Why ✨ AI enhance would be skipped, shown next to the toggle. Only while the
+/// toggle is on: the un-enhanced Add path is a perfectly good way to use the
+/// app, and does not deserve a standing warning.
+function renderAiEnhanceHint() {
+  const problem = aiEnhanceToggle.checked ? aiEnhanceProblem() : null;
+  aiEnhanceHint.hidden = !problem;
+  aiEnhanceHint.textContent = problem ? `✨ ${aiProblemNote(problem)}` : "";
 }
 
 export function renderSongList() {
@@ -222,9 +232,16 @@ export function initLibraryView(d: LibraryViewDeps): void {
   addSongBtn = document.getElementById("add-song-btn") as HTMLButtonElement;
   lyricsBox = document.getElementById("lyrics-box") as HTMLTextAreaElement;
   aiEnhanceToggle = document.getElementById("ai-enhance") as HTMLInputElement;
+  aiEnhanceHint = document.getElementById("ai-enhance-hint")!;
   libAddStatus = document.getElementById("lib-add-status")!;
   songListEl = document.getElementById("song-list")!;
   libCountEl = document.getElementById("lib-count")!;
+
+  // ✨ AI enhance ships ticked, so an unconfigured player would otherwise learn
+  // it can't run only AFTER pressing Add and having the song saved raw. Say it
+  // beside the toggle instead, and keep it current as Setup changes.
+  onAiConfigChange(renderAiEnhanceHint);
+  aiEnhanceToggle.addEventListener("change", renderAiEnhanceHint);
 
   addSongBtn.addEventListener("click", () => void onAddSong());
 

@@ -2531,6 +2531,20 @@ body {
   cursor: pointer;
 }
 
+/* Why a ✨ toggle can't run, beside the toggle itself. Deliberately quiet: it
+   explains a capability that is off, next to a flow that works without it. */
+.ai-hint {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--gold-dim);
+  opacity: 0.85;
+}
+
+.ai-hint[hidden] {
+  display: none;
+}
+
 .lib-add-status {
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;
